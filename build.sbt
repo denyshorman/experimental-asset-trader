@@ -29,5 +29,6 @@ lazy val `crypto-trader` = (project in file("."))
       "org.scalatest" %% "scalatest" % "3.0.5" % "test",
       "io.reactivex" %% "rxscala" % "0.26.5",
       "io.projectreactor" % "reactor-core" % "3.2.0.RELEASE",
+      "io.projectreactor" %% "reactor-scala-extensions" % "0.3.5",
     )
   )

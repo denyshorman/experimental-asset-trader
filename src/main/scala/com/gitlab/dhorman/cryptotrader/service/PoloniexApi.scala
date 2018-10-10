@@ -3,11 +3,11 @@ package com.gitlab.dhorman.cryptotrader.service
 import com.typesafe.scalalogging.Logger
 import io.circe._
 import io.circe.parser.parse
-import io.reactivex.functions.Consumer
 import io.vertx.core.http.HttpClientOptions
 import io.vertx.reactivex.core.Vertx
 import io.vertx.reactivex.core.http.WebSocket
-import reactor.core.publisher.{Flux, FluxSink}
+import reactor.core.publisher.FluxSink
+import reactor.core.scala.publisher.Flux
 
 
 /**
@@ -19,47 +19,48 @@ class PoloniexApi(private val vertx: Vertx) {
 
   private val httpClient = vertx.createHttpClient(new HttpClientOptions().setSsl(true))
 
-  private val websocket: Flux[WebSocket] = Flux.create((sink: FluxSink[WebSocket]) => httpClient
+  private val websocket: Flux[WebSocket] = Flux.create((sink: FluxSink[WebSocket]) => Flux.from(httpClient
     .websocketStream(443, "api2.poloniex.com", "/")
-    .toFlowable
-    .singleOrError()
-    .subscribe(new Consumer[WebSocket] {
-      override def accept(socket: WebSocket): Unit = {
-        sink.next(socket)
+    .toFlowable)
+    .subscribe(socket => {
+      sink.next(socket)
 
-        socket.closeHandler(_ => {
-          sink.complete()
-        })
+      socket.closeHandler(_ => {
+        logger.debug("Socket closed")
+        sink.complete()
+      })
 
-        socket.endHandler(_ => {
-          sink.complete()
-        })
+      socket.endHandler(_ => {
+        logger.debug("Socket completed transmission")
+        sink.complete()
+      })
 
-        socket.exceptionHandler(err => {
-          sink.error(err)
-        })
+      socket.exceptionHandler(err => {
+        logger.error("Exception occurred in socket connection", err)
+        sink.error(err)
+      })
 
-        sink.onDispose(() => {
-          socket.close()
-        })
-      }
-    }, (err: Throwable) => {
+      sink.onDispose(() => {
+        socket.close()
+      })
+    }, err => {
       sink.error(err)
     })
   )
+    .retry()
     .replay(1)
     .refCount()
 
 
   private val websocketMessages: Flux[Json] = websocket
-    .flatMap(_.toFlowable)
-    .map[String](_.toString)
-    .map[Either[ParsingFailure, Json]](parse(_))
+    .flatMap(websocket => Flux.from(websocket.toFlowable))
+    .map(_.toString)
+    .map(parse)
     .flatMap {
       case Left(failure) =>
         logger.error(s"Can't parse received json: $failure")
-        Flux.empty[Json]()
-      case Right(jsonObject: Json) => Flux.just[Json](jsonObject)
+        Flux.empty[Json]
+      case Right(jsonObject) => Flux.just(jsonObject)
     }
 
   def tickerStream(): Flux[Json] = {
