@@ -13,15 +13,18 @@ lazy val `crypto-trader` = (project in file("."))
     libraryDependencies ++= Seq(
       "io.vertx" %% "vertx-lang-scala" % vertxVersion,
       "io.vertx" %% "vertx-web-scala" % vertxVersion,
+      "io.vertx" %% "vertx-web-client-scala" % vertxVersion,
       "io.vertx" %% "vertx-auth-jwt-scala" % vertxVersion,
       "io.vertx" %% "vertx-mysql-postgresql-client-scala" % vertxVersion,
       "io.vertx" %% "vertx-jdbc-client-scala" % vertxVersion,
       "io.vertx" %% "vertx-sql-common-scala" % vertxVersion,
+      "io.vertx" % "vertx-web-client" % vertxVersion,
       "io.vertx" % "vertx-rx-java2" % vertxVersion,
       "io.vertx" % "vertx-reactive-streams" % vertxVersion,
       "io.circe" %% "circe-core" % circeVersion,
       "io.circe" %% "circe-generic" % circeVersion,
       "io.circe" %% "circe-parser" % circeVersion,
+      "io.circe" %% "circe-optics" % circeVersion,
       "com.softwaremill.macwire" %% "macros" % "2.3.1",
       "ch.qos.logback" % "logback-classic" % "1.2.3",
       "com.typesafe.scala-logging" %% "scala-logging" % "3.9.0",
@@ -30,5 +33,6 @@ lazy val `crypto-trader` = (project in file("."))
       "io.reactivex" %% "rxscala" % "0.26.5",
       "io.projectreactor" % "reactor-core" % "3.2.0.RELEASE",
       "io.projectreactor" %% "reactor-scala-extensions" % "0.3.5",
+      "com.roundeights" %% "hasher" % "1.2.0",
     )
   )

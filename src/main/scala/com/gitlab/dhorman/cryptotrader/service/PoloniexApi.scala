@@ -1,20 +1,26 @@
 package com.gitlab.dhorman.cryptotrader.service
 
-import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.time.{Instant, LocalDateTime}
 
-import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{Command, TickerData, _24HourExchangeVolume}
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{Command, OrderBook, TickerData, _24HourExchangeVolume}
+import com.roundeights.hasher.Implicits._
 import com.typesafe.scalalogging.Logger
 import io.circe._
 import io.circe.generic.auto._
 import io.circe.parser.parse
 import io.circe.syntax._
+import io.circe.optics.JsonPath._
 import io.vertx.core.http.HttpClientOptions
+import io.vertx.lang.scala.VertxExecutionContext
 import io.vertx.reactivex.core.Vertx
 import io.vertx.reactivex.core.http.WebSocket
+import io.vertx.scala.core.{MultiMap => MultiMapScala, Vertx => VertxScala}
+import io.vertx.scala.ext.web.client.{WebClient, WebClientOptions}
 import reactor.core.publisher.FluxSink
 import reactor.core.scala.publisher.{Flux, Mono}
 
+import scala.concurrent.ExecutionContext
 import scala.util.Try
 
 
@@ -23,15 +29,29 @@ import scala.util.Try
   */
 class PoloniexApi(private val vertx: Vertx) {
 
+  private val apiKey = "ANGSUCQR-PROSS906-RL9U5FW5-QB4WTXHU"
+  private val apiSecret = "49927c9945ff03575a69b8150f08990535fa040e84d206ea51da2d52299de788712977c183a53f9f20500995a7ebcb8dc4306539b2d94a90263ca0577f91aa37"
+
+  private val scalaVertx = VertxScala(vertx.getDelegate)
+
+  private implicit val ec: ExecutionContext = VertxExecutionContext(scalaVertx.getOrCreateContext())
+
   private val logger = Logger[PoloniexApi]
 
   private val httpClient = vertx.createHttpClient(new HttpClientOptions().setSsl(true))
+
+  private val webclient = {
+    val options = WebClientOptions()
+      .setKeepAlive(false)
+      .setSsl(true)
+    WebClient.create(scalaVertx)
+  }
 
   private val websocket = Flux.create((sink: FluxSink[WebSocket]) => Mono.from(httpClient
     .websocketStream(443, "api2.poloniex.com", "/")
     .toFlowable)
     .single
-    .subscribe(socket => {
+    .subscribe((socket: WebSocket) => {
       logger.info("WebSocket connection established")
 
       sink.next(socket)
@@ -82,6 +102,56 @@ class PoloniexApi(private val vertx: Vertx) {
     .filter(_.isDefined)
     .map(_.get)
     .share()
+
+  def orderBookStream(currencyPair: String): Flux[OrderBook] = {
+    ???
+  }
+
+  /**
+    * Returns all of your available balances
+    */
+  def returnBalances(): Mono[Map[String, BigDecimal]] = {
+    callPrivateApi("returnBalances").map(_.as[Map[String, BigDecimal]] match {
+      case Left(err) => throw err
+      case Right(value) => value
+    })
+  }
+
+  private def callPrivateApi(methodName: String): Mono[Json] = {
+    val nonce = Instant.now.getEpochSecond
+    val sign = s"command=$methodName&nonce=$nonce"
+    val req = webclient
+      .post(443, "poloniex.com", "/tradingApi")
+      .ssl(true)
+      .putHeader("Key", apiKey)
+      .putHeader("Sign", sign.hmac(apiSecret).sha512)
+
+    val reqBody = MultiMapScala.caseInsensitiveMultiMap()
+      .set("command", methodName)
+      .set("nonce", nonce.toString)
+
+    Mono.fromFuture(req.sendFormFuture(reqBody))
+      .map(resp => {
+        val bodyOpt = resp.bodyAsString()
+        if (bodyOpt.isEmpty) throw new NoSuchElementException(s"Body response is empty for command $methodName")
+
+        parse(bodyOpt.get) match {
+          case Left(failure) => throw failure
+          case Right(json) => json
+        }
+      })
+      .map(json => {
+        val errorMsgOpt = json
+          .asObject
+          .flatMap(_("error"))
+          .flatMap(_.asString)
+
+        errorMsgOpt match {
+          case Some(errorMsg) => throw new Exception(errorMsg)
+          case None => json
+        }
+      })
+  }
 
   private def create[T](channel: Command.Channel, mapper: Json => T): FluxSink[T] => Unit = (sink: FluxSink[T]) => {
     // Subscribe to ticker stream
@@ -221,6 +291,15 @@ object PoloniexApi {
         .headOption
       )
     }
+
+  }
+
+
+  case class OrderBook(
+
+  )
+
+  object OrderBook {
 
   }
 }

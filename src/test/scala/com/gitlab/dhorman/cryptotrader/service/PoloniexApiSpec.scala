@@ -50,4 +50,23 @@ class PoloniexApiSpec extends FlatSpec {
     vertx.close()
   }
 
+  "PoloniexApi returnBalances" should "return some value" in {
+    val vertx = Vertx.vertx()
+    val api = new PoloniexApi(vertx)
+    val p = Promise[Unit]()
+
+    api.returnBalances()
+      .doOnTerminate(() => {
+        p.success()
+      })
+      .subscribe(balances => {
+        logger.info(balances.toString())
+      }, err => {
+        logger.error(err.toString)
+        fail(err)
+      })
+
+    Await.result(p.future, Duration.Inf)
+    vertx.close()
+  }
 }
