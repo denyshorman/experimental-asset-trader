@@ -1,6 +1,9 @@
 package com.gitlab.dhorman.cryptotrader.service
 
-import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{Command, TickerData}
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{Command, TickerData, _24HourExchangeVolume}
 import com.typesafe.scalalogging.Logger
 import io.circe._
 import io.circe.generic.auto._
@@ -71,20 +74,29 @@ class PoloniexApi(private val vertx: Vertx) {
     }
     .share()
 
-  val tickerStream: Flux[TickerData] = Flux.create((sink: FluxSink[Seq[TickerData]]) => {
+  val tickerStream: Flux[TickerData] = Flux.create(create(Command.Channel.TickerData, TickerData.map))
+    .flatMapIterable(arr => arr)
+    .share()
+
+  val _24HourExchangeVolumeStream: Flux[_24HourExchangeVolume] = Flux.create(create(Command.Channel._24HourExchangeVolume, _24HourExchangeVolume.map))
+    .filter(_.isDefined)
+    .map(_.get)
+    .share()
+
+  private def create[T](channel: Command.Channel, mapper: Json => T): FluxSink[T] => Unit = (sink: FluxSink[T]) => {
     // Subscribe to ticker stream
     websocket.take(1).subscribe(socket => {
-      val jsonStr = Command(Command.Type.Subscribe, Command.Channel.TickerData).asJson.noSpaces
+      val jsonStr = Command(Command.Type.Subscribe, channel).asJson.noSpaces
       socket.writeTextMessage(jsonStr)
-      logger.info(s"Subscribe to ticker data channel")
+      logger.info(s"Subscribe to $channel channel")
     }, err => {
       sink.error(err)
     })
 
     // Receive ticker data
     val messagesSubscription = websocketMessages
-      .filter(isEqual(_, Command.Channel.TickerData))
-      .map(TickerData.map)
+      .filter(isEqual(_, channel))
+      .map(mapper)
       .subscribe(tickerData => {
         sink.next(tickerData)
       }, err => {
@@ -96,16 +108,14 @@ class PoloniexApi(private val vertx: Vertx) {
     // Unsubscribe from ticker data
     sink.onDispose(() => {
       websocket.take(1).subscribe(socket => {
-        val jsonStr = Command(Command.Type.Unsubscribe, Command.Channel.TickerData).asJson.noSpaces
+        val jsonStr = Command(Command.Type.Unsubscribe, channel).asJson.noSpaces
         socket.writeTextMessage(jsonStr)
-        logger.info("Unsubscribe from ticker data channel")
+        logger.info(s"Unsubscribe from $channel channel")
 
         messagesSubscription.dispose()
       })
     })
-  })
-    .flatMapIterable(arr => arr)
-    .share()
+  }
 
   private def isEqual(json: Json, commandChannel: Command.Channel): Boolean = json
     .asArray
@@ -118,19 +128,6 @@ class PoloniexApi(private val vertx: Vertx) {
 
 object PoloniexApi {
   case class Command(command: Command.Type, channel: Command.Channel)
-
-  case class TickerData(
-    currencyPairId: Int,
-    lastTradePrice: BigDecimal,
-    lowestAsk: BigDecimal,
-    highestBid: BigDecimal,
-    percentChangeInLast24Hours: BigDecimal,
-    baseCurrencyVolumeInLast24Hours: BigDecimal,
-    quoteCurrencyVolumeInLast24Hours: BigDecimal,
-    isFrozen: Boolean,
-    highestTradePriceInLast24Hours: BigDecimal,
-    lowestTradePriceInLast24Hours: BigDecimal,
-  )
 
   object Command {
 
@@ -151,24 +148,79 @@ object PoloniexApi {
 
   }
 
+  case class TickerData(
+    currencyPairId: Int,
+    lastTradePrice: BigDecimal,
+    lowestAsk: BigDecimal,
+    highestBid: BigDecimal,
+    percentChangeInLast24Hours: BigDecimal,
+    baseCurrencyVolumeInLast24Hours: BigDecimal,
+    quoteCurrencyVolumeInLast24Hours: BigDecimal,
+    isFrozen: Boolean,
+    highestTradePriceInLast24Hours: BigDecimal,
+    lowestTradePriceInLast24Hours: BigDecimal,
+  )
+
   object TickerData {
-    private[PoloniexApi] def mapTicker(ticker: Vector[Json]): TickerData = {
-      TickerData(
-        ticker(0).asNumber.flatMap(x => x.toInt).getOrElse(-1),
-        ticker(1).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-        ticker(2).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-        ticker(3).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-        ticker(4).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-        ticker(5).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-        ticker(6).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-        ticker(7).asNumber.flatMap(x => x.toInt).getOrElse(-1) == 1,
-        ticker(8).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-        ticker(9).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-      )
-    }
+    private[PoloniexApi] def mapTicker(ticker: Vector[Json]): TickerData = TickerData(
+      ticker(0).asNumber.flatMap(x => x.toInt).getOrElse(-1),
+      ticker(1).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
+      ticker(2).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
+      ticker(3).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
+      ticker(4).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
+      ticker(5).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
+      ticker(6).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
+      ticker(7).asNumber.flatMap(x => x.toInt).getOrElse(-1) == 1,
+      ticker(8).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
+      ticker(9).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
+    )
 
     private[PoloniexApi] def map(json: Json): Seq[TickerData] = {
       json.asArray.map(_.view.drop(2).flatMap(_.asArray).map(mapTicker)).getOrElse(Seq())
     }
+  }
+
+  case class _24HourExchangeVolume(
+    time: LocalDateTime,
+    usersOnline: Int,
+    baseCurrency24HVolume: Map[String, BigDecimal],
+  )
+
+  object _24HourExchangeVolume {
+    private[PoloniexApi] def mapDate(json: Json): LocalDateTime = {
+      json.asString
+        .flatMap(dateStr =>
+          Try(
+            LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+          ).toOption
+        )
+        .getOrElse(LocalDateTime.now())
+    }
+
+    private[PoloniexApi] def mapInt(json: Json): Int = {
+      json.asNumber.flatMap(num => num.toInt).getOrElse(-1)
+    }
+
+    private[PoloniexApi] def mapBaseCurrencies24HVolume(json: Json) : Map[String, BigDecimal] = {
+      json
+        .asObject
+        .map(_.toMap.map(v => (v._1, v._2
+          .asString
+          .flatMap(amount => Try(BigDecimal(amount)).toOption)
+          .getOrElse(BigDecimal(-1))))
+        )
+        .getOrElse(Map())
+    }
+
+    private[PoloniexApi] def map(json: Json): Option[_24HourExchangeVolume] = {
+      json.asArray.flatMap(_.view
+        .drop(2)
+        .flatMap(_.asArray)
+        .filter(_.size >= 3)
+        .map(arr => _24HourExchangeVolume(mapDate(arr(0)), mapInt(arr(1)), mapBaseCurrencies24HVolume(arr(2))))
+        .headOption
+      )
+    }
+
   }
 }
