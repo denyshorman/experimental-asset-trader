@@ -3,7 +3,7 @@ package com.gitlab.dhorman.cryptotrader.service
 import java.time.format.DateTimeFormatter
 import java.time.{Instant, LocalDateTime}
 
-import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{Command, OrderBook, TickerData, _24HourExchangeVolume}
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
 import com.roundeights.hasher.Implicits._
 import com.typesafe.scalalogging.Logger
 import io.circe._
@@ -110,16 +110,47 @@ class PoloniexApi(private val vertx: Vertx) {
   /**
     * Returns all of your available balances
     */
-  def returnBalances(): Mono[Map[String, BigDecimal]] = {
-    callPrivateApi("returnBalances").map(_.as[Map[String, BigDecimal]] match {
-      case Left(err) => throw err
-      case Right(value) => value
-    })
+  def balances(): Mono[Map[String, BigDecimal]] = {
+    callPrivateApi("returnBalances").map(mapJsonToObject[Map[String, BigDecimal]])
   }
 
-  private def callPrivateApi(methodName: String): Mono[Json] = {
-    val nonce = Instant.now.getEpochSecond
-    val sign = s"command=$methodName&nonce=$nonce"
+  /**
+    * Returns all of your balances, including available balance, balance on orders, and the estimated BTC value of your balance.
+    */
+  def completeBalances(): Mono[Map[String, CompleteBalance]] = {
+    callPrivateApi("returnCompleteBalances").map(mapJsonToObject[Map[String, CompleteBalance]])
+  }
+
+  /**
+    * Returns all of your deposit addresses.
+    */
+  def depositAddresses(): Mono[Map[String, String]] = {
+    callPrivateApi("returnDepositAddresses").map(mapJsonToObject[Map[String, String]])
+  }
+
+  /**
+    * Returns your open orders for a given market, specified by the currencyPair.
+    */
+  def openOrders(currencyPair: String): Mono[List[OpenOrder]] = {
+    callPrivateApi("returnOpenOrders", Map("currencyPair" -> currencyPair))
+      .map(mapJsonToObject[List[OpenOrder]])
+  }
+
+  def allOpenOrders(): Mono[Map[String, List[OpenOrder]]] = {
+    callPrivateApi("returnOpenOrders", Map("currencyPair" -> "all"))
+      .map(mapJsonToObject[Map[String, List[OpenOrder]]])
+  }
+
+  private def mapJsonToObject[T](json: Json)(implicit decoder: Decoder[T]) : T = json.as[T] match {
+    case Left(err) => throw err
+    case Right(value) => value
+  }
+
+  private def callPrivateApi(methodName: String, postArgs: Map[String, String] = Map()): Mono[Json] = {
+    val postParamsPrivate = Map("command" -> methodName, "nonce" -> Instant.now.getEpochSecond.toString)
+    val postParams = postParamsPrivate ++ postArgs
+    val sign = postParams.view.map(p => s"${p._1}=${p._2}").mkString("&")
+
     val req = webclient
       .post(443, "poloniex.com", "/tradingApi")
       .ssl(true)
@@ -127,8 +158,7 @@ class PoloniexApi(private val vertx: Vertx) {
       .putHeader("Sign", sign.hmac(apiSecret).sha512)
 
     val reqBody = MultiMapScala.caseInsensitiveMultiMap()
-      .set("command", methodName)
-      .set("nonce", nonce.toString)
+    postParams.foreach(p => reqBody.set(p._1, p._2))
 
     Mono.fromFuture(req.sendFormFuture(reqBody))
       .map(resp => {
@@ -302,4 +332,15 @@ object PoloniexApi {
   object OrderBook {
 
   }
+
+  case class CompleteBalance(available: BigDecimal, onOrders: BigDecimal, btcValue: BigDecimal)
+
+  case class OpenOrder(
+    orderNumber: String,
+    `type`: String, // sell/buy
+    rate: BigDecimal,
+    amount: BigDecimal,
+    total: BigDecimal,
+  )
+
 }

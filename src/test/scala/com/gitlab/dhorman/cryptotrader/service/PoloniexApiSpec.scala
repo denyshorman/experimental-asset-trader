@@ -55,12 +55,92 @@ class PoloniexApiSpec extends FlatSpec {
     val api = new PoloniexApi(vertx)
     val p = Promise[Unit]()
 
-    api.returnBalances()
+    api.balances()
       .doOnTerminate(() => {
         p.success()
       })
       .subscribe(balances => {
         logger.info(balances.toString())
+      }, err => {
+        logger.error(err.toString)
+        fail(err)
+      })
+
+    Await.result(p.future, Duration.Inf)
+    vertx.close()
+  }
+
+  "PoloniexApi returnCompleteBalances" should "return some value" in {
+    val vertx = Vertx.vertx()
+    val api = new PoloniexApi(vertx)
+    val p = Promise[Unit]()
+
+    api.completeBalances()
+      .doOnTerminate(() => {
+        p.success()
+      })
+      .subscribe(balances => {
+        logger.info(balances.toString())
+      }, err => {
+        logger.error(err.toString)
+        fail(err)
+      })
+
+    Await.result(p.future, Duration.Inf)
+    vertx.close()
+  }
+
+  "PoloniexApi returnDepositAddresses" should "return some value" in {
+    val vertx = Vertx.vertx()
+    val api = new PoloniexApi(vertx)
+    val p = Promise[Unit]()
+
+    api.depositAddresses()
+      .doOnTerminate(() => {
+        p.success()
+      })
+      .subscribe(address => {
+        logger.info(address.toString())
+      }, err => {
+        logger.error(err.toString)
+        fail(err)
+      })
+
+    Await.result(p.future, Duration.Inf)
+    vertx.close()
+  }
+
+  "PoloniexApi openOrders" should "return some value" in {
+    val vertx = Vertx.vertx()
+    val api = new PoloniexApi(vertx)
+    val p = Promise[Unit]()
+
+    api.openOrders("ETH_OMG")
+      .doOnTerminate(() => {
+        p.success()
+      })
+      .subscribe(address => {
+        logger.info(address.toString())
+      }, err => {
+        logger.error(err.toString)
+        fail(err)
+      })
+
+    Await.result(p.future, Duration.Inf)
+    vertx.close()
+  }
+
+  "PoloniexApi allOpenOrders" should "return some value" in {
+    val vertx = Vertx.vertx()
+    val api = new PoloniexApi(vertx)
+    val p = Promise[Unit]()
+
+    api.allOpenOrders()
+      .doOnTerminate(() => {
+        p.success()
+      })
+      .subscribe(address => {
+        logger.info(address.toString())
       }, err => {
         logger.error(err.toString)
         fail(err)
