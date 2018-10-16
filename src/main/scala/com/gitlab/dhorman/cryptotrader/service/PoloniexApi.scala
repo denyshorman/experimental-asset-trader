@@ -10,15 +10,19 @@ import io.circe._
 import io.circe.generic.auto._
 import io.circe.parser.parse
 import io.circe.syntax._
+import io.circe.optics.JsonPath._
+import io.vertx.core.Vertx
 import io.vertx.core.buffer.Buffer
 import io.vertx.core.http.HttpClientOptions
 import io.vertx.lang.scala.VertxExecutionContext
-import io.vertx.reactivex.core.Vertx
+import io.vertx.reactivex.core.{Vertx => VertxRx}
 import io.vertx.reactivex.core.http.WebSocket
 import io.vertx.scala.core.{MultiMap => MultiMapScala, Vertx => VertxScala}
 import io.vertx.scala.ext.web.client.{HttpResponse, WebClient, WebClientOptions}
 import reactor.core.publisher.FluxSink
 import reactor.core.scala.publisher.{Flux, Mono}
+import com.softwaremill.tagging._
+import cats.syntax.either._
 
 import scala.concurrent.ExecutionContext
 import scala.util.Try
@@ -27,25 +31,32 @@ import scala.util.Try
 /**
   * Documentation https://poloniex.com/support/api
   */
-class PoloniexApi(private val vertx: Vertx) {
-  private val apiKey = "ANGSUCQR-PROSS906-RL9U5FW5-QB4WTXHU"
-  private val apiSecret = "49927c9945ff03575a69b8150f08990535fa040e84d206ea51da2d52299de788712977c183a53f9f20500995a7ebcb8dc4306539b2d94a90263ca0577f91aa37"
-
+class PoloniexApi(
+  private val vertx: Vertx,
+  private val poloniexApiKey: String @@ PoloniexApiKeyTag,
+  private val poloniexApiSecret: String @@ PoloniexApiSecretTag,
+) {
   private val logger = Logger[PoloniexApi]
 
-  private val scalaVertx = VertxScala(vertx.getDelegate)
+  private val vertxRx = new VertxRx(vertx)
+  private val scalaVertx = VertxScala(vertx)
+  private implicit val ec: ExecutionContext = VertxExecutionContext(scalaVertx.getOrCreateContext())
 
-  private val httpClient = vertx.createHttpClient(new HttpClientOptions().setSsl(true))
+  private val PoloniexPrivatePublicHttpApiUrl = "poloniex.com"
+  private val PoloniexWebSocketApiUrl = "api2.poloniex.com"
+
+  private val httpClient = vertxRx.createHttpClient(new HttpClientOptions().setSsl(true))
 
   private val webclient = {
     val options = WebClientOptions()
       .setKeepAlive(false)
       .setSsl(true)
+
     WebClient.create(scalaVertx)
   }
 
   private val websocket = Flux.create((sink: FluxSink[WebSocket]) => Mono.from(httpClient
-    .websocketStream(443, "api2.poloniex.com", "/")
+    .websocketStream(443, PoloniexWebSocketApiUrl, "/")
     .toFlowable)
     .single
     .subscribe((socket: WebSocket) => {
@@ -94,7 +105,7 @@ class PoloniexApi(private val vertx: Vertx) {
     .flatMapIterable(arr => arr)
     .share()
 
-  private implicit val ec: ExecutionContext = VertxExecutionContext(scalaVertx.getOrCreateContext())
+
   val _24HourExchangeVolumeStream: Flux[_24HourExchangeVolume] = Flux.create(create(Command.Channel._24HourExchangeVolume, _24HourExchangeVolume.map))
     .filter(_.isDefined)
     .map(_.get)
@@ -267,10 +278,10 @@ class PoloniexApi(private val vertx: Vertx) {
   }
 
   // TODO:
-  def buy(): Mono[Unit] = {
+  def buy(market: Market, rate: BigDecimal, amount: BigDecimal): Mono[Buy] = {
     val command = "buy"
-    val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val params = Map("currencyPair" -> market, "rate" -> rate.toString, "amount" -> amount.toString)
+    val jsonToObjectMapper = mapJsonToObject[Buy]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -427,7 +438,7 @@ class PoloniexApi(private val vertx: Vertx) {
 
     Mono.fromFuture(
       webclient
-        .get(443, "poloniex.com", s"/public?$qParams")
+        .get(443, PoloniexPrivatePublicHttpApiUrl, s"/public?$qParams")
         .ssl(true)
         .sendFuture()
     )
@@ -441,10 +452,10 @@ class PoloniexApi(private val vertx: Vertx) {
     val sign = postParams.view.map(p => s"${p._1}=${p._2}").mkString("&")
 
     val req = webclient
-      .post(443, "poloniex.com", "/tradingApi")
+      .post(443, PoloniexPrivatePublicHttpApiUrl, "/tradingApi")
       .ssl(true)
-      .putHeader("Key", apiKey)
-      .putHeader("Sign", sign.hmac(apiSecret).sha512)
+      .putHeader("Key", poloniexApiKey)
+      .putHeader("Sign", sign.hmac(poloniexApiSecret).sha512)
 
     val reqBody = MultiMapScala.caseInsensitiveMultiMap()
     postParams.foreach(p => reqBody.set(p._1, p._2))
@@ -465,18 +476,13 @@ class PoloniexApi(private val vertx: Vertx) {
   }
 
   def handleErrorResp(json: Json): Json = {
-    val errorMsgOpt = json
-      .asObject
-      .flatMap(_ ("error"))
-      .flatMap(_.asString)
-
-    errorMsgOpt match {
+    root.error.string.getOption(json) match {
       case Some(errorMsg) => throw new Exception(errorMsg)
       case None => json
     }
   }
 
-  private def mapJsonToObject[T](json: Json)(implicit decoder: Decoder[T]): T = json.as[T] match {
+  private def mapJsonToObject[T](implicit decoder: Decoder[T]): Json => T = (json: Json) => json.as[T] match {
     case Left(err) => throw err
     case Right(value) => value
   }
@@ -515,16 +521,14 @@ class PoloniexApi(private val vertx: Vertx) {
     })
   }
 
-  private def isEqual(json: Json, commandChannel: Command.Channel): Boolean = json
-    .asArray
-    .filter(_.nonEmpty)
-    .map(_ (0))
-    .flatMap(_.asNumber)
-    .flatMap(_.toInt)
-    .contains(commandChannel)
+  private def isEqual(json: Json, commandChannel: Command.Channel): Boolean = {
+    root(0).int.getOption(json).contains(commandChannel)
+  }
 }
 
 object PoloniexApi {
+  trait PoloniexApiKeyTag
+  trait PoloniexApiSecretTag
 
   type Market = String // BTC_LTC
   type Currency = String // BTC
@@ -777,4 +781,26 @@ object PoloniexApi {
     totalBorrowedValue: BigDecimal,
     currentMargin: BigDecimal,
   )
+  
+  case class Buy(
+    orderNumber: BigDecimal,
+    resultingTrades: Array[BuyResultingTrade],
+  )
+  
+  case class BuyResultingTrade(
+      amount: BigDecimal,
+      date: LocalDateTime,
+      rate: BigDecimal,
+      total: BigDecimal,
+      tradeID: BigDecimal,
+      `type`: String,
+  )
+
+  object BuyResultingTrade {
+    val formatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    implicit val dateEncoder: Encoder[LocalDateTime] = Encoder.encodeString.contramap[LocalDateTime](_.format(formatter))
+    implicit val dateDecoder: Decoder[LocalDateTime] = Decoder.decodeString.emap[LocalDateTime](str => {
+      Either.catchNonFatal(LocalDateTime.parse(str, formatter)).leftMap(_.getMessage)
+    })
+  }
 }

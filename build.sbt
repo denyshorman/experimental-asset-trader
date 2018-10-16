@@ -3,7 +3,7 @@ ThisBuild / version := "1.0.0-SNAPSHOT"
 ThisBuild / organization := "com.gitlab.dhorman"
 
 lazy val vertxVersion = "3.5.3"
-lazy val circeVersion = "0.9.3"
+lazy val circeVersion = "0.10.0"
 
 lazy val `crypto-trader` = (project in file("."))
   .settings(
@@ -25,7 +25,9 @@ lazy val `crypto-trader` = (project in file("."))
       "io.circe" %% "circe-generic" % circeVersion,
       "io.circe" %% "circe-parser" % circeVersion,
       "io.circe" %% "circe-optics" % circeVersion,
+      "io.circe" %% "circe-java8" % circeVersion,
       "com.softwaremill.macwire" %% "macros" % "2.3.1",
+      "com.softwaremill.common" %% "tagging" % "2.2.1",
       "ch.qos.logback" % "logback-classic" % "1.2.3",
       "com.typesafe.scala-logging" %% "scala-logging" % "3.9.0",
       "org.postgresql" % "postgresql" % "42.2.2",
