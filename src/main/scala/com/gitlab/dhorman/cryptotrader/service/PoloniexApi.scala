@@ -10,13 +10,13 @@ import io.circe._
 import io.circe.generic.auto._
 import io.circe.parser.parse
 import io.circe.syntax._
-import io.circe.optics.JsonPath._
+import io.vertx.core.buffer.Buffer
 import io.vertx.core.http.HttpClientOptions
 import io.vertx.lang.scala.VertxExecutionContext
 import io.vertx.reactivex.core.Vertx
 import io.vertx.reactivex.core.http.WebSocket
 import io.vertx.scala.core.{MultiMap => MultiMapScala, Vertx => VertxScala}
-import io.vertx.scala.ext.web.client.{WebClient, WebClientOptions}
+import io.vertx.scala.ext.web.client.{HttpResponse, WebClient, WebClientOptions}
 import reactor.core.publisher.FluxSink
 import reactor.core.scala.publisher.{Flux, Mono}
 
@@ -28,15 +28,12 @@ import scala.util.Try
   * Documentation https://poloniex.com/support/api
   */
 class PoloniexApi(private val vertx: Vertx) {
-
   private val apiKey = "ANGSUCQR-PROSS906-RL9U5FW5-QB4WTXHU"
   private val apiSecret = "49927c9945ff03575a69b8150f08990535fa040e84d206ea51da2d52299de788712977c183a53f9f20500995a7ebcb8dc4306539b2d94a90263ca0577f91aa37"
 
-  private val scalaVertx = VertxScala(vertx.getDelegate)
-
-  private implicit val ec: ExecutionContext = VertxExecutionContext(scalaVertx.getOrCreateContext())
-
   private val logger = Logger[PoloniexApi]
+
+  private val scalaVertx = VertxScala(vertx.getDelegate)
 
   private val httpClient = vertx.createHttpClient(new HttpClientOptions().setSsl(true))
 
@@ -81,7 +78,6 @@ class PoloniexApi(private val vertx: Vertx) {
     .replay(1)
     .refCount()
 
-
   private val websocketMessages = websocket
     .flatMap(webSocket => Flux.from(webSocket.toFlowable))
     .map(_.toString)
@@ -98,6 +94,7 @@ class PoloniexApi(private val vertx: Vertx) {
     .flatMapIterable(arr => arr)
     .share()
 
+  private implicit val ec: ExecutionContext = VertxExecutionContext(scalaVertx.getOrCreateContext())
   val _24HourExchangeVolumeStream: Flux[_24HourExchangeVolume] = Flux.create(create(Command.Channel._24HourExchangeVolume, _24HourExchangeVolume.map))
     .filter(_.isDefined)
     .map(_.get)
@@ -108,24 +105,123 @@ class PoloniexApi(private val vertx: Vertx) {
   }
 
   /**
+    *
+    * @return Returns the ticker for all markets.
+    */
+  def ticker(): Mono[Map[Market, Ticker]] = {
+    val command = "returnTicker"
+    val jsonToObjectMapper = mapJsonToObject[Map[Market, Ticker]]
+    callPublicApi(command).map(jsonToObjectMapper)
+  }
+
+  // TODO: Incorrect json response
+  /**
+    *
+    * @return Returns the 24-hour volume for all markets, plus totals for primary currencies.
+    */
+  def get24Volume(): Mono[Map[Market, Map[Currency, BigDecimal]]] = {
+    val command = "return24Volume"
+    val jsonToObjectMapper = mapJsonToObject[Map[Market, Map[Currency, BigDecimal]]]
+    callPublicApi(command).map(jsonToObjectMapper)
+  }
+
+  def orderBook(currencyPair: Option[String], depth: Int): Mono[Map[Market, OrderBook]] = {
+    val command = "returnOrderBook"
+    val params = Map("currencyPair" -> currencyPair.getOrElse("all"), "depth" -> depth.toString)
+    if (currencyPair.isEmpty) {
+      val jsonToObjectMapper = mapJsonToObject[Map[Market, OrderBook]]
+      callPublicApi(command, params).map(jsonToObjectMapper)
+    } else {
+      val jsonToObjectMapper = mapJsonToObject[OrderBook]
+      callPublicApi(command, params).map(jsonToObjectMapper).map(orderBook => Map(currencyPair.get -> orderBook))
+    }
+  }
+
+  def tradeHistoryPublic(market: Market, fromDate: Option[Long], toDate: Option[Long]): Mono[Array[TradeHistory]] = {
+    val command = "returnTradeHistory"
+
+    val params = Map(
+      "currencyPair" -> Some(market),
+      "start" -> fromDate,
+      "end" -> toDate,
+    )
+      .view
+      .filter(_._2.isDefined)
+      .map(v => (v._1, v._2.get.toString))
+      .toMap
+
+    val jsonToObjectMapper = mapJsonToObject[Array[TradeHistory]]
+    callPublicApi(command, params).map(jsonToObjectMapper)
+  }
+
+  /**
+    * @return Returns candlestick chart data. Required GET parameters are "currencyPair", "period" (candlestick period in seconds; valid values are 300, 900, 1800, 7200, 14400, and 86400), "start", and "end". "Start" and "end" are given in UNIX timestamp format and used to specify the date range for the data returned.
+    */
+  def chartData(market: Market, period: Int, fromDate: Option[Long], toDate: Option[Long]): Mono[Array[ChartData]] = {
+    val command = "returnChartData"
+
+    val params = Map(
+      "currencyPair" -> Some(market),
+      "period" -> Some(period),
+      "start" -> fromDate,
+      "end" -> toDate,
+    )
+      .view
+      .filter(_._2.isDefined)
+      .map(v => (v._1, v._2.get.toString))
+      .toMap
+
+    val jsonToObjectMapper = mapJsonToObject[Array[ChartData]]
+    callPublicApi(command, params).map(jsonToObjectMapper)
+  }
+
+  def currencies(): Mono[Map[Currency, CurrencyDetails]] = {
+    val command = "returnCurrencies"
+    val jsonToObjectMapper = mapJsonToObject[Map[Currency, CurrencyDetails]]
+    callPrivateApi(command).map(jsonToObjectMapper)
+  }
+
+  def loanOrders(currency: Currency): Mono[LoanOrder] = {
+    val command = "returnLoanOrders"
+    val params = Map("currency" -> currency)
+    val jsonToObjectMapper = mapJsonToObject[LoanOrder]
+    callPublicApi(command, params).map(jsonToObjectMapper)
+  }
+
+  /**
     * Returns all of your available balances
     */
-  def balances(): Mono[Map[String, BigDecimal]] = {
-    callPrivateApi("returnBalances").map(mapJsonToObject[Map[String, BigDecimal]])
+  def balances(): Mono[Map[Currency, BigDecimal]] = {
+    callPrivateApi("returnBalances").map(mapJsonToObject[Map[Currency, BigDecimal]])
   }
 
   /**
     * Returns all of your balances, including available balance, balance on orders, and the estimated BTC value of your balance.
     */
-  def completeBalances(): Mono[Map[String, CompleteBalance]] = {
-    callPrivateApi("returnCompleteBalances").map(mapJsonToObject[Map[String, CompleteBalance]])
+  def completeBalances(): Mono[Map[Currency, CompleteBalance]] = {
+    callPrivateApi("returnCompleteBalances").map(mapJsonToObject[Map[Currency, CompleteBalance]])
   }
 
   /**
     * Returns all of your deposit addresses.
     */
-  def depositAddresses(): Mono[Map[String, String]] = {
-    callPrivateApi("returnDepositAddresses").map(mapJsonToObject[Map[String, String]])
+  def depositAddresses(): Mono[Map[Currency, String]] = {
+    callPrivateApi("returnDepositAddresses").map(mapJsonToObject[Map[Currency, String]])
+  }
+
+
+  def generateNewAddress(currency: Currency): Mono[String] = {
+    val command = "generateNewAddress"
+    val params = Map("currency" -> currency)
+    val jsonToObjectMapper = mapJsonToObject[NewAddressGenerated]
+    callPrivateApi(command, params).map(jsonToObjectMapper).map(_.response) // TODO: check success flag
+  }
+
+  def depositsWithdrawals(fromDate: Long, toDate: Long): Mono[DepositsWithdrawals] = {
+    val command = "returnDepositsWithdrawals"
+    val params = Map("start" -> fromDate.toString, "end" -> toDate.toString)
+    val jsonToObjectMapper = mapJsonToObject[DepositsWithdrawals]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
   /**
@@ -136,14 +232,207 @@ class PoloniexApi(private val vertx: Vertx) {
       .map(mapJsonToObject[List[OpenOrder]])
   }
 
-  def allOpenOrders(): Mono[Map[String, List[OpenOrder]]] = {
-    callPrivateApi("returnOpenOrders", Map("currencyPair" -> "all"))
-      .map(mapJsonToObject[Map[String, List[OpenOrder]]])
+  def allOpenOrders(): Mono[Map[Market, List[OpenOrder]]] = {
+    val command = "returnOpenOrders"
+    val params = Map("currencyPair" -> "all")
+    val jsonToObjectMapper = mapJsonToObject[Map[Market, List[OpenOrder]]]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
-  private def mapJsonToObject[T](json: Json)(implicit decoder: Decoder[T]) : T = json.as[T] match {
-    case Left(err) => throw err
-    case Right(value) => value
+  def tradeHistory(market: Option[Market]): Mono[Map[Market, List[TradeHistoryPrivate]]] = {
+    val command = "returnTradeHistory"
+    val params = Map("currencyPair" -> market.getOrElse("all"))
+    if (market.isEmpty) {
+      val jsonToObjectMapper = mapJsonToObject[Map[Market, List[TradeHistoryPrivate]]]
+      callPrivateApi(command, params).map(jsonToObjectMapper)
+    } else {
+      val jsonToObjectMapper = mapJsonToObject[List[TradeHistoryPrivate]]
+      callPrivateApi(command, params).map(jsonToObjectMapper).map(v => Map(market.get -> v))
+    }
+  }
+
+  def orderTrades(orderNumber: BigDecimal): Mono[List[OrderTrade]] = {
+    val command = "returnOrderTrades"
+    val params = Map("orderNumber" -> orderNumber.toString)
+    val jsonToObjectMapper = mapJsonToObject[List[OrderTrade]]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def orderStatus(): Mono[Unit] = {
+    val command = "returnOrderStatus"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def buy(): Mono[Unit] = {
+    val command = "buy"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def sell(): Mono[Unit] = {
+    val command = "sell"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def cancelOrder(): Mono[Unit] = {
+    val command = "cancelOrder"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def moveOrder(): Mono[Unit] = {
+    val command = "moveOrder"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def withdraw(): Mono[Unit] = {
+    val command = "withdraw"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def feeInfo(): Mono[Unit] = {
+    val command = "returnFeeInfo"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  def availableAccountBalances(): Mono[AvailableAccountBalance] = {
+    val command = "returnAvailableAccountBalances"
+    val jsonToObjectMapper = mapJsonToObject[AvailableAccountBalance]
+    callPrivateApi(command).map(jsonToObjectMapper)
+  }
+
+  def tradableBalances(): Mono[Map[Market, Map[Currency, BigDecimal]]] = {
+    val command = "returnTradableBalances"
+    val jsonToObjectMapper = mapJsonToObject[Map[Market, Map[Currency, BigDecimal]]]
+    callPrivateApi(command).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def transferBalance(): Mono[Unit] = {
+    val command = "transferBalance"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def marginAccountSummary(): Mono[Unit] = {
+    val command = "returnMarginAccountSummary"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def marginBuy(): Mono[Unit] = {
+    val command = "marginBuy"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def marginSell(): Mono[Unit] = {
+    val command = "marginSell"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def marginPosition(): Mono[Unit] = {
+    val command = "getMarginPosition"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def closeMarginPosition(): Mono[Unit] = {
+    val command = "closeMarginPosition"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def createLoanOffer(): Mono[Unit] = {
+    val command = "createLoanOffer"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def cancelLoanOffer(): Mono[Unit] = {
+    val command = "cancelLoanOffer"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def openLoanOffers(): Mono[Unit] = {
+    val command = "returnOpenLoanOffers"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def activeLoans(): Mono[Unit] = {
+    val command = "returnActiveLoans"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def lendingHistory(): Mono[Unit] = {
+    val command = "returnLendingHistory"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  // TODO:
+  def toggleAutoRenew(): Mono[Unit] = {
+    val command = "toggleAutoRenew"
+    val params = Map[String,String]()
+    val jsonToObjectMapper = mapJsonToObject[Unit]
+    callPrivateApi(command, params).map(jsonToObjectMapper)
+  }
+
+  private def callPublicApi(command: String, queryParams: Map[String, String] = Map()): Mono[Json] = {
+    val qParams = (Map("command" -> command) ++ queryParams).view.map(p => s"${p._1}=${p._2}").mkString("&")
+
+    Mono.fromFuture(
+      webclient
+        .get(443, "poloniex.com", s"/public?$qParams")
+        .ssl(true)
+        .sendFuture()
+    )
+      .map(bodyToJson)
+      .map(handleErrorResp)
   }
 
   private def callPrivateApi(methodName: String, postArgs: Map[String, String] = Map()): Mono[Json] = {
@@ -161,26 +450,35 @@ class PoloniexApi(private val vertx: Vertx) {
     postParams.foreach(p => reqBody.set(p._1, p._2))
 
     Mono.fromFuture(req.sendFormFuture(reqBody))
-      .map(resp => {
-        val bodyOpt = resp.bodyAsString()
-        if (bodyOpt.isEmpty) throw new NoSuchElementException(s"Body response is empty for command $methodName")
+      .map(bodyToJson)
+      .map(handleErrorResp)
+  }
 
-        parse(bodyOpt.get) match {
-          case Left(failure) => throw failure
-          case Right(json) => json
-        }
-      })
-      .map(json => {
-        val errorMsgOpt = json
-          .asObject
-          .flatMap(_("error"))
-          .flatMap(_.asString)
+  def bodyToJson(resp: HttpResponse[Buffer]): Json = {
+    val bodyOpt = resp.bodyAsString()
+    if (bodyOpt.isEmpty) throw new NoSuchElementException(s"Body response is empty")
 
-        errorMsgOpt match {
-          case Some(errorMsg) => throw new Exception(errorMsg)
-          case None => json
-        }
-      })
+    parse(bodyOpt.get) match {
+      case Left(failure) => throw failure
+      case Right(json) => json
+    }
+  }
+
+  def handleErrorResp(json: Json): Json = {
+    val errorMsgOpt = json
+      .asObject
+      .flatMap(_ ("error"))
+      .flatMap(_.asString)
+
+    errorMsgOpt match {
+      case Some(errorMsg) => throw new Exception(errorMsg)
+      case None => json
+    }
+  }
+
+  private def mapJsonToObject[T](json: Json)(implicit decoder: Decoder[T]): T = json.as[T] match {
+    case Left(err) => throw err
+    case Right(value) => value
   }
 
   private def create[T](channel: Command.Channel, mapper: Json => T): FluxSink[T] => Unit = (sink: FluxSink[T]) => {
@@ -220,14 +518,67 @@ class PoloniexApi(private val vertx: Vertx) {
   private def isEqual(json: Json, commandChannel: Command.Channel): Boolean = json
     .asArray
     .filter(_.nonEmpty)
-    .map(_(0))
+    .map(_ (0))
     .flatMap(_.asNumber)
     .flatMap(_.toInt)
     .contains(commandChannel)
 }
 
 object PoloniexApi {
+
+  type Market = String // BTC_LTC
+  type Currency = String // BTC
+
+  case class Ticker (
+    id: Long,
+    last: BigDecimal,
+    lowestAsk: BigDecimal,
+    highestBid: BigDecimal,
+    percentChange: BigDecimal,
+    baseVolume: BigDecimal,
+    quoteVolume: BigDecimal,
+    isFrozen: Int, // TODO: to boolean
+    high24hr: BigDecimal,
+    low24hr: BigDecimal,
+  )
+
   case class Command(command: Command.Type, channel: Command.Channel)
+
+  case class TickerData(
+    currencyPairId: Int,
+    lastTradePrice: BigDecimal,
+    lowestAsk: BigDecimal,
+    highestBid: BigDecimal,
+    percentChangeInLast24Hours: BigDecimal,
+    baseCurrencyVolumeInLast24Hours: BigDecimal,
+    quoteCurrencyVolumeInLast24Hours: BigDecimal,
+    isFrozen: Boolean,
+    highestTradePriceInLast24Hours: BigDecimal,
+    lowestTradePriceInLast24Hours: BigDecimal,
+  )
+
+  case class _24HourExchangeVolume(
+    time: LocalDateTime,
+    usersOnline: Int,
+    baseCurrency24HVolume: Map[String, BigDecimal],
+  )
+
+  case class OrderBook(
+    asks: Array[Array[BigDecimal]],
+    bids: Array[Array[BigDecimal]],
+    isFrozen: Int, // TODO: to boolean
+    seq: BigDecimal,
+  )
+
+  case class CompleteBalance(available: BigDecimal, onOrders: BigDecimal, btcValue: BigDecimal)
+
+  case class OpenOrder(
+    orderNumber: String,
+    `type`: String, // sell/buy
+    rate: BigDecimal,
+    amount: BigDecimal,
+    total: BigDecimal,
+  )
 
   object Command {
 
@@ -248,20 +599,11 @@ object PoloniexApi {
 
   }
 
-  case class TickerData(
-    currencyPairId: Int,
-    lastTradePrice: BigDecimal,
-    lowestAsk: BigDecimal,
-    highestBid: BigDecimal,
-    percentChangeInLast24Hours: BigDecimal,
-    baseCurrencyVolumeInLast24Hours: BigDecimal,
-    quoteCurrencyVolumeInLast24Hours: BigDecimal,
-    isFrozen: Boolean,
-    highestTradePriceInLast24Hours: BigDecimal,
-    lowestTradePriceInLast24Hours: BigDecimal,
-  )
-
   object TickerData {
+    private[PoloniexApi] def map(json: Json): Seq[TickerData] = {
+      json.asArray.map(_.view.drop(2).flatMap(_.asArray).map(mapTicker)).getOrElse(Seq())
+    }
+
     private[PoloniexApi] def mapTicker(ticker: Vector[Json]): TickerData = TickerData(
       ticker(0).asNumber.flatMap(x => x.toInt).getOrElse(-1),
       ticker(1).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
@@ -274,19 +616,19 @@ object PoloniexApi {
       ticker(8).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
       ticker(9).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
     )
-
-    private[PoloniexApi] def map(json: Json): Seq[TickerData] = {
-      json.asArray.map(_.view.drop(2).flatMap(_.asArray).map(mapTicker)).getOrElse(Seq())
-    }
   }
 
-  case class _24HourExchangeVolume(
-    time: LocalDateTime,
-    usersOnline: Int,
-    baseCurrency24HVolume: Map[String, BigDecimal],
-  )
-
   object _24HourExchangeVolume {
+    private[PoloniexApi] def map(json: Json): Option[_24HourExchangeVolume] = {
+      json.asArray.flatMap(_.view
+        .drop(2)
+        .flatMap(_.asArray)
+        .filter(_.size >= 3)
+        .map(arr => _24HourExchangeVolume(mapDate(arr(0)), mapInt(arr(1)), mapBaseCurrencies24HVolume(arr(2))))
+        .headOption
+      )
+    }
+
     private[PoloniexApi] def mapDate(json: Json): LocalDateTime = {
       json.asString
         .flatMap(dateStr =>
@@ -301,7 +643,7 @@ object PoloniexApi {
       json.asNumber.flatMap(num => num.toInt).getOrElse(-1)
     }
 
-    private[PoloniexApi] def mapBaseCurrencies24HVolume(json: Json) : Map[String, BigDecimal] = {
+    private[PoloniexApi] def mapBaseCurrencies24HVolume(json: Json): Map[String, BigDecimal] = {
       json
         .asObject
         .map(_.toMap.map(v => (v._1, v._2
@@ -312,35 +654,127 @@ object PoloniexApi {
         .getOrElse(Map())
     }
 
-    private[PoloniexApi] def map(json: Json): Option[_24HourExchangeVolume] = {
-      json.asArray.flatMap(_.view
-        .drop(2)
-        .flatMap(_.asArray)
-        .filter(_.size >= 3)
-        .map(arr => _24HourExchangeVolume(mapDate(arr(0)), mapInt(arr(1)), mapBaseCurrencies24HVolume(arr(2))))
-        .headOption
-      )
-    }
-
   }
-
-
-  case class OrderBook(
-
-  )
 
   object OrderBook {
 
   }
 
-  case class CompleteBalance(available: BigDecimal, onOrders: BigDecimal, btcValue: BigDecimal)
+  object OpenOrder {
 
-  case class OpenOrder(
-    orderNumber: String,
-    `type`: String, // sell/buy
+    object Type {
+      val Sell = "sell"
+      val Buy = "buy"
+    }
+
+  }
+
+  case class TradeHistory(
+    date: String, // TODO: Convert to date 2014-02-10 01:19:37
+    `type`: String, // buy/sell
+    rate: BigDecimal,
+    amount: BigDecimal,
+    total: BigDecimal
+  )
+
+  case class ChartData (
+    date: Long,
+    high: BigDecimal,
+    low: BigDecimal,
+    open: BigDecimal,
+    close: BigDecimal,
+    volume: BigDecimal,
+    quoteVolume: BigDecimal,
+    weightedAverage: BigDecimal,
+  )
+  
+  case class CurrencyDetails (
+    id: BigDecimal,
+    maxDailyWithdrawal: BigDecimal,
+    txFee: BigDecimal,
+    minConf: BigDecimal,
+    disabled: Int // TODO: to bool
+  )
+
+  case class LoanOrder (
+    offers: Array[LoanOrderDetails],
+    demands: Array[LoanOrderDetails],
+  )
+
+  case class LoanOrderDetails(
+    rate: BigDecimal,
+    amount: BigDecimal,
+    rangeMin: BigDecimal,
+    rangeMax: BigDecimal,
+  )
+
+  case class NewAddressGenerated(
+    success: Int,
+    response: String,
+  )
+
+  case class DepositsWithdrawals(
+    deposits: Array[DepositDetails],
+    withdrawals: Array[WithdrawDetails],
+  )
+
+  case class DepositDetails(
+    currency: Currency,
+    address: String,
+    amount: BigDecimal,
+    confirmations: Int,
+    txid: String,
+    timestamp: Long,
+    status: String, // COMPLETE
+  )
+
+  case class WithdrawDetails (
+    withdrawalNumber: BigDecimal,
+    currency: Currency,
+    address: String,
+    amount: BigDecimal,
+    timestamp: Long,
+    status: String,
+    ipAddress: String,
+  )
+
+  case class TradeHistoryPrivate(
+    globalTradeID: BigDecimal,
+    tradeID: BigDecimal,
+    date: String, // 2016-05-03 01:29:55
     rate: BigDecimal,
     amount: BigDecimal,
     total: BigDecimal,
+    fee: BigDecimal,
+    orderNumber: BigDecimal,
+    `type`: String, // buy
+    category: String, // settlement
   )
 
+  case class OrderTrade (
+    globalTradeID: BigDecimal,
+    tradeID: BigDecimal,
+    currencyPair: Market,
+    `type`: String, // buy,
+    rate: BigDecimal,
+    amount: BigDecimal,
+    total: BigDecimal,
+    fee: BigDecimal,
+    date: String, // 2016-03-14 01:04:36
+  )
+
+  case class AvailableAccountBalance(
+    exchange: Map[Currency, BigDecimal],
+    margin: Map[Currency, BigDecimal],
+    lending: Map[Currency, BigDecimal],
+  )
+
+  case class MarginAccountSummary(
+    totalValue: BigDecimal,
+    pl: BigDecimal,
+    lendingFees: BigDecimal,
+    netValue: BigDecimal,
+    totalBorrowedValue: BigDecimal,
+    currentMargin: BigDecimal,
+  )
 }
