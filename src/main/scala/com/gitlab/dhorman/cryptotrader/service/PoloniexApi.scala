@@ -11,6 +11,7 @@ import io.circe.generic.auto._
 import io.circe.parser.parse
 import io.circe.syntax._
 import io.circe.optics.JsonPath._
+import io.circe.generic.semiauto._
 import io.vertx.core.Vertx
 import io.vertx.core.buffer.Buffer
 import io.vertx.core.http.HttpClientOptions
@@ -55,61 +56,69 @@ class PoloniexApi(
     WebClient.create(scalaVertx)
   }
 
-  private val websocket = Flux.create((sink: FluxSink[WebSocket]) => Mono.from(httpClient
-    .websocketStream(443, PoloniexWebSocketApiUrl, "/")
-    .toFlowable)
-    .single
-    .subscribe((socket: WebSocket) => {
-      logger.info("WebSocket connection established")
+  private val websocket = {
+    Flux.create((sink: FluxSink[WebSocket]) => Mono.from(httpClient
+      .websocketStream(443, PoloniexWebSocketApiUrl, "/")
+      .toFlowable)
+      .single
+      .subscribe((socket: WebSocket) => {
+        logger.info("WebSocket connection established")
 
-      sink.next(socket)
+        sink.next(socket)
 
-      socket.closeHandler(_ => {
-        logger.info("WebSocket connection closed")
-        sink.complete()
-      })
+        socket.closeHandler(_ => {
+          logger.info("WebSocket connection closed")
+          sink.complete()
+        })
 
-      socket.endHandler(_ => {
-        logger.info("WebSocket completed transmission")
-        sink.complete()
-      })
+        socket.endHandler(_ => {
+          logger.info("WebSocket completed transmission")
+          sink.complete()
+        })
 
-      socket.exceptionHandler(err => {
-        logger.error("Exception occurred in WebSocket connection", err)
+        socket.exceptionHandler(err => {
+          logger.error("Exception occurred in WebSocket connection", err)
+          sink.error(err)
+        })
+
+        sink.onDispose(() => {
+          socket.close()
+        })
+      }, err => {
         sink.error(err)
       })
+    )
+      .replay(1)
+      .refCount()
+  }
 
-      sink.onDispose(() => {
-        socket.close()
-      })
-    }, err => {
-      sink.error(err)
-    })
-  )
-    .replay(1)
-    .refCount()
+  private val websocketMessages = {
+    websocket
+      .flatMap(webSocket => Flux.from(webSocket.toFlowable))
+      .map(_.toString)
+      .map(parse)
+      .flatMap {
+        case Left(failure) =>
+          logger.error(s"Can't parse received json: $failure")
+          Flux.empty[Json]
+        case Right(jsonObject) => Flux.just(jsonObject)
+      }
+      .share()
+  }
 
-  private val websocketMessages = websocket
-    .flatMap(webSocket => Flux.from(webSocket.toFlowable))
-    .map(_.toString)
-    .map(parse)
-    .flatMap {
-      case Left(failure) =>
-        logger.error(s"Can't parse received json: $failure")
-        Flux.empty[Json]
-      case Right(jsonObject) => Flux.just(jsonObject)
-    }
-    .share()
+  val tickerStream: Flux[TickerData] = {
+    Flux.create(create(Command.Channel.TickerData, TickerData.map))
+      .flatMapIterable(arr => arr)
+      .share()
+  }
 
-  val tickerStream: Flux[TickerData] = Flux.create(create(Command.Channel.TickerData, TickerData.map))
-    .flatMapIterable(arr => arr)
-    .share()
+  val _24HourExchangeVolumeStream: Flux[_24HourExchangeVolume] = {
+    Flux.create(create(Command.Channel._24HourExchangeVolume, _24HourExchangeVolume.map))
+      .filter(_.isDefined)
+      .map(_.get)
+      .share()
+  }
 
-
-  val _24HourExchangeVolumeStream: Flux[_24HourExchangeVolume] = Flux.create(create(Command.Channel._24HourExchangeVolume, _24HourExchangeVolume.map))
-    .filter(_.isDefined)
-    .map(_.get)
-    .share()
 
   def orderBookStream(currencyPair: String): Flux[OrderBook] = {
     ???
@@ -277,28 +286,53 @@ class PoloniexApi(
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
-  // TODO:
-  def buy(market: Market, rate: BigDecimal, amount: BigDecimal): Mono[Buy] = {
-    val command = "buy"
-    val params = Map("currencyPair" -> market, "rate" -> rate.toString, "amount" -> amount.toString)
+  /**
+    * Places a limit buy order in a given market.
+    * @param market
+    * @param rate
+    * @param amount
+    * @param tpe You may optionally set "fillOrKill", "immediateOrCancel", "postOnly".
+    *            A fill-or-kill order will either fill in its entirety or be completely aborted.
+    *            An immediate-or-cancel order can be partially or completely filled, but any portion of the order that cannot be filled immediately will be canceled rather than left on the order book.
+    *            A post-only order will only be placed if no portion of it fills immediately; this guarantees you will never pay the taker fee on any part of the order that fills.
+    * @return If successful, the method will return the order number.
+    */
+  def buy(market: Market, rate: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]): Mono[Buy] = {
+    buySell("buy", market, rate, amount, tpe)
+  }
+
+  def sell(market: Market, rate: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]): Mono[Buy] = {
+    buySell("sell", market, rate, amount, tpe)
+  }
+
+  /**
+    * A limit order is one of the most basic order types. It allows the trader to specify a price and amount they would like to buy or sell.
+    *
+    * Example: If the current market price is 250 and I want to buy lower than that at 249, then I would place a limit buy order at 249. If the market reaches 249 and a seller’s ask matches with my bid, my limit order will be executed at 249.
+    */
+  private def buySell(command: String, market: Market, rate: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]) : Mono[Buy] = {
+    val params = Map(
+      "currencyPair" -> market,
+      "rate" -> rate.toString,
+      "amount" -> amount.toString,
+    )
+
+    val additionalParams = tpe.map(t => Map(t -> "1")).getOrElse({Map[String, String]()})
+
     val jsonToObjectMapper = mapJsonToObject[Buy]
-    callPrivateApi(command, params).map(jsonToObjectMapper)
+    callPrivateApi(command, params ++ additionalParams).map(jsonToObjectMapper)
   }
 
-  // TODO:
-  def sell(): Mono[Unit] = {
-    val command = "sell"
-    val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
-    callPrivateApi(command, params).map(jsonToObjectMapper)
-  }
-
-  // TODO:
-  def cancelOrder(): Mono[Unit] = {
+  def cancelOrder(orderId: BigDecimal): Mono[Boolean] = {
     val command = "cancelOrder"
-    val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
-    callPrivateApi(command, params).map(jsonToObjectMapper)
+    val params = Map("orderNumber" -> orderId.toString)
+    callPrivateApi(command, params).map(json => {
+      root.success
+        .int
+        .getOption(json)
+        .map(_ == 1)
+        .getOrElse({throw new Exception("Can't get value")})
+    })
   }
 
   // TODO:
@@ -433,6 +467,7 @@ class PoloniexApi(
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
+
   private def callPublicApi(command: String, queryParams: Map[String, String] = Map()): Mono[Json] = {
     val qParams = (Map("command" -> command) ++ queryParams).view.map(p => s"${p._1}=${p._2}").mkString("&")
 
@@ -465,7 +500,7 @@ class PoloniexApi(
       .map(handleErrorResp)
   }
 
-  def bodyToJson(resp: HttpResponse[Buffer]): Json = {
+  private def bodyToJson(resp: HttpResponse[Buffer]): Json = {
     val bodyOpt = resp.bodyAsString()
     if (bodyOpt.isEmpty) throw new NoSuchElementException(s"Body response is empty")
 
@@ -475,7 +510,7 @@ class PoloniexApi(
     }
   }
 
-  def handleErrorResp(json: Json): Json = {
+  private def handleErrorResp(json: Json): Json = {
     root.error.string.getOption(json) match {
       case Some(errorMsg) => throw new Exception(errorMsg)
       case None => json
@@ -691,7 +726,7 @@ object PoloniexApi {
     quoteVolume: BigDecimal,
     weightedAverage: BigDecimal,
   )
-  
+
   case class CurrencyDetails (
     id: BigDecimal,
     maxDailyWithdrawal: BigDecimal,
@@ -781,12 +816,12 @@ object PoloniexApi {
     totalBorrowedValue: BigDecimal,
     currentMargin: BigDecimal,
   )
-  
+
   case class Buy(
     orderNumber: BigDecimal,
     resultingTrades: Array[BuyResultingTrade],
   )
-  
+
   case class BuyResultingTrade(
       amount: BigDecimal,
       date: LocalDateTime,
@@ -802,5 +837,24 @@ object PoloniexApi {
     implicit val dateDecoder: Decoder[LocalDateTime] = Decoder.decodeString.emap[LocalDateTime](str => {
       Either.catchNonFatal(LocalDateTime.parse(str, formatter)).leftMap(_.getMessage)
     })
+
+    implicit val BuyResultingTradeEncoder: ObjectEncoder[BuyResultingTrade] = deriveEncoder[BuyResultingTrade]
+    implicit val BuyResultingTradeDecoder: Decoder[BuyResultingTrade] = deriveDecoder[BuyResultingTrade]
+  }
+
+  // TODO: Use enum
+
+  type BuyOrderType = String
+
+  object BuyOrderType {
+    // A "fill or kill" order is a limit order that must be filled immediately in its entirety or it is canceled (killed). The purpose of a fill or kill order is to ensure that a position is entered instantly and at a specific price.
+    val FillOrKill: BuyOrderType = "fillOrKill"
+
+    // An Immediate Or Cancel (IOC) order requires all or part of the order to be executed immediately, and any unfilled parts of the order are canceled. Partial fills are accepted with this type of order duration, unlike a fill-or-kill order, which must be filled immediately in its entirety or be canceled.
+    val ImmediateOrCancel: BuyOrderType = "immediateOrCancel"
+
+    // https://support.bitfinex.com/hc/en-us/articles/115003507365-Post-Only-Limit-Order-Option
+    // The post-only limit order option ensures the limit order will be added to the order book and not match with a pre-existing order. If your order would cause a match with a pre-existing order, your post-only limit order will be canceled. This ensures that you will pay the maker fee and not the taker fee. Visit the fees page for more information.
+    val PostOnly: BuyOrderType = "postOnly"
   }
 }
