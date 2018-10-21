@@ -3,29 +3,31 @@ package com.gitlab.dhorman.cryptotrader.service
 import java.time.format.DateTimeFormatter
 import java.time.{Instant, LocalDateTime}
 
+import cats.syntax.either._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
+import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.roundeights.hasher.Implicits._
+import com.softwaremill.tagging._
 import com.typesafe.scalalogging.Logger
 import io.circe._
 import io.circe.generic.auto._
+import io.circe.generic.semiauto._
+import io.circe.optics.JsonPath._
 import io.circe.parser.parse
 import io.circe.syntax._
-import io.circe.optics.JsonPath._
-import io.circe.generic.semiauto._
 import io.vertx.core.Vertx
 import io.vertx.core.buffer.Buffer
 import io.vertx.core.http.HttpClientOptions
 import io.vertx.lang.scala.VertxExecutionContext
-import io.vertx.reactivex.core.{Vertx => VertxRx}
 import io.vertx.reactivex.core.http.WebSocket
+import io.vertx.reactivex.core.{Vertx => VertxRx}
 import io.vertx.scala.core.{MultiMap => MultiMapScala, Vertx => VertxScala}
 import io.vertx.scala.ext.web.client.{HttpResponse, WebClient, WebClientOptions}
 import reactor.core.publisher.FluxSink
 import reactor.core.scala.publisher.{Flux, Mono}
-import com.softwaremill.tagging._
-import cats.syntax.either._
 
 import scala.concurrent.ExecutionContext
+import scala.concurrent.duration._
 import scala.util.Try
 
 
@@ -38,6 +40,7 @@ class PoloniexApi(
   private val poloniexApiSecret: String @@ PoloniexApiSecretTag,
 ) {
   private val logger = Logger[PoloniexApi]
+  private val reqLimiter = new RequestLimiter(allowedRequests = 6, perInterval = 1.second)
 
   private val vertxRx = new VertxRx(vertx)
   private val scalaVertx = VertxScala(vertx)
@@ -470,15 +473,12 @@ class PoloniexApi(
 
   private def callPublicApi(command: String, queryParams: Map[String, String] = Map()): Mono[Json] = {
     val qParams = (Map("command" -> command) ++ queryParams).view.map(p => s"${p._1}=${p._2}").mkString("&")
-
-    Mono.fromFuture(
+    Mono.defer(() => Mono.fromFuture(
       webclient
         .get(443, PoloniexPrivatePublicHttpApiUrl, s"/public?$qParams")
         .ssl(true)
         .sendFuture()
-    )
-      .map(bodyToJson)
-      .map(handleErrorResp)
+    )).transform(handleApiCallResp)
   }
 
   private def callPrivateApi(methodName: String, postArgs: Map[String, String] = Map()): Mono[Json] = {
@@ -495,9 +495,14 @@ class PoloniexApi(
     val reqBody = MultiMapScala.caseInsensitiveMultiMap()
     postParams.foreach(p => reqBody.set(p._1, p._2))
 
-    Mono.fromFuture(req.sendFormFuture(reqBody))
+    Mono.defer(() => Mono.fromFuture(req.sendFormFuture(reqBody))).transform(handleApiCallResp)
+  }
+
+  private def handleApiCallResp(resp: Mono[HttpResponse[Buffer]]): Mono[Json] = {
+    resp
       .map(bodyToJson)
       .map(handleErrorResp)
+      .delaySubscription(Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)))
   }
 
   private def bodyToJson(resp: HttpResponse[Buffer]): Json = {
@@ -562,6 +567,7 @@ class PoloniexApi(
 }
 
 object PoloniexApi {
+
   trait PoloniexApiKeyTag
   trait PoloniexApiSecretTag
 
