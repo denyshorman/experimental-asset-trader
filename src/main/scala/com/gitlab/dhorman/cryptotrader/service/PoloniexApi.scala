@@ -123,7 +123,7 @@ class PoloniexApi(
   }
 
 
-  def orderBookStream(currencyPair: String): Flux[OrderBook] = {
+  def orderBookStream(market: Market): Flux[OrderBook] = {
     ???
   }
 
@@ -133,7 +133,7 @@ class PoloniexApi(
     */
   def ticker(): Mono[Map[Market, Ticker]] = {
     val command = "returnTicker"
-    val jsonToObjectMapper = mapJsonToObject[Map[Market, Ticker]]
+    val jsonToObjectMapper = jsonToObject[Map[Market, Ticker]]
     callPublicApi(command).map(jsonToObjectMapper)
   }
 
@@ -144,7 +144,7 @@ class PoloniexApi(
     */
   def get24Volume(): Mono[Map[Market, Map[Currency, BigDecimal]]] = {
     val command = "return24Volume"
-    val jsonToObjectMapper = mapJsonToObject[Map[Market, Map[Currency, BigDecimal]]]
+    val jsonToObjectMapper = jsonToObject[Map[Market, Map[Currency, BigDecimal]]]
     callPublicApi(command).map(jsonToObjectMapper)
   }
 
@@ -152,10 +152,10 @@ class PoloniexApi(
     val command = "returnOrderBook"
     val params = Map("currencyPair" -> currencyPair.getOrElse("all"), "depth" -> depth.toString)
     if (currencyPair.isEmpty) {
-      val jsonToObjectMapper = mapJsonToObject[Map[Market, OrderBook]]
+      val jsonToObjectMapper = jsonToObject[Map[Market, OrderBook]]
       callPublicApi(command, params).map(jsonToObjectMapper)
     } else {
-      val jsonToObjectMapper = mapJsonToObject[OrderBook]
+      val jsonToObjectMapper = jsonToObject[OrderBook]
       callPublicApi(command, params).map(jsonToObjectMapper).map(orderBook => Map(currencyPair.get -> orderBook))
     }
   }
@@ -173,7 +173,7 @@ class PoloniexApi(
       .map(v => (v._1, v._2.get.toString))
       .toMap
 
-    val jsonToObjectMapper = mapJsonToObject[Array[TradeHistory]]
+    val jsonToObjectMapper = jsonToObject[Array[TradeHistory]]
     callPublicApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -194,20 +194,20 @@ class PoloniexApi(
       .map(v => (v._1, v._2.get.toString))
       .toMap
 
-    val jsonToObjectMapper = mapJsonToObject[Array[ChartData]]
+    val jsonToObjectMapper = jsonToObject[Array[ChartData]]
     callPublicApi(command, params).map(jsonToObjectMapper)
   }
 
   def currencies(): Mono[Map[Currency, CurrencyDetails]] = {
     val command = "returnCurrencies"
-    val jsonToObjectMapper = mapJsonToObject[Map[Currency, CurrencyDetails]]
+    val jsonToObjectMapper = jsonToObject[Map[Currency, CurrencyDetails]]
     callPrivateApi(command).map(jsonToObjectMapper)
   }
 
   def loanOrders(currency: Currency): Mono[LoanOrder] = {
     val command = "returnLoanOrders"
     val params = Map("currency" -> currency)
-    val jsonToObjectMapper = mapJsonToObject[LoanOrder]
+    val jsonToObjectMapper = jsonToObject[LoanOrder]
     callPublicApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -215,35 +215,35 @@ class PoloniexApi(
     * Returns all of your available balances
     */
   def balances(): Mono[Map[Currency, BigDecimal]] = {
-    callPrivateApi("returnBalances").map(mapJsonToObject[Map[Currency, BigDecimal]])
+    callPrivateApi("returnBalances").map(jsonToObject[Map[Currency, BigDecimal]])
   }
 
   /**
     * Returns all of your balances, including available balance, balance on orders, and the estimated BTC value of your balance.
     */
   def completeBalances(): Mono[Map[Currency, CompleteBalance]] = {
-    callPrivateApi("returnCompleteBalances").map(mapJsonToObject[Map[Currency, CompleteBalance]])
+    callPrivateApi("returnCompleteBalances").map(jsonToObject[Map[Currency, CompleteBalance]])
   }
 
   /**
     * Returns all of your deposit addresses.
     */
   def depositAddresses(): Mono[Map[Currency, String]] = {
-    callPrivateApi("returnDepositAddresses").map(mapJsonToObject[Map[Currency, String]])
+    callPrivateApi("returnDepositAddresses").map(jsonToObject[Map[Currency, String]])
   }
 
 
   def generateNewAddress(currency: Currency): Mono[String] = {
     val command = "generateNewAddress"
     val params = Map("currency" -> currency)
-    val jsonToObjectMapper = mapJsonToObject[NewAddressGenerated]
+    val jsonToObjectMapper = jsonToObject[NewAddressGenerated]
     callPrivateApi(command, params).map(jsonToObjectMapper).map(_.response) // TODO: check success flag
   }
 
   def depositsWithdrawals(fromDate: Long, toDate: Long): Mono[DepositsWithdrawals] = {
     val command = "returnDepositsWithdrawals"
     val params = Map("start" -> fromDate.toString, "end" -> toDate.toString)
-    val jsonToObjectMapper = mapJsonToObject[DepositsWithdrawals]
+    val jsonToObjectMapper = jsonToObject[DepositsWithdrawals]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -252,13 +252,13 @@ class PoloniexApi(
     */
   def openOrders(currencyPair: String): Mono[List[OpenOrder]] = {
     callPrivateApi("returnOpenOrders", Map("currencyPair" -> currencyPair))
-      .map(mapJsonToObject[List[OpenOrder]])
+      .map(jsonToObject[List[OpenOrder]])
   }
 
   def allOpenOrders(): Mono[Map[Market, List[OpenOrder]]] = {
     val command = "returnOpenOrders"
     val params = Map("currencyPair" -> "all")
-    val jsonToObjectMapper = mapJsonToObject[Map[Market, List[OpenOrder]]]
+    val jsonToObjectMapper = jsonToObject[Map[Market, List[OpenOrder]]]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -266,10 +266,10 @@ class PoloniexApi(
     val command = "returnTradeHistory"
     val params = Map("currencyPair" -> market.getOrElse("all"))
     if (market.isEmpty) {
-      val jsonToObjectMapper = mapJsonToObject[Map[Market, List[TradeHistoryPrivate]]]
+      val jsonToObjectMapper = jsonToObject[Map[Market, List[TradeHistoryPrivate]]]
       callPrivateApi(command, params).map(jsonToObjectMapper)
     } else {
-      val jsonToObjectMapper = mapJsonToObject[List[TradeHistoryPrivate]]
+      val jsonToObjectMapper = jsonToObject[List[TradeHistoryPrivate]]
       callPrivateApi(command, params).map(jsonToObjectMapper).map(v => Map(market.get -> v))
     }
   }
@@ -277,7 +277,7 @@ class PoloniexApi(
   def orderTrades(orderNumber: BigDecimal): Mono[List[OrderTrade]] = {
     val command = "returnOrderTrades"
     val params = Map("orderNumber" -> orderNumber.toString)
-    val jsonToObjectMapper = mapJsonToObject[List[OrderTrade]]
+    val jsonToObjectMapper = jsonToObject[List[OrderTrade]]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -285,14 +285,14 @@ class PoloniexApi(
   def orderStatus(): Mono[Unit] = {
     val command = "returnOrderStatus"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
   /**
     * Places a limit buy order in a given market.
     * @param market
-    * @param rate
+    * @param price
     * @param amount
     * @param tpe You may optionally set "fillOrKill", "immediateOrCancel", "postOnly".
     *            A fill-or-kill order will either fill in its entirety or be completely aborted.
@@ -300,12 +300,12 @@ class PoloniexApi(
     *            A post-only order will only be placed if no portion of it fills immediately; this guarantees you will never pay the taker fee on any part of the order that fills.
     * @return If successful, the method will return the order number.
     */
-  def buy(market: Market, rate: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]): Mono[Buy] = {
-    buySell("buy", market, rate, amount, tpe)
+  def buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]): Mono[Buy] = {
+    buySell("buy", market, price, amount, tpe)
   }
 
-  def sell(market: Market, rate: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]): Mono[Buy] = {
-    buySell("sell", market, rate, amount, tpe)
+  def sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]): Mono[Buy] = {
+    buySell("sell", market, price, amount, tpe)
   }
 
   /**
@@ -313,17 +313,14 @@ class PoloniexApi(
     *
     * Example: If the current market price is 250 and I want to buy lower than that at 249, then I would place a limit buy order at 249. If the market reaches 249 and a seller’s ask matches with my bid, my limit order will be executed at 249.
     */
-  private def buySell(command: String, market: Market, rate: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]) : Mono[Buy] = {
+  private def buySell(command: String, market: Market, price: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]) : Mono[Buy] = {
     val params = Map(
       "currencyPair" -> market,
-      "rate" -> rate.toString,
+      "rate" -> price.toString,
       "amount" -> amount.toString,
     )
-
     val additionalParams = tpe.map(t => Map(t -> "1")).getOrElse({Map[String, String]()})
-
-    val jsonToObjectMapper = mapJsonToObject[Buy]
-    callPrivateApi(command, params ++ additionalParams).map(jsonToObjectMapper)
+    callPrivateApi(command, params ++ additionalParams).map(jsonToObject[Buy])
   }
 
   def cancelOrder(orderId: BigDecimal): Mono[Boolean] = {
@@ -338,63 +335,104 @@ class PoloniexApi(
     })
   }
 
-  // TODO:
-  def moveOrder(): Mono[Unit] = {
+  /**
+    * Cancels an order and places a new one of the same type in a single atomic transaction, meaning either both operations will succeed or both will fail.
+    * @param orderNumber
+    * @param price
+    * @param amount
+    * @param orderType "postOnly" or "immediateOrCancel" may be specified for exchange orders, but will have no effect on margin orders.
+    * @return
+    */
+  def moveOrder(orderNumber: BigDecimal, price: BigDecimal, amount: Option[BigDecimal], orderType: Option[BuyOrderType]): Mono[MoveOrderResult] = {
     val command = "moveOrder"
-    val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
-    callPrivateApi(command, params).map(jsonToObjectMapper)
+    val params = Map(
+      "orderNumber" -> orderNumber.toString,
+      "rate" -> price.toString,
+    )
+    val optParams = Map(
+      Some("amount") -> amount,
+      orderType -> Some("1"),
+    )
+      .view
+      .filter(v => v._1.isDefined && v._2.isDefined)
+      .map(v => (v._1.get.toString, v._2.get.toString))
+      .toMap
+
+    callPrivateApi(command, params ++ optParams)
+      .map(convertJsonSuccessFieldFromIntToBool)
+      .map(jsonToObject[MoveOrderResult])
   }
 
-  // TODO:
-  def withdraw(): Mono[Unit] = {
+
+  /**
+    * Immediately places a withdrawal for a given currency, with no email confirmation. In order to use this method, the withdrawal privilege must be enabled for your API key.
+ *
+    * @param currency
+    * @param amount
+    * @param address
+    * @param paymentId For XMR withdrawals, you may optionally specify "paymentId"
+    * @return
+    */
+  def withdraw(currency: Currency, amount: BigDecimal, address: String, paymentId: Option[String]): Mono[WithdrawResp] = {
     val command = "withdraw"
-    val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
-    callPrivateApi(command, params).map(jsonToObjectMapper)
+    val params = Map(
+      "currency" -> currency.toString,
+      "amount" -> amount.toString,
+      "address" -> address,
+    )
+    val optParams = paymentId.map(v => Map("paymentId" -> v)).getOrElse({Map[String, String]()})
+    callPrivateApi(command, params ++ optParams).map(jsonToObject[WithdrawResp])
   }
 
-  // TODO:
-  def feeInfo(): Mono[Unit] = {
+  /**
+    * If you are enrolled in the maker-taker fee schedule, returns your current trading fees and trailing 30-day volume in BTC. This information is updated once every 24 hours.
+    */
+  def feeInfo(): Mono[FeeInfo] = {
     val command = "returnFeeInfo"
-    val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
-    callPrivateApi(command, params).map(jsonToObjectMapper)
+    callPrivateApi(command).map(jsonToObject[FeeInfo])
   }
 
   def availableAccountBalances(): Mono[AvailableAccountBalance] = {
     val command = "returnAvailableAccountBalances"
-    val jsonToObjectMapper = mapJsonToObject[AvailableAccountBalance]
+    val jsonToObjectMapper = jsonToObject[AvailableAccountBalance]
     callPrivateApi(command).map(jsonToObjectMapper)
   }
 
   def tradableBalances(): Mono[Map[Market, Map[Currency, BigDecimal]]] = {
     val command = "returnTradableBalances"
-    val jsonToObjectMapper = mapJsonToObject[Map[Market, Map[Currency, BigDecimal]]]
+    val jsonToObjectMapper = jsonToObject[Map[Market, Map[Currency, BigDecimal]]]
     callPrivateApi(command).map(jsonToObjectMapper)
   }
 
-  // TODO:
-  def transferBalance(): Mono[Unit] = {
+  /**
+    * Transfers funds from one account to another (e.g. from your exchange account to your margin account).
+    */
+  def transferBalance(currency: Currency, amount: BigDecimal, fromAccount: AccountType, toAccount: AccountType): Mono[TransferBalanceResp] = {
     val command = "transferBalance"
-    val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
-    callPrivateApi(command, params).map(jsonToObjectMapper)
+    val params = Map(
+      "currency" -> currency,
+      "amount" -> amount.toString,
+      "fromAccount" -> AccountType.toApiString(fromAccount),
+      "toAccount" -> AccountType.toApiString(toAccount),
+    )
+    callPrivateApi(command, params)
+      .map(convertJsonSuccessFieldFromIntToBool)
+      .map(jsonToObject[TransferBalanceResp])
   }
 
-  // TODO:
-  def marginAccountSummary(): Mono[Unit] = {
+  /**
+    * Returns a summary of your entire margin account. This is the same information you will find in the Margin Account section of the Margin Trading page, under the Markets list.
+    */
+  def marginAccountSummary(): Mono[MarginAccountSummary] = {
     val command = "returnMarginAccountSummary"
-    val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
-    callPrivateApi(command, params).map(jsonToObjectMapper)
+    callPrivateApi(command).map(jsonToObject[MarginAccountSummary])
   }
 
   // TODO:
   def marginBuy(): Mono[Unit] = {
     val command = "marginBuy"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -402,7 +440,7 @@ class PoloniexApi(
   def marginSell(): Mono[Unit] = {
     val command = "marginSell"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -410,7 +448,7 @@ class PoloniexApi(
   def marginPosition(): Mono[Unit] = {
     val command = "getMarginPosition"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -418,7 +456,7 @@ class PoloniexApi(
   def closeMarginPosition(): Mono[Unit] = {
     val command = "closeMarginPosition"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -426,7 +464,7 @@ class PoloniexApi(
   def createLoanOffer(): Mono[Unit] = {
     val command = "createLoanOffer"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -434,7 +472,7 @@ class PoloniexApi(
   def cancelLoanOffer(): Mono[Unit] = {
     val command = "cancelLoanOffer"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -442,7 +480,7 @@ class PoloniexApi(
   def openLoanOffers(): Mono[Unit] = {
     val command = "returnOpenLoanOffers"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -450,7 +488,7 @@ class PoloniexApi(
   def activeLoans(): Mono[Unit] = {
     val command = "returnActiveLoans"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -458,7 +496,7 @@ class PoloniexApi(
   def lendingHistory(): Mono[Unit] = {
     val command = "returnLendingHistory"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -466,7 +504,7 @@ class PoloniexApi(
   def toggleAutoRenew(): Mono[Unit] = {
     val command = "toggleAutoRenew"
     val params = Map[String,String]()
-    val jsonToObjectMapper = mapJsonToObject[Unit]
+    val jsonToObjectMapper = jsonToObject[Unit]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -498,6 +536,12 @@ class PoloniexApi(
     Mono.defer(() => Mono.fromFuture(req.sendFormFuture(reqBody))).transform(handleApiCallResp)
   }
 
+  private def convertJsonSuccessFieldFromIntToBool: Json => Json = _.hcursor
+    .downField("success")
+    .withFocus(_.withNumber(_.toInt.exists(_ == 1).asJson))
+    .top
+    .getOrElse({throw new Exception("Can't convert success field from int to boolean")})
+
   private def handleApiCallResp(resp: Mono[HttpResponse[Buffer]]): Mono[Json] = {
     resp
       .map(bodyToJson)
@@ -522,7 +566,7 @@ class PoloniexApi(
     }
   }
 
-  private def mapJsonToObject[T](implicit decoder: Decoder[T]): Json => T = (json: Json) => json.as[T] match {
+  private def jsonToObject[T](implicit decoder: Decoder[T]): Json => T = (json: Json) => json.as[T] match {
     case Left(err) => throw err
     case Right(value) => value
   }
@@ -862,5 +906,39 @@ object PoloniexApi {
     // https://support.bitfinex.com/hc/en-us/articles/115003507365-Post-Only-Limit-Order-Option
     // The post-only limit order option ensures the limit order will be added to the order book and not match with a pre-existing order. If your order would cause a match with a pre-existing order, your post-only limit order will be canceled. This ensures that you will pay the maker fee and not the taker fee. Visit the fees page for more information.
     val PostOnly: BuyOrderType = "postOnly"
+  }
+
+  case class MoveOrderResult(
+    success: Boolean,
+    orderNumber: BigDecimal,
+    resultingTrades: Map[Market, Array[BuyResultingTrade]],
+  )
+
+  case class WithdrawResp(
+    response: String,
+  )
+
+  case class FeeInfo(
+    makerFee: BigDecimal,
+    takerFee: BigDecimal,
+    thirtyDayVolume: BigDecimal,
+    nextTier: BigDecimal,
+  )
+
+  case class TransferBalanceResp(
+    success: Boolean,
+    message: String,
+  )
+
+  sealed trait AccountType
+
+  object AccountType {
+    case object Exchange extends AccountType
+    case object Margin extends AccountType
+
+    private[PoloniexApi] def toApiString(accountType: AccountType): String = accountType match {
+      case Exchange => "exchange"
+      case Margin => "margin"
+    }
   }
 }
