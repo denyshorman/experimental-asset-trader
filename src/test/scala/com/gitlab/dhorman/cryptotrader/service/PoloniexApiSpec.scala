@@ -15,7 +15,7 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
 
     poloniexApi.tickerStream.take(10)
       .doOnTerminate(() => {
-        p.success()
+        p.success(())
       })
       .subscribe(ticker => {
         logger.info(ticker.toString)
@@ -32,7 +32,7 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
 
     poloniexApi._24HourExchangeVolumeStream.take(1)
       .doOnTerminate(() => {
-        p.success()
+        p.success(())
       })
       .subscribe(_24HVolume => {
         logger.info(_24HVolume.toString)
@@ -49,7 +49,7 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
 
     poloniexApi.balances()
       .doOnTerminate(() => {
-        p.success()
+        p.success(())
       })
       .subscribe(balances => {
         logger.info(balances.toString())
@@ -66,7 +66,7 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
 
     poloniexApi.completeBalances()
       .doOnTerminate(() => {
-        p.success()
+        p.success(())
       })
       .subscribe(balances => {
         logger.info(balances.toString())
@@ -83,7 +83,7 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
 
     poloniexApi.depositAddresses()
       .doOnTerminate(() => {
-        p.success()
+        p.success(())
       })
       .subscribe(address => {
         logger.info(address.toString())
@@ -100,7 +100,7 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
 
     poloniexApi.openOrders("ETH_OMG")
       .doOnTerminate(() => {
-        p.success()
+        p.success(())
       })
       .subscribe(address => {
         logger.info(address.toString())
@@ -117,7 +117,7 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
 
     poloniexApi.allOpenOrders()
       .doOnTerminate(() => {
-        p.success()
+        p.success(())
       })
       .subscribe(address => {
         logger.info(address.toString())

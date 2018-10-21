@@ -9,7 +9,11 @@ lazy val `crypto-trader` = (project in file("."))
   .settings(
     name := "crypto-trader",
     javacOptions ++= Seq("-source", "1.10", "-target", "1.10"),
-
+    scalacOptions ++= Seq(
+      "-deprecation",
+      "-feature",
+      "-unchecked",
+    ),
     libraryDependencies ++= Seq(
       "io.vertx" %% "vertx-lang-scala" % vertxVersion,
       "io.vertx" %% "vertx-web-scala" % vertxVersion,
@@ -26,6 +30,7 @@ lazy val `crypto-trader` = (project in file("."))
       "io.circe" %% "circe-parser" % circeVersion,
       "io.circe" %% "circe-optics" % circeVersion,
       "io.circe" %% "circe-java8" % circeVersion,
+      "io.circe" %% "circe-generic-extras" % circeVersion,
       "com.softwaremill.macwire" %% "macros" % "2.3.1",
       "com.softwaremill.common" %% "tagging" % "2.2.1",
       "ch.qos.logback" % "logback-classic" % "1.2.3",
