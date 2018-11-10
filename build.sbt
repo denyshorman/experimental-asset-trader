@@ -8,6 +8,14 @@ lazy val circeVersion = "0.10.0"
 lazy val `crypto-trader` = (project in file("."))
   .settings(
     name := "crypto-trader",
+    test in assembly := {},
+    assemblyMergeStrategy in assembly := {
+      case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
+      case PathList("META-INF", xs @ _*) => MergeStrategy.last
+      case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.last
+      case PathList("codegen.json") => MergeStrategy.discard
+      case _ => MergeStrategy.first
+    },
     javacOptions ++= Seq("-source", "1.10", "-target", "1.10"),
     scalacOptions ++= Seq(
       "-deprecation",
