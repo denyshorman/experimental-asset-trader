@@ -197,7 +197,7 @@ class PoloniexApi(
 
   def currencies(): Mono[Map[Currency, CurrencyDetails]] = {
     val command = "returnCurrencies"
-    callPrivateApi(command).map(jsonToObject[Map[Currency, CurrencyDetails]])
+    callPublicApi(command).map(jsonToObject[Map[Currency, CurrencyDetails]])
   }
 
   def loanOrders(currency: Currency): Mono[LoanOrder] = {
@@ -795,10 +795,13 @@ object PoloniexApi {
 
   case class CurrencyDetails(
     id: BigDecimal,
-    maxDailyWithdrawal: BigDecimal,
+    name: String,
     txFee: BigDecimal,
     minConf: BigDecimal,
-    disabled: Int // TODO: to bool
+    depositAddress: Option[String],
+    disabled: Int, // TODO: to bool
+    delisted: Int, // TODO: to bool
+    frozen: Int, // TODO: to bool
   )
 
   case class LoanOrder(

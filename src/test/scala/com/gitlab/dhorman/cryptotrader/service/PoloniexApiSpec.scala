@@ -128,4 +128,21 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
 
     Await.result(p.future, Duration.Inf)
   }
+
+  "PoloniexApi currencies" should "return all currencies available" in {
+    val p = Promise[Unit]()
+
+    poloniexApi.currencies()
+      .doOnTerminate(() => {
+        p.success(())
+      })
+      .subscribe(currencies => {
+        logger.info(currencies.toString())
+      }, err => {
+        logger.error(err.toString)
+        fail(err)
+      })
+
+    Await.result(p.future, Duration.Inf)
+  }
 }
