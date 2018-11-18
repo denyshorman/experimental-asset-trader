@@ -562,7 +562,7 @@ class PoloniexApi(
   }
 
   private def callPrivateApi(methodName: String, postArgs: Map[String, String] = Map()): Mono[Json] = {
-    val postParamsPrivate = Map("command" -> methodName, "nonce" -> System.nanoTime().toString)
+    val postParamsPrivate = Map("command" -> methodName, "nonce" -> System.currentTimeMillis().toString)
     val postParams = postParamsPrivate ++ postArgs
     val sign = postParams.view.map(p => s"${p._1}=${p._2}").mkString("&")
 
