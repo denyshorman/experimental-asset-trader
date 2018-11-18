@@ -5,10 +5,16 @@ import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{PoloniexApiKeyTag, P
 import com.gitlab.dhorman.cryptotrader.util.Secrets
 import com.softwaremill.macwire._
 import com.softwaremill.tagging._
+import io.vertx.core.{Vertx => JavaVertx}
+import io.vertx.reactivex.RxHelper
 import io.vertx.scala.core.Vertx
+import reactor.adapter.rxjava.RxJava2Scheduler
+import reactor.core.scheduler.Scheduler
 
 trait MainModule {
-  val vertx: Vertx
+  implicit val vertx: Vertx
+
+  implicit lazy val vertxScheduler: Scheduler = RxJava2Scheduler.from(RxHelper.scheduler(vertx.asJava.asInstanceOf[JavaVertx]))
 
   lazy val poloniexApiKey: String @@ PoloniexApiKeyTag = Secrets.get("POLONIEX_API_KEY")
     .getOrElse({throw new Exception("Please define POLONIEX_API_KEY environment variable")})

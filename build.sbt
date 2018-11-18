@@ -4,6 +4,7 @@ ThisBuild / organization := "com.gitlab.dhorman"
 
 lazy val vertxVersion = "3.6.0.CR1"
 lazy val circeVersion = "0.10.0"
+lazy val reactorVersion = "3.2.0.RELEASE"
 
 lazy val `crypto-trader` = (project in file("."))
   .settings(
@@ -46,8 +47,9 @@ lazy val `crypto-trader` = (project in file("."))
       "org.postgresql" % "postgresql" % "42.2.2",
       "org.scalatest" %% "scalatest" % "3.0.5" % "test",
       "io.reactivex" %% "rxscala" % "0.26.5",
-      "io.projectreactor" % "reactor-core" % "3.2.0.RELEASE",
+      "io.projectreactor" % "reactor-core" % reactorVersion,
       "io.projectreactor" %% "reactor-scala-extensions" % "0.3.5",
+      "io.projectreactor.addons" % "reactor-adapter" % reactorVersion,
       "com.roundeights" %% "hasher" % "1.2.0",
     )
   )

@@ -7,16 +7,17 @@ import io.vertx.scala.core.Vertx
 
 class MainVerticle extends ScalaVerticle {
   private val logger = Logger[MainVerticle]
-  private var module: MainModule = _
   private var trader: Trader = _
 
   override def start(): Unit = {
     logger.info("Start MainVerticle")
     val main = this
 
-    module = new MainModule {
+    val module = new MainModule {
       override lazy val vertx: Vertx = main.vertx
     }
+
+    import module._
 
     trader = new Trader(module.poloniexApi)
     trader.start()

@@ -1,11 +1,16 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
+import java.util.concurrent.TimeUnit
+
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{Currency, CurrencyDetails}
 import com.typesafe.scalalogging.Logger
-import reactor.core.scala.publisher.Mono
+import reactor.core.scala.publisher.{Flux, Mono}
+import reactor.core.scheduler.Scheduler
 
-class Trader(private val poloniexApi: PoloniexApi) {
+import scala.concurrent.duration.Duration
+
+class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: Scheduler) {
   private val logger = Logger[Trader]
   private var allCurrencies: Map[Currency, CurrencyDetails] = _
   private var allBalances: Map[Currency, BigDecimal] = _
@@ -18,9 +23,11 @@ class Trader(private val poloniexApi: PoloniexApi) {
       allCurrencies = curr
     })
 
-    poloniexApi.balances().subscribe(balances => {
-      logger.info("All available balances fetched")
-      allBalances = balances
+    Flux.interval(Duration(500, TimeUnit.MILLISECONDS), vertxScheduler).subscribe(value => {
+      poloniexApi.balances().subscribe(balances => {
+        logger.info("All available balances fetched")
+        allBalances = balances
+      })
     })
   }
 
