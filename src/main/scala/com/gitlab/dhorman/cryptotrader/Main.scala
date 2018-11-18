@@ -1,15 +1,13 @@
 package com.gitlab.dhorman.cryptotrader
 
-import com.gitlab.dhorman.cryptotrader.trader.Trader
 import com.typesafe.scalalogging.Logger
+import io.vertx.scala.core.Vertx
 
-
-object Main extends App with MainModule {
+object Main extends App {
   val logger = Logger[Main.type]
-
-  val trader = new Trader(poloniexApi)
-
-  scalaVertx.deployVerticle(trader)
+  val vertx = Vertx.vertx()
+  val mainVerticle = new MainVerticle()
+  vertx.deployVerticle(mainVerticle)
 
   sys.addShutdownHook {
     vertx.close()

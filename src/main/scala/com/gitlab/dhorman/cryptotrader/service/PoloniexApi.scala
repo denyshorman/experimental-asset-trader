@@ -1,7 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.service
 
+import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.time.{Instant, LocalDateTime}
 
 import cats.syntax.either._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
@@ -36,25 +36,24 @@ import scala.util.Try
   * Documentation https://poloniex.com/support/api
   */
 class PoloniexApi(
-  private val vertx: Vertx,
+  private val scalaVertx: VertxScala,
   private val poloniexApiKey: String @@ PoloniexApiKeyTag,
   private val poloniexApiSecret: String @@ PoloniexApiSecretTag,
 ) {
   private val logger = Logger[PoloniexApi]
   private val reqLimiter = new RequestLimiter(allowedRequests = 6, perInterval = 1.second)
 
-  private val vertxRx = new VertxRx(vertx)
-  private val scalaVertx = VertxScala(vertx)
+  private val vertxRx = new VertxRx(scalaVertx.asJava.asInstanceOf[Vertx])
   private implicit val ec: ExecutionContext = VertxExecutionContext(scalaVertx.getOrCreateContext())
 
   private val PoloniexPrivatePublicHttpApiUrl = "poloniex.com"
   private val PoloniexWebSocketApiUrl = "api2.poloniex.com"
 
-  private val httpClient = vertxRx.createHttpClient(new HttpClientOptions().setSsl(true))
+  private val httpClient = vertxRx.createHttpClient(new HttpClientOptions().setSsl(true).setKeepAlive(true))
 
   private val webclient = {
     val options = WebClientOptions()
-      .setKeepAlive(false)
+      .setKeepAlive(true)
       .setSsl(true)
 
     WebClient.create(scalaVertx)

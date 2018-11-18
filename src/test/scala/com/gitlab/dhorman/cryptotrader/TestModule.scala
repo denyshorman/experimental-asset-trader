@@ -1,7 +1,7 @@
 package com.gitlab.dhorman.cryptotrader
 
-import com.softwaremill.macwire._
+import io.vertx.scala.core.Vertx
 
 trait TestModule extends MainModule {
-
+  lazy val vertx: Vertx = Vertx.vertx()
 }

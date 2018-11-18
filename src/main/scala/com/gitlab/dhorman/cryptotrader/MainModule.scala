@@ -5,18 +5,10 @@ import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{PoloniexApiKeyTag, P
 import com.gitlab.dhorman.cryptotrader.util.Secrets
 import com.softwaremill.macwire._
 import com.softwaremill.tagging._
-import io.vertx.core.Vertx
-import io.vertx.lang.scala.VertxExecutionContext
-import io.vertx.reactivex.core.{Vertx => VertxRx}
-import io.vertx.scala.core.{Vertx => VertxScala}
-
-import scala.concurrent.ExecutionContext
+import io.vertx.scala.core.Vertx
 
 trait MainModule {
-  lazy val vertx: Vertx = Vertx.vertx()
-  lazy val vertxRx = new VertxRx(vertx)
-  lazy val scalaVertx = VertxScala(vertx)
-  implicit lazy val ec: ExecutionContext = VertxExecutionContext(scalaVertx.getOrCreateContext())
+  val vertx: Vertx
 
   lazy val poloniexApiKey: String @@ PoloniexApiKeyTag = Secrets.get("POLONIEX_API_KEY")
     .getOrElse({throw new Exception("Please define POLONIEX_API_KEY environment variable")})
