@@ -18,10 +18,11 @@ import io.circe.parser.parse
 import io.circe.syntax._
 import io.vertx.core.Vertx
 import io.vertx.core.buffer.Buffer
-import io.vertx.core.http.HttpClientOptions
+import io.vertx.core.net.ProxyType
 import io.vertx.lang.scala.VertxExecutionContext
 import io.vertx.reactivex.core.http.WebSocket
 import io.vertx.reactivex.core.{Vertx => VertxRx}
+import io.vertx.scala.core.net.ProxyOptions
 import io.vertx.scala.core.{MultiMap => MultiMapScala, Vertx => VertxScala}
 import io.vertx.scala.ext.web.client.{HttpResponse, WebClient, WebClientOptions}
 import reactor.core.publisher.FluxSink
@@ -49,15 +50,42 @@ class PoloniexApi(
   private val PoloniexPrivatePublicHttpApiUrl = "poloniex.com"
   private val PoloniexWebSocketApiUrl = "api2.poloniex.com"
 
-  private val httpClient = vertxRx.createHttpClient(new HttpClientOptions().setSsl(true).setKeepAlive(true))
-
-  private val webclient = {
+  private val httpOptions = {
     val options = WebClientOptions()
+      .setUserAgentEnabled(false)
       .setKeepAlive(true)
       .setSsl(true)
 
-    WebClient.create(scalaVertx)
+    if (Option(sys.env("HTTP_CERT_TRUST_ALL")).isDefined) {
+      options.setTrustAll(true)
+    }
+
+    val httpProxy: Option[ProxyOptions] = Option(sys.env("HTTP_PROXY_ENABLED")).map(_ => {
+      val options = ProxyOptions()
+      val host = Option(sys.env("HTTP_PROXY_HOST"))
+      val port = Option(sys.env("HTTP_PROXY_PORT")).flatMap(p => Try(Integer.parseInt(p)).toOption)
+      val tpe = Option(sys.env("HTTP_PROXY_TYPE")).map {
+        case "http" => ProxyType.HTTP
+        case "socks5" => ProxyType.SOCKS5
+        case _ => throw new Exception("Can't recognize HTTP_PROXY_TYPE option")
+      }
+
+      if (host.isDefined) options.setHost(host.get)
+      if (port.isDefined) options.setPort(port.get)
+      if (tpe.isDefined) options.setType(tpe.get)
+
+      options
+    })
+
+    if (httpProxy.isDefined) {
+      options.setProxyOptions(httpProxy.get)
+    }
+
+    options
   }
+
+  private val httpClient = vertxRx.createHttpClient(httpOptions.asJava)
+  private val webclient = WebClient.create(scalaVertx, httpOptions)
 
   private val websocket = {
     Flux.create((sink: FluxSink[WebSocket]) => Mono.from(httpClient
