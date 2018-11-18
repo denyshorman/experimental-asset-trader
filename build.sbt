@@ -2,7 +2,7 @@ ThisBuild / scalaVersion := "2.12.7"
 ThisBuild / version := "1.0.0-SNAPSHOT"
 ThisBuild / organization := "com.gitlab.dhorman"
 
-lazy val vertxVersion = "3.5.4"
+lazy val vertxVersion = "3.6.0.CR1"
 lazy val circeVersion = "0.10.0"
 
 lazy val `crypto-trader` = (project in file("."))
