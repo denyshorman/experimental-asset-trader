@@ -591,6 +591,7 @@ class PoloniexApi(
     resp
       .map(bodyToJson)
       .map(handleErrorResp)
+      // TODO: Retry when nonce or api limit error
       .delaySubscription(Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)))
   }
 
@@ -1083,7 +1084,7 @@ object PoloniexApi {
   }
 
   object exception {
-    case class IncorrectNonceException(providedNonce: Long, requiredNonce: Long)(originalMsg: String) extends Throwable(originalMsg)
-    case class ApiCallLimitException(maxRequestPerSecond: Int)(originalMsg: String) extends Throwable(originalMsg)
+    case class IncorrectNonceException(providedNonce: Long, requiredNonce: Long)(originalMsg: String) extends Throwable(originalMsg, null, true, false)
+    case class ApiCallLimitException(maxRequestPerSecond: Int)(originalMsg: String) extends Throwable(originalMsg, null, true, false)
   }
 }
