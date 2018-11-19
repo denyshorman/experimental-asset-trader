@@ -5,6 +5,8 @@ import java.time.format.DateTimeFormatter
 
 import cats.syntax.either._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.ErrorMsgPattern._
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.exception._
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.roundeights.hasher.Implicits._
 import com.softwaremill.tagging._
@@ -31,6 +33,7 @@ import reactor.core.scala.publisher.{Flux, Mono}
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 import scala.util.Try
+import scala.util.matching.Regex
 
 
 /**
@@ -603,7 +606,14 @@ class PoloniexApi(
 
   private def handleErrorResp(json: Json): Json = {
     root.error.string.getOption(json) match {
-      case Some(errorMsg) => throw new Exception(errorMsg)
+      case Some(errorMsg) => errorMsg match {
+        case IncorrectNonceMsg(providedNonce, requiredNonce) =>
+          throw IncorrectNonceException(providedNonce.toLong, requiredNonce.toLong)(errorMsg)
+        case ApiCallLimit(countPerSecStr) =>
+          throw ApiCallLimitException(countPerSecStr.toInt)(errorMsg)
+        case _ =>
+          throw new Exception(errorMsg)
+      }
       case None => json
     }
   }
@@ -1067,4 +1077,13 @@ object PoloniexApi {
     date: String, // 2015-05-10 23:33:50
   )
 
+  object ErrorMsgPattern {
+    val IncorrectNonceMsg: Regex = """Nonce must be greater than (\d+)\. You provided (\d+)\.""".r
+    val ApiCallLimit: Regex = """Please do not make more than (\d+) API calls per second\.""".r
+  }
+
+  object exception {
+    case class IncorrectNonceException(providedNonce: Long, requiredNonce: Long)(originalMsg: String) extends Throwable(originalMsg)
+    case class ApiCallLimitException(maxRequestPerSecond: Int)(originalMsg: String) extends Throwable(originalMsg)
+  }
 }
