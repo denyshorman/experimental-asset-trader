@@ -563,20 +563,22 @@ class PoloniexApi(
   }
 
   private def callPrivateApi(methodName: String, postArgs: Map[String, String] = Map()): Mono[Json] = {
-    val postParamsPrivate = Map("command" -> methodName, "nonce" -> System.currentTimeMillis().toString)
-    val postParams = postParamsPrivate ++ postArgs
-    val sign = postParams.view.map(p => s"${p._1}=${p._2}").mkString("&")
+    Mono.defer(() => {
+      val postParamsPrivate = Map("command" -> methodName, "nonce" -> System.currentTimeMillis().toString)
+      val postParams = postParamsPrivate ++ postArgs
+      val sign = postParams.view.map(p => s"${p._1}=${p._2}").mkString("&")
 
-    val req = webclient
-      .post(443, PoloniexPrivatePublicHttpApiUrl, "/tradingApi")
-      .ssl(true)
-      .putHeader("Key", poloniexApiKey)
-      .putHeader("Sign", sign.hmac(poloniexApiSecret).sha512)
+      val req = webclient
+        .post(443, PoloniexPrivatePublicHttpApiUrl, "/tradingApi")
+        .ssl(true)
+        .putHeader("Key", poloniexApiKey)
+        .putHeader("Sign", sign.hmac(poloniexApiSecret).sha512)
 
-    val reqBody = MultiMapScala.caseInsensitiveMultiMap()
-    postParams.foreach(p => reqBody.set(p._1, p._2))
+      val reqBody = MultiMapScala.caseInsensitiveMultiMap()
+      postParams.foreach(p => reqBody.set(p._1, p._2))
 
-    Mono.defer(() => Mono.fromFuture(req.sendFormFuture(reqBody))).transform(handleApiCallResp)
+      Mono.fromFuture(req.sendFormFuture(reqBody))
+    }).transform(handleApiCallResp)
   }
 
   private def convertJsonSuccessFieldFromIntToBool: Json => Json = _.hcursor
