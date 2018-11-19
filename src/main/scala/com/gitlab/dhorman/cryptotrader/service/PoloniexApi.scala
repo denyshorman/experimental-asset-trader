@@ -4,8 +4,8 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 import cats.syntax.either._
-import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.ErrorMsgPattern._
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.exception._
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.roundeights.hasher.Implicits._
@@ -21,7 +21,6 @@ import io.circe.syntax._
 import io.vertx.core.Vertx
 import io.vertx.core.buffer.Buffer
 import io.vertx.core.net.ProxyType
-import io.vertx.lang.scala.VertxExecutionContext
 import io.vertx.reactivex.core.http.WebSocket
 import io.vertx.reactivex.core.{Vertx => VertxRx}
 import io.vertx.scala.core.net.ProxyOptions
@@ -43,12 +42,11 @@ class PoloniexApi(
   private val scalaVertx: VertxScala,
   private val poloniexApiKey: String @@ PoloniexApiKeyTag,
   private val poloniexApiSecret: String @@ PoloniexApiSecretTag,
-) {
+)(implicit val ec: ExecutionContext) {
   private val logger = Logger[PoloniexApi]
   private val reqLimiter = new RequestLimiter(allowedRequests = 6, perInterval = 1.second)
 
   private val vertxRx = new VertxRx(scalaVertx.asJava.asInstanceOf[Vertx])
-  private implicit val ec: ExecutionContext = VertxExecutionContext(scalaVertx.getOrCreateContext())
 
   private val PoloniexPrivatePublicHttpApiUrl = "poloniex.com"
   private val PoloniexWebSocketApiUrl = "api2.poloniex.com"
