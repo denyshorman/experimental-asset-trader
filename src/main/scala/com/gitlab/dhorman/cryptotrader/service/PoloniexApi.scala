@@ -57,15 +57,15 @@ class PoloniexApi(
       .setKeepAlive(true)
       .setSsl(true)
 
-    if (Option(sys.env("HTTP_CERT_TRUST_ALL")).isDefined) {
+    if (sys.env.get("HTTP_CERT_TRUST_ALL").isDefined) {
       options.setTrustAll(true)
     }
 
-    val httpProxy: Option[ProxyOptions] = Option(sys.env("HTTP_PROXY_ENABLED")).map(_ => {
+    val httpProxy: Option[ProxyOptions] = sys.env.get("HTTP_PROXY_ENABLED").map(_ => {
       val options = ProxyOptions()
-      val host = Option(sys.env("HTTP_PROXY_HOST"))
-      val port = Option(sys.env("HTTP_PROXY_PORT")).flatMap(p => Try(Integer.parseInt(p)).toOption)
-      val tpe = Option(sys.env("HTTP_PROXY_TYPE")).map {
+      val host = sys.env.get("HTTP_PROXY_HOST")
+      val port = sys.env.get("HTTP_PROXY_PORT").flatMap(p => Try(Integer.parseInt(p)).toOption)
+      val tpe = sys.env.get("HTTP_PROXY_TYPE").map {
         case "http" => ProxyType.HTTP
         case "socks5" => ProxyType.SOCKS5
         case _ => throw new Exception("Can't recognize HTTP_PROXY_TYPE option")
@@ -664,6 +664,7 @@ class PoloniexApi(
 }
 
 object PoloniexApi {
+  import Codecs._
 
   trait PoloniexApiKeyTag
 
@@ -680,10 +681,15 @@ object PoloniexApi {
     percentChange: BigDecimal,
     baseVolume: BigDecimal,
     quoteVolume: BigDecimal,
-    isFrozen: Int, // TODO: to boolean
+    isFrozen: Boolean,
     high24hr: BigDecimal,
     low24hr: BigDecimal,
   )
+
+  object Ticker {
+    implicit val encoder: Encoder[Ticker] = deriveEncoder
+    implicit val decoder: Decoder[Ticker] = deriveDecoder
+  }
 
   case class Command(command: Command.Type, channel: Command.Channel)
 
@@ -709,9 +715,14 @@ object PoloniexApi {
   case class OrderBook(
     asks: Array[Array[BigDecimal]],
     bids: Array[Array[BigDecimal]],
-    isFrozen: Int, // TODO: to boolean
+    isFrozen: Boolean,
     seq: BigDecimal,
   )
+
+  object OrderBook {
+    implicit val encoder: Encoder[OrderBook] = deriveEncoder
+    implicit val decoder: Decoder[OrderBook] = deriveDecoder
+  }
 
   case class CompleteBalance(available: BigDecimal, onOrders: BigDecimal, btcValue: BigDecimal)
 
@@ -744,7 +755,9 @@ object PoloniexApi {
 
   object TickerData {
     private[PoloniexApi] def map(json: Json): Seq[TickerData] = {
-      json.asArray.map(_.view.drop(2).flatMap(_.asArray).map(mapTicker)).getOrElse(Seq())
+      json.asArray.map(_.view.drop(2).flatMap(_.asArray).map(mapTicker)).getOrElse {
+        throw new Exception("Can't parse ticker data")
+      }
     }
 
     private[PoloniexApi] def mapTicker(ticker: Vector[Json]): TickerData = TickerData(
@@ -773,17 +786,11 @@ object PoloniexApi {
     }
 
     private[PoloniexApi] def mapDate(json: Json): LocalDateTime = {
-      json.asString
-        .flatMap(dateStr =>
-          Try(
-            LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
-          ).toOption
-        )
-        .getOrElse(LocalDateTime.now())
+      json.asString.flatMap(dateStr => Try(LocalDateTime.parse(dateStr, localDateTimeHourMinuteFormatter)).toOption).getOrElse(LocalDateTime.now())
     }
 
     private[PoloniexApi] def mapInt(json: Json): Int = {
-      json.asNumber.flatMap(num => num.toInt).getOrElse(-1)
+      json.asNumber.flatMap(_.toInt).getOrElse(-1)
     }
 
     private[PoloniexApi] def mapBaseCurrencies24HVolume(json: Json): Map[String, BigDecimal] = {
@@ -799,26 +806,25 @@ object PoloniexApi {
 
   }
 
-  object OrderBook {
-
-  }
-
   object OpenOrder {
-
     object Type {
       val Sell = "sell"
       val Buy = "buy"
     }
-
   }
 
   case class TradeHistory(
-    date: String, // TODO: Convert to date 2014-02-10 01:19:37
+    date: LocalDateTime,
     `type`: String, // buy/sell
     rate: BigDecimal,
     amount: BigDecimal,
     total: BigDecimal
   )
+
+  object TradeHistory {
+    implicit val encoder: Encoder[TradeHistory] = deriveEncoder
+    implicit val decoder: Decoder[TradeHistory] = deriveDecoder
+  }
 
   case class ChartData(
     date: Long,
@@ -832,15 +838,20 @@ object PoloniexApi {
   )
 
   case class CurrencyDetails(
-    id: BigDecimal,
+    id: Long,
     name: String,
     txFee: BigDecimal,
     minConf: BigDecimal,
     depositAddress: Option[String],
-    disabled: Int, // TODO: to bool
-    delisted: Int, // TODO: to bool
-    frozen: Int, // TODO: to bool
+    disabled: Boolean,
+    delisted: Boolean,
+    frozen: Boolean,
   )
+
+  object CurrencyDetails {
+    implicit val encoder: Encoder[CurrencyDetails] = deriveEncoder
+    implicit val decoder: Decoder[CurrencyDetails] = deriveDecoder
+  }
 
   case class LoanOrder(
     offers: Array[LoanOrderDetails],
@@ -874,6 +885,11 @@ object PoloniexApi {
     status: String, // COMPLETE
   )
 
+  object DepositDetails {
+    implicit val encoder: Encoder[DepositDetails] = deriveEncoder
+    implicit val decoder: Decoder[DepositDetails] = deriveDecoder
+  }
+
   case class WithdrawDetails(
     withdrawalNumber: BigDecimal,
     currency: Currency,
@@ -887,7 +903,7 @@ object PoloniexApi {
   case class TradeHistoryPrivate(
     globalTradeID: BigDecimal,
     tradeID: BigDecimal,
-    date: String, // 2016-05-03 01:29:55
+    date: LocalDateTime,
     rate: BigDecimal,
     amount: BigDecimal,
     total: BigDecimal,
@@ -896,6 +912,11 @@ object PoloniexApi {
     `type`: String, // buy
     category: String, // settlement
   )
+
+  object TradeHistoryPrivate {
+    implicit val encoder: Encoder[TradeHistoryPrivate] = deriveEncoder
+    implicit val decoder: Decoder[TradeHistoryPrivate] = deriveDecoder
+  }
 
   case class OrderTrade(
     globalTradeID: BigDecimal,
@@ -906,8 +927,13 @@ object PoloniexApi {
     amount: BigDecimal,
     total: BigDecimal,
     fee: BigDecimal,
-    date: String, // 2016-03-14 01:04:36
+    date: LocalDateTime,
   )
+
+  object OrderTrade {
+    implicit val encoder: Encoder[OrderTrade] = deriveEncoder
+    implicit val decoder: Decoder[OrderTrade] = deriveDecoder
+  }
 
   case class AvailableAccountBalance(
     exchange: Map[Currency, BigDecimal],
@@ -939,14 +965,8 @@ object PoloniexApi {
   )
 
   object BuyResultingTrade {
-    val formatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-    implicit val dateEncoder: Encoder[LocalDateTime] = Encoder.encodeString.contramap[LocalDateTime](_.format(formatter))
-    implicit val dateDecoder: Decoder[LocalDateTime] = Decoder.decodeString.emap[LocalDateTime](str => {
-      Either.catchNonFatal(LocalDateTime.parse(str, formatter)).leftMap(_.getMessage)
-    })
-
-    implicit val BuyResultingTradeEncoder: ObjectEncoder[BuyResultingTrade] = deriveEncoder[BuyResultingTrade]
-    implicit val BuyResultingTradeDecoder: Decoder[BuyResultingTrade] = deriveDecoder[BuyResultingTrade]
+    implicit val encoder: Encoder[BuyResultingTrade] = deriveEncoder[BuyResultingTrade]
+    implicit val decoder: Decoder[BuyResultingTrade] = deriveDecoder[BuyResultingTrade]
   }
 
   // TODO: Use enum
@@ -1049,9 +1069,14 @@ object PoloniexApi {
     interest: BigDecimal,
     fee: BigDecimal,
     earned: BigDecimal,
-    open: String, // 2016-09-28 06:47:26,
-    close: String, // 2016-09-28 06:47:26,
+    open: LocalDateTime,
+    close: LocalDateTime,
   )
+
+  object LendingHistory {
+    implicit val encoder: Encoder[LendingHistory] = deriveEncoder
+    implicit val decoder: Decoder[LendingHistory] = deriveDecoder
+  }
 
   case class ActiveLoan(
     provided: Array[ActiveLoanDetail],
@@ -1065,18 +1090,28 @@ object PoloniexApi {
     amount: BigDecimal,
     range: Int,
     autoRenew: Int,
-    date: String, // 2015-05-10 23:45:05,
+    date: LocalDateTime,
     fees: BigDecimal,
   )
+
+  object ActiveLoanDetail {
+    implicit val encoder: Encoder[ActiveLoanDetail] = deriveEncoder
+    implicit val decoder: Decoder[ActiveLoanDetail] = deriveDecoder
+  }
 
   case class OpenLoanOffer(
     id: BigInt,
     rate: BigDecimal,
     amount: BigDecimal,
     duration: Long,
-    autoRenew: Int, // TODO: to bool
-    date: String, // 2015-05-10 23:33:50
+    autoRenew: Boolean,
+    date: LocalDateTime,
   )
+
+  object OpenLoanOffer {
+    implicit val encoder: Encoder[OpenLoanOffer] = deriveEncoder
+    implicit val decoder: Decoder[OpenLoanOffer] = deriveDecoder
+  }
 
   object ErrorMsgPattern {
     val IncorrectNonceMsg: Regex = """Nonce must be greater than (\d+)\. You provided (\d+)\.""".r
@@ -1086,5 +1121,17 @@ object PoloniexApi {
   object exception {
     case class IncorrectNonceException(providedNonce: Long, requiredNonce: Long)(originalMsg: String) extends Throwable(originalMsg, null, true, false)
     case class ApiCallLimitException(maxRequestPerSecond: Int)(originalMsg: String) extends Throwable(originalMsg, null, true, false)
+  }
+
+  object Codecs {
+    val localDateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    val localDateTimeHourMinuteFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+    implicit val boolDecoder: Decoder[Boolean] = Decoder.decodeInt.map(_ == 1)
+
+    implicit val localDateTimeEncoder: Encoder[LocalDateTime] = Encoder.encodeString.contramap[LocalDateTime](_.format(localDateTimeFormatter))
+    implicit val localDateTimeDecoder: Decoder[LocalDateTime] = Decoder.decodeString.emap[LocalDateTime](str => {
+      Either.catchNonFatal(LocalDateTime.parse(str, localDateTimeFormatter)).leftMap(_.getMessage)
+    })
   }
 }
