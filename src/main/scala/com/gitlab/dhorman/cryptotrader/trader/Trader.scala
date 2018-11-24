@@ -38,6 +38,12 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
         logger.debug(orders.asJson.noSpaces)
       }
     })
+
+    poloniexApi.tickerStream.subscribe(ticker => {
+      logger.whenDebugEnabled {
+        logger.debug(s"Ticker: ${ticker.asJson.noSpaces}")
+      }
+    })
   }
 
   def start(): Unit = {

@@ -138,6 +138,9 @@ class PoloniexApi(
       .share()
   }
 
+  /**
+    * Subscribe to ticker updates for all currency pairs.
+    */
   val tickerStream: Flux[TickerData] = {
     Flux.create(create(Command.Channel.TickerData, TickerData.map))
       .flatMapIterable(arr => arr)
@@ -706,11 +709,61 @@ object PoloniexApi {
     lowestTradePriceInLast24Hours: BigDecimal,
   )
 
+  object TickerData {
+    private val logger = Logger[TickerData.type]
+    private type TickerDataTuple = (Int, BigDecimal, BigDecimal, BigDecimal, BigDecimal, BigDecimal, BigDecimal, Boolean, BigDecimal, BigDecimal)
+
+    private[PoloniexApi] def map(json: Json): Seq[TickerData] = {
+      json.asArray.map(_.view.drop(2).flatMap(mapTicker)).getOrElse {
+        throw new Exception("Can't parse ticker data")
+      }
+    }
+
+    private[PoloniexApi] def mapTicker(json: Json): Option[TickerData] =
+      json.as[TickerDataTuple].map((TickerData.apply _).tupled(_)) match {
+        case Left(err) =>
+          logger.error("Can't parse ticker", err)
+          None
+        case Right(ticker) => Some(ticker)
+      }
+  }
+
   case class _24HourExchangeVolume(
     time: LocalDateTime,
     usersOnline: Int,
     baseCurrency24HVolume: Map[String, BigDecimal],
   )
+
+  object _24HourExchangeVolume {
+    private[PoloniexApi] def map(json: Json): Option[_24HourExchangeVolume] = {
+      json.asArray.flatMap(_.view
+        .drop(2)
+        .flatMap(_.asArray)
+        .filter(_.size >= 3)
+        .map(arr => _24HourExchangeVolume(mapDate(arr(0)), mapInt(arr(1)), mapBaseCurrencies24HVolume(arr(2))))
+        .headOption
+      )
+    }
+
+    private[PoloniexApi] def mapDate(json: Json): LocalDateTime = {
+      json.asString.flatMap(dateStr => Try(LocalDateTime.parse(dateStr, localDateTimeHourMinuteFormatter)).toOption).getOrElse(LocalDateTime.now())
+    }
+
+    private[PoloniexApi] def mapInt(json: Json): Int = {
+      json.asNumber.flatMap(_.toInt).getOrElse(-1)
+    }
+
+    private[PoloniexApi] def mapBaseCurrencies24HVolume(json: Json): Map[String, BigDecimal] = {
+      json
+        .asObject
+        .map(_.toMap.map(v => (v._1, v._2
+          .asString
+          .flatMap(amount => Try(BigDecimal(amount)).toOption)
+          .getOrElse(BigDecimal(-1))))
+        )
+        .getOrElse(Map())
+    }
+  }
 
   case class OrderBook(
     asks: Array[Array[BigDecimal]],
@@ -749,59 +802,6 @@ object PoloniexApi {
       val TickerData = 1002
       val _24HourExchangeVolume = 1003
       val Heartbeat = 1010
-    }
-
-  }
-
-  object TickerData {
-    private[PoloniexApi] def map(json: Json): Seq[TickerData] = {
-      json.asArray.map(_.view.drop(2).flatMap(_.asArray).map(mapTicker)).getOrElse {
-        throw new Exception("Can't parse ticker data")
-      }
-    }
-
-    private[PoloniexApi] def mapTicker(ticker: Vector[Json]): TickerData = TickerData(
-      ticker(0).asNumber.flatMap(x => x.toInt).getOrElse(-1),
-      ticker(1).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-      ticker(2).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-      ticker(3).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-      ticker(4).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-      ticker(5).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-      ticker(6).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-      ticker(7).asNumber.flatMap(x => x.toInt).getOrElse(-1) == 1,
-      ticker(8).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-      ticker(9).asString.flatMap(n => Try(BigDecimal(n)).toOption).getOrElse(-1),
-    )
-  }
-
-  object _24HourExchangeVolume {
-    private[PoloniexApi] def map(json: Json): Option[_24HourExchangeVolume] = {
-      json.asArray.flatMap(_.view
-        .drop(2)
-        .flatMap(_.asArray)
-        .filter(_.size >= 3)
-        .map(arr => _24HourExchangeVolume(mapDate(arr(0)), mapInt(arr(1)), mapBaseCurrencies24HVolume(arr(2))))
-        .headOption
-      )
-    }
-
-    private[PoloniexApi] def mapDate(json: Json): LocalDateTime = {
-      json.asString.flatMap(dateStr => Try(LocalDateTime.parse(dateStr, localDateTimeHourMinuteFormatter)).toOption).getOrElse(LocalDateTime.now())
-    }
-
-    private[PoloniexApi] def mapInt(json: Json): Int = {
-      json.asNumber.flatMap(_.toInt).getOrElse(-1)
-    }
-
-    private[PoloniexApi] def mapBaseCurrencies24HVolume(json: Json): Map[String, BigDecimal] = {
-      json
-        .asObject
-        .map(_.toMap.map(v => (v._1, v._2
-          .asString
-          .flatMap(amount => Try(BigDecimal(amount)).toOption)
-          .getOrElse(BigDecimal(-1))))
-        )
-        .getOrElse(Map())
     }
 
   }
