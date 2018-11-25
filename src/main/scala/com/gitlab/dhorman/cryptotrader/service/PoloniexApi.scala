@@ -7,6 +7,7 @@ import cats.syntax.either._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.ErrorMsgPattern._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.exception._
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.Codecs._
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.roundeights.hasher.Implicits._
 import com.softwaremill.tagging._
@@ -29,6 +30,7 @@ import io.vertx.scala.ext.web.client.{HttpResponse, WebClient, WebClientOptions}
 import reactor.core.publisher.FluxSink
 import reactor.core.scala.publisher.{Flux, Mono}
 
+import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 import scala.util.Try
@@ -155,8 +157,54 @@ class PoloniexApi(
   }
 
 
-  def orderBookStream(market: Market): Flux[OrderBook] = {
-    ???
+  def orderBookStream(marketId: Int): Flux[PriceAggregatedBook] = {
+    Flux.create(create(marketId, json => json))
+      .scan(new PriceAggregatedBook(), (oBook: PriceAggregatedBook, json) => {
+        val (_, currentOrderNumber, commandsJson) = json.as[(Int, Long, Json)].toOption.get
+
+        if (oBook.stamp.isDefined && oBook.stamp.get + 1 != currentOrderNumber) {
+          throw new Exception("Order book broken")
+        } else {
+          oBook.stamp = Some(currentOrderNumber)
+        }
+
+        commandsJson.asArray.get.foreach(json => {
+          val msgType = root(0).string.getOption(json).get
+
+          msgType match {
+            case "i" =>
+              // initial book snapshot
+
+              val (asks, bids) = root(1).orderBook.as[(Map[BigDecimal, BigDecimal], Map[BigDecimal, BigDecimal])].getOption(json).get
+
+              oBook.init(asks, bids)
+            case "o" =>
+              // book modifications
+              val (_, buySell, price, quantity) = json.as[(String, Int, BigDecimal, BigDecimal)].toOption.get
+
+              val book = buySell match {
+                case 0 => oBook.asks
+                case 1 => oBook.bids
+                case _ => throw new Exception("Can't decode book type")
+              }
+
+              if (quantity == 0) {
+                book.remove(price)
+              } else {
+                book.update(price, quantity)
+              }
+            case "t" =>
+              // trades
+
+              // Ignore trades
+
+              // val (_, tradeId, buySell, price, quantity, timestamp) = json.as[(String, BigDecimal, Int, BigDecimal, BigDecimal, Long)].toOption.get
+          }
+        })
+
+        oBook
+      })
+      .share()
   }
 
   /**
@@ -637,7 +685,7 @@ class PoloniexApi(
       sink.error(err)
     })
 
-    // Receive ticker data
+    // Receive data
     val messagesSubscription = websocketMessages
       .filter(isEqual(_, channel))
       .map(mapper)
@@ -649,7 +697,7 @@ class PoloniexApi(
         sink.complete()
       })
 
-    // Unsubscribe from ticker data
+    // Unsubscribe from stream
     sink.onDispose(() => {
       websocket.take(1).subscribe(socket => {
         val jsonStr = Command(Command.Type.Unsubscribe, channel).asJson.noSpaces
@@ -667,8 +715,6 @@ class PoloniexApi(
 }
 
 object PoloniexApi {
-  import Codecs._
-
   trait PoloniexApiKeyTag
 
   trait PoloniexApiSecretTag
@@ -775,6 +821,21 @@ object PoloniexApi {
   object OrderBook {
     implicit val encoder: Encoder[OrderBook] = deriveEncoder
     implicit val decoder: Decoder[OrderBook] = deriveDecoder
+  }
+
+  class PriceAggregatedBook() {
+    var stamp: Option[Long] = None
+    val asks = new mutable.TreeMap[BigDecimal, BigDecimal]()
+    val bids = new mutable.TreeMap[BigDecimal, BigDecimal]()(implicitly[Ordering[BigDecimal]].reverse)
+
+    def init(_asks: Map[BigDecimal, BigDecimal], _bids: Map[BigDecimal, BigDecimal]): Unit = {
+      _asks.foreach(ask => asks += ask)
+      _bids.foreach(bid => bids += bid)
+    }
+
+  }
+
+  object PriceAggregatedBook {
   }
 
   case class CompleteBalance(available: BigDecimal, onOrders: BigDecimal, btcValue: BigDecimal)
@@ -1133,5 +1194,8 @@ object PoloniexApi {
     implicit val localDateTimeDecoder: Decoder[LocalDateTime] = Decoder.decodeString.emap[LocalDateTime](str => {
       Either.catchNonFatal(LocalDateTime.parse(str, localDateTimeFormatter)).leftMap(_.getMessage)
     })
+
+    implicit val bigDecimalMapKeyDecoder: KeyDecoder[BigDecimal] = KeyDecoder.decodeKeyString.map(str => BigDecimal(str))
+    implicit val bigDecimalMapKeyEncoder: KeyEncoder[BigDecimal] = KeyEncoder.encodeKeyString.contramap(_.toString)
   }
 }

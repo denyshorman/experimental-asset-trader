@@ -41,8 +41,12 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
     poloniexApi.tickerStream.subscribe(ticker => {
       logger.whenDebugEnabled {
-        logger.debug(s"Ticker: ${ticker.asJson.noSpaces}")
+        //logger.debug(s"Ticker: ${ticker.asJson.noSpaces}")
       }
+    })
+
+    poloniexApi.orderBookStream(224).subscribe(orderBook => {
+
     })
   }
 
