@@ -729,7 +729,6 @@ class PoloniexApi(
 
 object PoloniexApi {
   trait PoloniexApiKeyTag
-
   trait PoloniexApiSecretTag
 
   type Market = String // BTC_LTC
@@ -754,6 +753,23 @@ object PoloniexApi {
   }
 
   case class Command(command: Command.Type, channel: Command.Channel)
+
+  object Command {
+    type Type = String
+    type Channel = Int
+
+    object Type {
+      val Subscribe = "subscribe"
+      val Unsubscribe = "unsubscribe"
+    }
+
+    object Channel {
+      val AccountNotifications = 1000
+      val TickerData = 1002
+      val _24HourExchangeVolume = 1003
+      val Heartbeat = 1010
+    }
+  }
 
   case class PrivateCommand(
     command: Command.Type,
@@ -853,10 +869,6 @@ object PoloniexApi {
       _asks.foreach(ask => asks += ask)
       _bids.foreach(bid => bids += bid)
     }
-
-  }
-
-  object PriceAggregatedBook {
   }
 
   case class CompleteBalance(available: BigDecimal, onOrders: BigDecimal, btcValue: BigDecimal)
@@ -868,25 +880,6 @@ object PoloniexApi {
     amount: BigDecimal,
     total: BigDecimal,
   )
-
-  object Command {
-
-    type Type = String
-    type Channel = Int
-
-    object Type {
-      val Subscribe = "subscribe"
-      val Unsubscribe = "unsubscribe"
-    }
-
-    object Channel {
-      val AccountNotifications = 1000
-      val TickerData = 1002
-      val _24HourExchangeVolume = 1003
-      val Heartbeat = 1010
-    }
-
-  }
 
   object OpenOrder {
     object Type {
