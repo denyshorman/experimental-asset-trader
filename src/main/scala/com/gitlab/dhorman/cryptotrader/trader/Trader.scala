@@ -35,7 +35,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
       logger.info("All open orders fetched")
       openOrders = orders
       logger.whenDebugEnabled {
-        logger.debug(orders.asJson.noSpaces)
+        logger.debug(orders.toString)
       }
     })
 

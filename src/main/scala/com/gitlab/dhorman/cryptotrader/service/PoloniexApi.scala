@@ -4,10 +4,10 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 import cats.syntax.either._
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.Codecs._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.ErrorMsgPattern._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.exception._
-import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.Codecs._
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.roundeights.hasher.Implicits._
 import com.softwaremill.tagging._
@@ -145,7 +145,10 @@ class PoloniexApi(
     */
   val tickerStream: Flux[TickerData] = {
     Flux.create(create(Command.Channel.TickerData))
-      .map(TickerData.map)
+      .map(_.as[Seq[TickerData]] match {
+        case Right(value) => value
+        case Left(err) => throw new Exception(err)
+      })
       .flatMapIterable(arr => arr)
       .share()
   }
@@ -332,7 +335,7 @@ class PoloniexApi(
   /**
     * Returns your open orders for a given market, specified by the currencyPair.
     */
-  def openOrders(currencyPair: String): Mono[List[OpenOrder]] = {
+  def openOrders(currencyPair: Market): Mono[List[OpenOrder]] = {
     callPrivateApi("returnOpenOrders", Map("currencyPair" -> currencyPair))
       .map(jsonToObject[List[OpenOrder]])
   }
@@ -793,28 +796,19 @@ object PoloniexApi {
   )
 
   object TickerData {
-    private val logger = Logger[TickerData.type]
     private type TickerDataTuple = (Int, BigDecimal, BigDecimal, BigDecimal, BigDecimal, BigDecimal, BigDecimal, Boolean, BigDecimal, BigDecimal)
 
-    private[PoloniexApi] def map(json: Json): Seq[TickerData] = {
-      json.asArray.map(_.view.drop(2).flatMap(mapTicker)).getOrElse {
-        throw new Exception("Can't parse ticker data")
-      }
-    }
-
-    private[PoloniexApi] def mapTicker(json: Json): Option[TickerData] =
-      json.as[TickerDataTuple].map((TickerData.apply _).tupled(_)) match {
-        case Left(err) =>
-          logger.error("Can't parse ticker", err)
-          None
-        case Right(ticker) => Some(ticker)
-      }
+    private[PoloniexApi] implicit val decoder: Decoder[Seq[TickerData]] = Decoder.decodeJson.emap[Seq[TickerData]](arr0 => {
+      Either.fromOption(arr0.asArray, "Not an array")
+        .map(_.view.drop(2).map(_.as[TickerDataTuple].map((TickerData.apply _).tupled(_)).leftMap(_.getMessage)))
+        .flatMap(_.foldRight(Right(Nil): Either[String, List[TickerData]])((elem, acc) => acc.right.flatMap(l => elem.right.map(_ :: l))))
+    })
   }
 
   case class _24HourExchangeVolume(
     time: LocalDateTime,
     usersOnline: Int,
-    baseCurrency24HVolume: Map[String, BigDecimal],
+    baseCurrency24HVolume: Map[Currency, BigDecimal],
   )
 
   object _24HourExchangeVolume {
@@ -875,29 +869,25 @@ object PoloniexApi {
 
   case class OpenOrder(
     orderNumber: String,
-    `type`: String, // sell/buy
+    `type`: OrderType,
     rate: BigDecimal,
     amount: BigDecimal,
     total: BigDecimal,
   )
 
   object OpenOrder {
-    object Type {
-      val Sell = "sell"
-      val Buy = "buy"
-    }
+    implicit val decoder: Decoder[OpenOrder] = deriveDecoder
   }
 
   case class TradeHistory(
     date: LocalDateTime,
-    `type`: String, // buy/sell
+    `type`: OrderType,
     rate: BigDecimal,
     amount: BigDecimal,
     total: BigDecimal
   )
 
   object TradeHistory {
-    implicit val encoder: Encoder[TradeHistory] = deriveEncoder
     implicit val decoder: Decoder[TradeHistory] = deriveDecoder
   }
 
@@ -941,9 +931,14 @@ object PoloniexApi {
   )
 
   case class NewAddressGenerated(
-    success: Int,
+    success: Boolean,
     response: String,
   )
+
+  object NewAddressGenerated {
+    implicit val encoder: Encoder[NewAddressGenerated] = deriveEncoder
+    implicit val decoder: Decoder[NewAddressGenerated] = deriveDecoder
+  }
 
   case class DepositsWithdrawals(
     deposits: Array[DepositDetails],
@@ -957,7 +952,7 @@ object PoloniexApi {
     confirmations: Int,
     txid: String,
     timestamp: Long,
-    status: String, // COMPLETE
+    status: String, // TODO: COMPLETE
   )
 
   object DepositDetails {
@@ -984,12 +979,11 @@ object PoloniexApi {
     total: BigDecimal,
     fee: BigDecimal,
     orderNumber: BigDecimal,
-    `type`: String, // buy
-    category: String, // settlement
+    `type`: OrderType,
+    category: String, // TODO: settlement
   )
 
   object TradeHistoryPrivate {
-    implicit val encoder: Encoder[TradeHistoryPrivate] = deriveEncoder
     implicit val decoder: Decoder[TradeHistoryPrivate] = deriveDecoder
   }
 
@@ -997,7 +991,7 @@ object PoloniexApi {
     globalTradeID: BigDecimal,
     tradeID: BigDecimal,
     currencyPair: Market,
-    `type`: String, // buy,
+    `type`: OrderType,
     rate: BigDecimal,
     amount: BigDecimal,
     total: BigDecimal,
@@ -1006,7 +1000,6 @@ object PoloniexApi {
   )
 
   object OrderTrade {
-    implicit val encoder: Encoder[OrderTrade] = deriveEncoder
     implicit val decoder: Decoder[OrderTrade] = deriveDecoder
   }
 
@@ -1036,12 +1029,11 @@ object PoloniexApi {
     rate: BigDecimal,
     total: BigDecimal,
     @JsonKey("tradeID") tradeId: BigDecimal,
-    `type`: String, // buy/sell
+    `type`: OrderType,
   )
 
   object BuyResultingTrade {
-    implicit val encoder: Encoder[BuyResultingTrade] = deriveEncoder[BuyResultingTrade]
-    implicit val decoder: Decoder[BuyResultingTrade] = deriveDecoder[BuyResultingTrade]
+    implicit val decoder: Decoder[BuyResultingTrade] = deriveDecoder
   }
 
   // TODO: Use enum
@@ -1294,10 +1286,23 @@ object PoloniexApi {
     val Sell: OrderType = Value
     val Buy: OrderType = Value
 
-    private[PoloniexApi] implicit val decoder: Decoder[OrderType] = Decoder.decodeInt.map {
-      case 0 => OrderType.Sell
-      case 1 => OrderType.Buy
-    }
+    private[PoloniexApi] implicit val decoder: Decoder[OrderType] = Decoder.decodeJson.emap(json => {
+      if (json.isString) {
+        json.asString.get match {
+          case "sell" => Right(OrderType.Sell)
+          case "buy" => Right(OrderType.Buy)
+          case str => Left(s"""Not recognized string "$str" """)
+        }
+      } else if (json.isNumber) {
+        json.asNumber.get.toInt.get match {
+          case 0 => Right(OrderType.Sell)
+          case 1 => Right(OrderType.Buy)
+          case int => Left(s"""Not recognized integer "$int" """)
+        }
+      } else {
+        Left("Can't parse OrderType")
+      }
+    })
   }
 
   type FundingType = FundingType.Value
@@ -1330,7 +1335,15 @@ object PoloniexApi {
     val localDateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     val localDateTimeHourMinuteFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
-    implicit val boolDecoder: Decoder[Boolean] = Decoder.decodeInt.map(_ == 1)
+    implicit val boolDecoder: Decoder[Boolean] = Decoder.decodeJson.emap[Boolean](json => {
+      if (json.isNumber) {
+        Right(json.asNumber.get.toInt.get == 1)
+      } else if (json.isBoolean) {
+        Right(json.asBoolean.get)
+      } else {
+        Left("Can't parse boolean")
+      }
+    })
 
     implicit val localDateTimeEncoder: Encoder[LocalDateTime] = Encoder.encodeString.contramap[LocalDateTime](_.format(localDateTimeFormatter))
     implicit val localDateTimeDecoder: Decoder[LocalDateTime] = Decoder.decodeString.emap[LocalDateTime](str => {
