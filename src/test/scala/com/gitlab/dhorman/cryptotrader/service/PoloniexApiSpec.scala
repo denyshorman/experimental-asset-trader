@@ -44,6 +44,24 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
     Await.result(p.future, Duration.Inf)
   }
 
+  "PoloniexApi accountNotificationStream" should "return account related notifications" in {
+    val p = Promise[Unit]()
+
+    poloniexApi.accountNotificationStream
+      .doOnTerminate(() => {
+        p.success(())
+      })
+      .subscribe(notification => {
+        logger.info(notification.toString)
+      }, err => {
+        err.printStackTrace()
+        logger.error(err.toString)
+        fail(err)
+      })
+
+    Await.result(p.future, Duration.Inf)
+  }
+
   "PoloniexApi returnBalances" should "return some value" in {
     val p = Promise[Unit]()
 

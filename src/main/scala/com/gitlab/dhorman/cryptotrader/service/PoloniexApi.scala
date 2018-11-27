@@ -144,21 +144,29 @@ class PoloniexApi(
     * Subscribe to ticker updates for all currency pairs.
     */
   val tickerStream: Flux[TickerData] = {
-    Flux.create(create(Command.Channel.TickerData, TickerData.map))
+    Flux.create(create(Command.Channel.TickerData))
+      .map(TickerData.map)
       .flatMapIterable(arr => arr)
       .share()
   }
 
   val _24HourExchangeVolumeStream: Flux[_24HourExchangeVolume] = {
-    Flux.create(create(Command.Channel._24HourExchangeVolume, _24HourExchangeVolume.map))
+    Flux.create(create(Command.Channel._24HourExchangeVolume))
+      .map(_24HourExchangeVolume.map)
       .filter(_.isDefined)
       .map(_.get)
       .share()
   }
 
+  val accountNotificationStream: Flux[AccountNotification] = {
+    Flux.create(create(Command.Channel.AccountNotifications, privateApi = true))
+      .map(AccountNotification.map)
+      .flatMapIterable(l => l)
+      .share()
+  }
 
   def orderBookStream(marketId: Int): Flux[PriceAggregatedBook] = {
-    Flux.create(create(marketId, json => json))
+    Flux.create(create(marketId))
       .scan(new PriceAggregatedBook(), (oBook: PriceAggregatedBook, json) => {
         val (_, currentOrderNumber, commandsJson) = json.as[(Int, Long, Json)].toOption.get
 
@@ -675,10 +683,16 @@ class PoloniexApi(
     case Right(value) => value
   }
 
-  private def create[T](channel: Command.Channel, mapper: Json => T): FluxSink[T] => Unit = (sink: FluxSink[T]) => {
+  private def create[T](channel: Command.Channel, privateApi: Boolean = false): FluxSink[Json] => Unit = (sink: FluxSink[Json]) => {
     // Subscribe to ticker stream
     websocket.take(1).subscribe(socket => {
-      val jsonStr = Command(Command.Type.Subscribe, channel).asJson.noSpaces
+      val jsonStr = if (privateApi) {
+        val payload = s"nonce=${System.currentTimeMillis()}"
+        val sign = payload.hmac(poloniexApiSecret).sha512
+        PrivateCommand(Command.Type.Subscribe, channel, poloniexApiKey, payload, sign).asJson.noSpaces
+      } else {
+        Command(Command.Type.Subscribe, channel).asJson.noSpaces
+      }
       socket.writeTextMessage(jsonStr)
       logger.info(s"Subscribe to $channel channel")
     }, err => {
@@ -688,9 +702,8 @@ class PoloniexApi(
     // Receive data
     val messagesSubscription = websocketMessages
       .filter(isEqual(_, channel))
-      .map(mapper)
-      .subscribe(tickerData => {
-        sink.next(tickerData)
+      .subscribe(json => {
+        sink.next(json)
       }, err => {
         sink.error(err)
       }, () => {
@@ -741,6 +754,14 @@ object PoloniexApi {
   }
 
   case class Command(command: Command.Type, channel: Command.Channel)
+
+  case class PrivateCommand(
+    command: Command.Type,
+    channel: Command.Channel,
+    key: String, // API key
+    payload: String, // nonce=<epoch ms>
+    sign: String,
+  )
 
   case class TickerData(
     currencyPairId: Int,
@@ -1173,6 +1194,134 @@ object PoloniexApi {
     implicit val encoder: Encoder[OpenLoanOffer] = deriveEncoder
     implicit val decoder: Decoder[OpenLoanOffer] = deriveDecoder
   }
+
+  sealed trait AccountNotification
+
+  object AccountNotification {
+    private[PoloniexApi] def map(json: Json): Seq[AccountNotification] = {
+      val respArr = json.asArray.get
+
+      if (respArr.length == 2) {
+        if (respArr(1).as[Int].toOption.get == 0) {
+          throw new Exception("Bad acknowledgement of the subscription")
+        } else {
+          Seq()
+        }
+      } else {
+        respArr(2).asArray.get.map(jsonValue => {
+          val msgType = root(0).string.getOption(jsonValue).get
+
+          val msg: Either[DecodingFailure, AccountNotification] = msgType match {
+            case "b" => jsonValue.as[BalanceUpdate]
+            case "n" => jsonValue.as[LimitOrderCreated]
+            case "o" => jsonValue.as[OrderUpdate]
+            case "t" => jsonValue.as[TradeNotification]
+            case _ => throw new Exception("Message not recognized")
+          }
+
+          msg match {
+            case Left(err) => throw err
+            case Right(value) => value
+          }
+        })
+      }
+    }
+  }
+
+  final case class BalanceUpdate(currencyId: Int, walletType: WalletType, amount: BigDecimal) extends AccountNotification
+
+  object BalanceUpdate {
+    private[PoloniexApi] type ArrayDecoder = (String, Int, WalletType, BigDecimal)
+
+    private[PoloniexApi] implicit val decoder: Decoder[BalanceUpdate] = (c: HCursor) => {
+      c.as[ArrayDecoder].map(b => BalanceUpdate(b._2, b._3, b._4))
+    }
+  }
+
+  final case class LimitOrderCreated(
+    marketId: Int,
+    orderNumber: Long,
+    orderType: OrderType,
+    rate: BigDecimal,
+    amount: BigDecimal,
+    date: LocalDateTime,
+  ) extends AccountNotification
+
+  object LimitOrderCreated {
+    private[PoloniexApi] type ArrayDecoder = (String, Int, Long, OrderType, BigDecimal, BigDecimal, LocalDateTime)
+
+    private[PoloniexApi] implicit val decoder: Decoder[LimitOrderCreated] = (c: HCursor) => {
+      c.as[ArrayDecoder].map(n => LimitOrderCreated(n._2, n._3, n._4, n._5, n._6, n._7))
+    }
+  }
+
+  final case class OrderUpdate(orderNumber: Long, newAmount: BigDecimal) extends AccountNotification
+
+  object OrderUpdate {
+    private[PoloniexApi] type ArrayDecoder = (String, Long, BigDecimal)
+
+    private[PoloniexApi] implicit val decoder: Decoder[OrderUpdate] = (c: HCursor) => {
+      c.as[ArrayDecoder].map(o => OrderUpdate(o._2, o._3))
+    }
+  }
+
+  final case class TradeNotification(
+    tradeId: Long,
+    rate: BigDecimal,
+    amount: BigDecimal,
+    feeMultiplier: BigDecimal,
+    fundingType: FundingType,
+    orderNumber: Long,
+  ) extends AccountNotification
+
+  object TradeNotification {
+    private[PoloniexApi] type ArrayDecoder = (String, Long, BigDecimal, BigDecimal, BigDecimal, FundingType, Long)
+
+    private[PoloniexApi] implicit val decoder: Decoder[TradeNotification] = (c: HCursor) => {
+      c.as[ArrayDecoder].map(o => TradeNotification(o._2, o._3, o._4, o._5, o._6, o._7))
+    }
+  }
+
+  type WalletType = WalletType.Value
+  object WalletType extends Enumeration {
+    val Exchange: WalletType = Value
+    val Margin: WalletType = Value
+    val Lending: WalletType = Value
+
+    private[PoloniexApi] implicit val decoder: Decoder[WalletType] = Decoder.decodeString.emap {
+      case "e" => Right(WalletType.Exchange)
+      case "m" => Right(WalletType.Margin)
+      case "l" => Right(WalletType.Lending)
+      case _ => Left("Not recognized wallet type. New wallet added ?")
+    }
+  }
+
+  type OrderType = OrderType.Value
+  object OrderType extends Enumeration {
+    val Sell: OrderType = Value
+    val Buy: OrderType = Value
+
+    private[PoloniexApi] implicit val decoder: Decoder[OrderType] = Decoder.decodeInt.map {
+      case 0 => OrderType.Sell
+      case 1 => OrderType.Buy
+    }
+  }
+
+  type FundingType = FundingType.Value
+  object FundingType extends Enumeration {
+    val ExchangeWallet: FundingType = Value
+    val BorrowedFunds: FundingType = Value
+    val MarginFunds: FundingType = Value
+    val LendingFunds: FundingType = Value
+
+    private[PoloniexApi] implicit val decoder: Decoder[FundingType] = Decoder.decodeInt.map {
+      case 0 => FundingType.ExchangeWallet
+      case 1 => FundingType.BorrowedFunds
+      case 2 => FundingType.MarginFunds
+      case 3 => FundingType.LendingFunds
+    }
+  }
+
 
   object ErrorMsgPattern {
     val IncorrectNonceMsg: Regex = """Nonce must be greater than (\d+)\. You provided (\d+)\.""".r
