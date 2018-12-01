@@ -14,7 +14,6 @@ import com.softwaremill.tagging._
 import com.typesafe.scalalogging.Logger
 import io.circe._
 import io.circe.generic.auto._
-import io.circe.generic.extras._
 import io.circe.generic.semiauto._
 import io.circe.optics.JsonPath._
 import io.circe.parser.parse
@@ -340,10 +339,10 @@ class PoloniexApi(
       .map(jsonToObject[List[OpenOrder]])
   }
 
-  def allOpenOrders(): Mono[Map[Market, List[OpenOrder]]] = {
+  def allOpenOrders(): Mono[Map[Market, Set[OpenOrder]]] = {
     val command = "returnOpenOrders"
     val params = Map("currencyPair" -> "all")
-    val jsonToObjectMapper = jsonToObject[Map[Market, List[OpenOrder]]]
+    val jsonToObjectMapper = jsonToObject[Map[Market, Set[OpenOrder]]]
     callPrivateApi(command, params).map(jsonToObjectMapper)
   }
 
@@ -653,7 +652,11 @@ class PoloniexApi(
     resp
       .map(bodyToJson)
       .map(handleErrorResp)
-      // TODO: Retry when nonce or api limit error
+      .retryWhen(errors => errors.flatMap[Int]((error: Throwable) => error match {
+        case _: IncorrectNonceException => Flux.just(1).delaySubscription(Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)))
+        case _: ApiCallLimitException => Flux.just(1).delaySubscription(Mono.defer(() => Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)).delaySubscription(1.second)))
+        case _ => Flux.error(error)
+      }))
       .delaySubscription(Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)))
   }
 
@@ -868,15 +871,20 @@ object PoloniexApi {
   case class CompleteBalance(available: BigDecimal, onOrders: BigDecimal, btcValue: BigDecimal)
 
   case class OpenOrder(
-    orderNumber: String,
-    `type`: OrderType,
+    id: Long,
+    tpe: OrderType,
     rate: BigDecimal,
     amount: BigDecimal,
     total: BigDecimal,
-  )
+  ) {
+    override def equals(o: Any): Boolean = o match {
+      case order: OpenOrder => order.id == this.id
+      case _ => false
+    }
+  }
 
   object OpenOrder {
-    implicit val decoder: Decoder[OpenOrder] = deriveDecoder
+    implicit val decoder: Decoder[OpenOrder] = Decoder.forProduct5("orderNumber", "type", "rate", "amount", "total")(OpenOrder.apply)
   }
 
   case class TradeHistory(
@@ -903,7 +911,7 @@ object PoloniexApi {
   )
 
   case class CurrencyDetails(
-    id: Long,
+    id: Int,
     name: String,
     txFee: BigDecimal,
     minConf: BigDecimal,
@@ -952,7 +960,7 @@ object PoloniexApi {
     confirmations: Int,
     txid: String,
     timestamp: Long,
-    status: String, // TODO: COMPLETE
+    status: String,
   )
 
   object DepositDetails {
@@ -980,7 +988,7 @@ object PoloniexApi {
     fee: BigDecimal,
     orderNumber: BigDecimal,
     `type`: OrderType,
-    category: String, // TODO: settlement
+    category: String, // TODO: {exchange, settlement, marginTrade}
   )
 
   object TradeHistoryPrivate {
@@ -1024,16 +1032,16 @@ object PoloniexApi {
   )
 
   case class BuyResultingTrade(
+    tradeId: BigDecimal,
+    tpe: OrderType,
+    rate: BigDecimal,
     amount: BigDecimal,
     date: LocalDateTime,
-    rate: BigDecimal,
     total: BigDecimal,
-    @JsonKey("tradeID") tradeId: BigDecimal,
-    `type`: OrderType,
   )
 
   object BuyResultingTrade {
-    implicit val decoder: Decoder[BuyResultingTrade] = deriveDecoder
+    implicit val decoder: Decoder[BuyResultingTrade] = Decoder.forProduct6("tradeID", "type", "rate", "amount", "date", "total")(BuyResultingTrade.apply)
   }
 
   // TODO: Use enum
@@ -1114,8 +1122,12 @@ object PoloniexApi {
   case class CreateLoanOffer(
     success: Boolean,
     message: String,
-    @JsonKey("orderID") orderId: BigDecimal,
+    orderId: BigDecimal,
   )
+
+  object CreateLoanOffer {
+    implicit val decoder: Decoder[CreateLoanOffer] = Decoder.forProduct3("success", "message", "orderID")(CreateLoanOffer.apply)
+  }
 
   case class CancelLoanOffer(
     success: Boolean,
@@ -1123,7 +1135,7 @@ object PoloniexApi {
   )
 
   case class ToggleAutoRenew(
-    success: Int,
+    success: Boolean,
     message: String,
   )
 
@@ -1240,7 +1252,10 @@ object PoloniexApi {
     }
   }
 
-  final case class OrderUpdate(orderNumber: Long, newAmount: BigDecimal) extends AccountNotification
+  final case class OrderUpdate(
+    orderId: Long,
+    newAmount: BigDecimal
+  ) extends AccountNotification
 
   object OrderUpdate {
     private[PoloniexApi] type ArrayDecoder = (String, Long, BigDecimal)
@@ -1256,7 +1271,7 @@ object PoloniexApi {
     amount: BigDecimal,
     feeMultiplier: BigDecimal,
     fundingType: FundingType,
-    orderNumber: Long,
+    orderId: Long,
   ) extends AccountNotification
 
   object TradeNotification {
