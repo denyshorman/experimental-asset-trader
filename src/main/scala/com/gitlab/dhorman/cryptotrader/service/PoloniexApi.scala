@@ -142,9 +142,9 @@ class PoloniexApi(
   /**
     * Subscribe to ticker updates for all currency pairs.
     */
-  val tickerStream: Flux[TickerData] = {
+  val tickerStream: Flux[Ticker] = {
     Flux.create(create(Command.Channel.TickerData))
-      .map(_.as[Seq[TickerData]] match {
+      .map(_.as[Seq[Ticker]] match {
         case Right(value) => value
         case Left(err) => throw new Exception(err)
       })
@@ -741,7 +741,7 @@ object PoloniexApi {
   type Currency = String // BTC
 
   case class Ticker(
-    id: Long,
+    id: Int,
     last: BigDecimal,
     lowestAsk: BigDecimal,
     highestBid: BigDecimal,
@@ -754,8 +754,13 @@ object PoloniexApi {
   )
 
   object Ticker {
-    implicit val encoder: Encoder[Ticker] = deriveEncoder
-    implicit val decoder: Decoder[Ticker] = deriveDecoder
+    private[PoloniexApi] implicit val tickerDecoder: Decoder[Ticker] = deriveDecoder
+
+    private[PoloniexApi] type TickerDataTuple = (Int, BigDecimal, BigDecimal, BigDecimal, BigDecimal, BigDecimal, BigDecimal, Boolean, BigDecimal, BigDecimal)
+
+    private[PoloniexApi] implicit val seqTickerDecoder: Decoder[Seq[Ticker]] = Decoder.decodeJson.emap[Seq[Ticker]](arr0 => {
+      Either.fromOption(arr0.asArray, "Not an array").map(_.view.drop(2).map(_.as[TickerDataTuple].map((Ticker.apply _).tupled(_)).leftMap(_.getMessage))).flatMap(_.foldRight(Right(Nil): Either[String, List[Ticker]])((elem, acc) => acc.right.flatMap(l => elem.right.map(_ :: l))))
+    })
   }
 
   case class Command(command: Command.Type, channel: Command.Channel)
@@ -784,29 +789,6 @@ object PoloniexApi {
     payload: String, // nonce=<epoch ms>
     sign: String,
   )
-
-  case class TickerData(
-    currencyPairId: Int,
-    lastTradePrice: BigDecimal,
-    lowestAsk: BigDecimal,
-    highestBid: BigDecimal,
-    percentChangeInLast24Hours: BigDecimal,
-    baseCurrencyVolumeInLast24Hours: BigDecimal,
-    quoteCurrencyVolumeInLast24Hours: BigDecimal,
-    isFrozen: Boolean,
-    highestTradePriceInLast24Hours: BigDecimal,
-    lowestTradePriceInLast24Hours: BigDecimal,
-  )
-
-  object TickerData {
-    private type TickerDataTuple = (Int, BigDecimal, BigDecimal, BigDecimal, BigDecimal, BigDecimal, BigDecimal, Boolean, BigDecimal, BigDecimal)
-
-    private[PoloniexApi] implicit val decoder: Decoder[Seq[TickerData]] = Decoder.decodeJson.emap[Seq[TickerData]](arr0 => {
-      Either.fromOption(arr0.asArray, "Not an array")
-        .map(_.view.drop(2).map(_.as[TickerDataTuple].map((TickerData.apply _).tupled(_)).leftMap(_.getMessage)))
-        .flatMap(_.foldRight(Right(Nil): Either[String, List[TickerData]])((elem, acc) => acc.right.flatMap(l => elem.right.map(_ :: l))))
-    })
-  }
 
   case class _24HourExchangeVolume(
     time: LocalDateTime,
@@ -853,7 +835,6 @@ object PoloniexApi {
   )
 
   object OrderBook {
-    implicit val encoder: Encoder[OrderBook] = deriveEncoder
     implicit val decoder: Decoder[OrderBook] = deriveDecoder
   }
 
@@ -1355,8 +1336,14 @@ object PoloniexApi {
         Right(json.asNumber.get.toInt.get == 1)
       } else if (json.isBoolean) {
         Right(json.asBoolean.get)
+      } else if (json.isString) {
+        json.asString.get match {
+          case "0" | "false" => Right(false)
+          case "1" | "true" => Right(true)
+          case s => Left(s"Can't parse boolean: can't decode provided string $s")
+        }
       } else {
-        Left("Can't parse boolean")
+        Left(s"Can't parse boolean from ${json.toString}")
       }
     })
 
