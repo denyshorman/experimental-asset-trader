@@ -27,6 +27,7 @@ lazy val `crypto-trader` = (project in file("."))
       "io.vertx" %% "vertx-lang-scala" % vertxVersion,
       "io.vertx" %% "vertx-web-scala" % vertxVersion,
       "io.vertx" %% "vertx-web-client-scala" % vertxVersion,
+      "io.vertx" %% "vertx-bridge-common-scala" % vertxVersion,
       "io.vertx" %% "vertx-auth-jwt-scala" % vertxVersion,
       "io.vertx" %% "vertx-mysql-postgresql-client-scala" % vertxVersion,
       "io.vertx" %% "vertx-jdbc-client-scala" % vertxVersion,
