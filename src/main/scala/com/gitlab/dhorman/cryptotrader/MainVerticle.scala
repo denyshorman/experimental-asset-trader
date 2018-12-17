@@ -18,7 +18,6 @@ import scala.concurrent.duration._
 class MainVerticle extends ScalaVerticle {
   private val logger = Logger[MainVerticle]
   private var trader: Trader = _
-  private var module: MainModule = _
 
   private def initInternal(): Unit = {
     val main = this
@@ -30,10 +29,14 @@ class MainVerticle extends ScalaVerticle {
     import module._
 
     trader = new Trader(module.poloniexApi)
+    httpServer.hashCode() // init http server hack
+    // TODO: init internal components step by step
 
-    this.module = module
+    // demo values event
+    Flux.interval(1.second, module.vertxScheduler).subscribe(v => {
+      main.vertx.eventBus().publish("values", new JsonObject().put("value", v))
+    })
   }
-
 
   override def init(vertx: core.Vertx, context: Context, verticle: AbstractVerticle): Unit = {
     super.init(vertx, context, verticle)
@@ -43,32 +46,6 @@ class MainVerticle extends ScalaVerticle {
   override def start(): Unit = {
     logger.info("Start MainVerticle")
     trader.start()
-
-    Flux.interval(1.second, module.vertxScheduler).subscribe(v => {
-      vertx.eventBus().publish("values", new JsonObject().put("value", v))
-    })
-
-    val server = vertx.createHttpServer()
-    val router = Router.router(vertx)
-
-    router.route("/api/*")
-      .handler(LoggerHandler.create())
-      .handler(ResponseContentTypeHandler.create())
-      .failureHandler(ErrorHandler.create())
-
-    val options = BridgeOptions()
-      .addOutboundPermitted(PermittedOptions()
-        .setAddress("values"))
-
-    val sockJSHandler = SockJSHandler.create(vertx).bridge(options)
-
-    router.route("/eventbus/*").handler(sockJSHandler)
-
-    router.get("/api/values").handler(rc => {
-      rc.response().end("""{"resp":"hello"}""")
-    })
-
-    server.requestHandler(router).listen(8080)
   }
 
   override def stop(): Unit = {
