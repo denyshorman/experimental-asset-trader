@@ -7,17 +7,15 @@ import io.vertx.core.json.JsonObject
 import io.vertx.core.{AbstractVerticle, Context}
 import io.vertx.lang.scala.ScalaVerticle
 import io.vertx.scala.core.Vertx
-import io.vertx.scala.ext.web.Router
-import io.vertx.scala.ext.web.handler.sockjs.{BridgeOptions, SockJSHandler}
-import io.vertx.scala.ext.web.handler.{ErrorHandler, LoggerHandler, ResponseContentTypeHandler}
 import reactor.core.scala.publisher.Flux
-import io.vertx.scala.ext.bridge.PermittedOptions
+import reactor.core.Disposable
 
 import scala.concurrent.duration._
 
 class MainVerticle extends ScalaVerticle {
   private val logger = Logger[MainVerticle]
   private var trader: Trader = _
+  private var traderDisposable: Disposable = _
 
   private def initInternal(): Unit = {
     val main = this
@@ -45,11 +43,11 @@ class MainVerticle extends ScalaVerticle {
 
   override def start(): Unit = {
     logger.info("Start MainVerticle")
-    trader.start()
+    traderDisposable = trader.start().subscribe()
   }
 
   override def stop(): Unit = {
     logger.info("Stop MainVerticle")
-    trader.stop()
+    traderDisposable.dispose()
   }
 }
