@@ -225,12 +225,20 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
   def start(): Flux[Unit] = {
     Flux.create((sink: FluxSink[Unit]) => {
-      val currencies = data.currencies.subscribe(currencies => {}, error => {})
-      val balances = data.balances.subscribe(balances => {}, error => {})
-      val markets = data.markets.subscribe(markets => {}, error => {})
-      val openOrders = data.openOrders.subscribe(orders => {}, error => {})
-      val tickers = data.tickers.subscribe(tickers => {}, error => {})
-      val orderBooks = data.orderBooks.subscribe(tickers => {}, error => {})
+      def defaultErrorHandler(error: Throwable): Unit = {
+        error.printStackTrace()
+      }
+
+      def defaultCompleted(): Unit = {
+        logger.debug("completed")
+      }
+
+      val currencies = data.currencies.subscribe(currencies => {}, defaultErrorHandler, defaultCompleted)
+      val balances = data.balances.subscribe(balances => {}, defaultErrorHandler, defaultCompleted)
+      val markets = data.markets.subscribe(markets => {}, defaultErrorHandler, defaultCompleted)
+      val openOrders = data.openOrders.subscribe(orders => {}, defaultErrorHandler, defaultCompleted)
+      val tickers = data.tickers.subscribe(tickers => {}, defaultErrorHandler, defaultCompleted)
+      val orderBooks = data.orderBooks.subscribe(tickers => {}, defaultErrorHandler, defaultCompleted)
 
       val disposable = new Disposable {
         override def dispose(): Unit = {

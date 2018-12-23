@@ -54,6 +54,8 @@ class PoloniexApi(
 
   private val httpOptions = {
     val options = WebClientOptions()
+      .setMaxWebsocketFrameSize(65536*4)
+      .setMaxWebsocketMessageSize(65536*16)
       .setUserAgentEnabled(false)
       .setKeepAlive(true)
       .setSsl(true)
@@ -129,6 +131,13 @@ class PoloniexApi(
     websocket
       .flatMap(webSocket => Flux.from(webSocket.toFlowable))
       .map(_.toString)
+      .doOnNext(str => {
+        logger.whenDebugEnabled {
+          val len = str.length
+          val s = str.substring(0, if (len >= 60) 59 else len)
+          logger.debug(s)
+        }
+      })
       .map(parse)
       .flatMap {
         case Left(failure) =>
@@ -172,10 +181,10 @@ class PoloniexApi(
       val (stamp, _) = state
       val (_, currentOrderNumber, commandsJson) = json.as[(Int, Long, Json)].toOption.get
 
-      val newStamp = if (stamp.isDefined && stamp.get + 1 == currentOrderNumber) {
-        Some(currentOrderNumber)
-      } else {
+      val newStamp = if (stamp.isDefined && stamp.get + 1 != currentOrderNumber) {
         throw new Exception("Order book broken")
+      } else {
+        Some(currentOrderNumber)
       }
 
       val notifications = commandsJson.asArray.get.map(json => root(0).string.getOption(json).get match {
@@ -186,7 +195,7 @@ class PoloniexApi(
       })
 
       (newStamp, notifications)
-    }).flatMapIterable(_._2)
+    }).skip(1).flatMapIterable(_._2)
 
     notifications.scan((new PriceAggregatedBook(), null), (state: (PriceAggregatedBook, OrderBookNotification), notification) => {
       val (oBook, _) = state
