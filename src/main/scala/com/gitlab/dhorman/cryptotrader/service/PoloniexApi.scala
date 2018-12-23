@@ -6,7 +6,7 @@ import java.time.format.DateTimeFormatter
 import cats.syntax.either._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.Codecs._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.ErrorMsgPattern._
-import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{OrderType, _}
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.exception._
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.roundeights.hasher.Implicits._
@@ -167,54 +167,53 @@ class PoloniexApi(
       .share()
   }
 
-  def orderBookStream(marketId: Int): Flux[PriceAggregatedBook] = {
-    Flux.create(create(marketId))
-      .scan(new PriceAggregatedBook(), (oBook: PriceAggregatedBook, json) => {
-        val (_, currentOrderNumber, commandsJson) = json.as[(Int, Long, Json)].toOption.get
+  def orderBookStream(marketId: Int): Flux[(PriceAggregatedBook, OrderBookNotification)] = {
+    val notifications: Flux[OrderBookNotification] = Flux.create(create(marketId)).scan((None, Seq()), (state: (Option[Long], Seq[OrderBookNotification]), json) => {
+      val (stamp, _) = state
+      val (_, currentOrderNumber, commandsJson) = json.as[(Int, Long, Json)].toOption.get
 
-        if (oBook.stamp.isDefined && oBook.stamp.get + 1 != currentOrderNumber) {
-          throw new Exception("Order book broken")
-        } else {
-          oBook.stamp = Some(currentOrderNumber)
-        }
+      val newStamp = if (stamp.isDefined && stamp.get + 1 == currentOrderNumber) {
+        Some(currentOrderNumber)
+      } else {
+        throw new Exception("Order book broken")
+      }
 
-        commandsJson.asArray.get.foreach(json => {
-          val msgType = root(0).string.getOption(json).get
-
-          msgType match {
-            case "i" =>
-              // initial book snapshot
-
-              val (asks, bids) = root(1).orderBook.as[(Map[BigDecimal, BigDecimal], Map[BigDecimal, BigDecimal])].getOption(json).get
-
-              oBook.init(asks, bids)
-            case "o" =>
-              // book modifications
-              val (_, buySell, price, quantity) = json.as[(String, Int, BigDecimal, BigDecimal)].toOption.get
-
-              val book = buySell match {
-                case 0 => oBook.asks
-                case 1 => oBook.bids
-                case _ => throw new Exception("Can't decode book type")
-              }
-
-              if (quantity == 0) {
-                book.remove(price)
-              } else {
-                book.update(price, quantity)
-              }
-            case "t" =>
-              // trades
-
-              // Ignore trades
-
-              // val (_, tradeId, buySell, price, quantity, timestamp) = json.as[(String, BigDecimal, Int, BigDecimal, BigDecimal, Long)].toOption.get
-          }
-        })
-
-        oBook
+      val notifications = commandsJson.asArray.get.map(json => root(0).string.getOption(json).get match {
+        case "i" => root(1).orderBook.as[OrderBookInit].getOption(json).get // // initial book snapshot
+        case "o" => json.as[OrderBookModification].toOption.get // book modifications
+        case "t" => json.as[OrderBookTrade].toOption.get // trades
+        case _ => throw new Exception("Message type not recognized")
       })
-      .share()
+
+      (newStamp, notifications)
+    }).flatMapIterable(_._2)
+
+    notifications.scan((new PriceAggregatedBook(), null), (state: (PriceAggregatedBook, OrderBookNotification), notification) => {
+      val (oBook, _) = state
+
+      val newState: (PriceAggregatedBook, OrderBookNotification) = notification match {
+        case orderBookInit: OrderBookInit =>
+          oBook.init(orderBookInit.asks, orderBookInit.bids)
+          (oBook, orderBookInit)
+        case orderBookModification: OrderBookModification =>
+          val book = orderBookModification.orderType match {
+            case OrderType.Sell => oBook.asks
+            case OrderType.Buy => oBook.bids
+          }
+
+          if (orderBookModification.quantity == 0) {
+            book.remove(orderBookModification.price)
+          } else {
+            book.update(orderBookModification.price, orderBookModification.quantity)
+          }
+
+          (oBook, orderBookModification)
+        case orderBookTrade: OrderBookTrade =>
+          (oBook, orderBookTrade)
+      }
+
+      newState
+    }).skip(1)
   }
 
   /**
@@ -846,6 +845,48 @@ object PoloniexApi {
     def init(_asks: Map[BigDecimal, BigDecimal], _bids: Map[BigDecimal, BigDecimal]): Unit = {
       _asks.foreach(ask => asks += ask)
       _bids.foreach(bid => bids += bid)
+    }
+  }
+
+  sealed trait OrderBookNotification
+
+  case class OrderBookInit(asks: Map[BigDecimal, BigDecimal], bids: Map[BigDecimal, BigDecimal]) extends OrderBookNotification
+
+  object OrderBookInit {
+    private[PoloniexApi] type ArrayDecoder = (Map[BigDecimal, BigDecimal], Map[BigDecimal, BigDecimal])
+
+    private[PoloniexApi] implicit val decoder: Decoder[OrderBookInit] = (c: HCursor) => {
+      c.as[ArrayDecoder].map(b => OrderBookInit(b._1, b._2))
+    }
+  }
+
+  case class OrderBookModification(
+    orderType: OrderType,
+    price: BigDecimal,
+    quantity: BigDecimal,
+  ) extends OrderBookNotification
+
+  object OrderBookModification {
+    private[PoloniexApi] type ArrayDecoder = (String, OrderType, BigDecimal, BigDecimal)
+
+    private[PoloniexApi] implicit val decoder: Decoder[OrderBookModification] = (c: HCursor) => {
+      c.as[ArrayDecoder].map(b => OrderBookModification(b._2, b._3, b._4))
+    }
+  }
+
+  case class OrderBookTrade(
+    tradeId: BigDecimal,
+    orderType: OrderType,
+    price: BigDecimal,
+    quantity: BigDecimal,
+    timestamp: Long,
+  ) extends OrderBookNotification
+
+  object OrderBookTrade {
+    private[PoloniexApi] type ArrayDecoder = (String, BigDecimal, OrderType, BigDecimal, BigDecimal, Long)
+
+    private[PoloniexApi] implicit val decoder: Decoder[OrderBookTrade] = (c: HCursor) => {
+      c.as[ArrayDecoder].map(b => OrderBookTrade(b._2, b._3, b._4, b._5, b._6))
     }
   }
 
