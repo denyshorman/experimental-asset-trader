@@ -27,7 +27,7 @@ import io.vertx.scala.core.net.ProxyOptions
 import io.vertx.scala.core.{MultiMap => MultiMapScala, Vertx => VertxScala}
 import io.vertx.scala.ext.web.client.{HttpResponse, WebClient, WebClientOptions}
 import reactor.core.publisher.FluxSink
-import reactor.core.scala.publisher.{Flux, Mono}
+import reactor.core.scala.publisher.{Flux, GroupedFlux, Mono}
 
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
@@ -214,6 +214,11 @@ class PoloniexApi(
 
       newState
     }).skip(1)
+  }
+
+  def orderBooksStream(marketIds: Int*): Flux[GroupedFlux[Int, (PriceAggregatedBook, OrderBookNotification)]] = {
+    val orderBooks = marketIds.map(marketId => orderBookStream(marketId).map(orderBook => (marketId, orderBook)))
+    Flux.merge(orderBooks).groupBy(_._1, _._2)
   }
 
   /**

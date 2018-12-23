@@ -5,7 +5,7 @@ import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
 import com.typesafe.scalalogging.Logger
 import reactor.core.Disposable
 import reactor.core.publisher.{FluxSink, ReplayProcessor}
-import reactor.core.scala.publisher.{Flux, FluxProcessor}
+import reactor.core.scala.publisher.{Flux, FluxProcessor, GroupedFlux}
 import reactor.core.scheduler.Scheduler
 
 import scala.collection.mutable
@@ -217,6 +217,10 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
       tickersUpdate.replay(1).refCount()
     }
+
+    val orderBooks: Flux[GroupedFlux[Int, (PriceAggregatedBook, OrderBookNotification)]] = {
+      markets.map(_._1.keys.toArray).flatMap(marketIds => poloniexApi.orderBooksStream(marketIds: _*))
+    }
   }
 
   def start(): Flux[Unit] = {
@@ -226,6 +230,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
       val markets = data.markets.subscribe(markets => {}, error => {})
       val openOrders = data.openOrders.subscribe(orders => {}, error => {})
       val tickers = data.tickers.subscribe(tickers => {}, error => {})
+      val orderBooks = data.orderBooks.subscribe(tickers => {}, error => {})
 
       val disposable = new Disposable {
         override def dispose(): Unit = {
@@ -234,6 +239,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
           markets.dispose()
           openOrders.dispose()
           tickers.dispose()
+          orderBooks.dispose()
         }
       }
 
