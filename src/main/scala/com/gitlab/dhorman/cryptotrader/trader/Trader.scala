@@ -92,7 +92,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
     }
 
     val balances: Flux[mutable.Map[Currency, BigDecimal]] = {
-      val balancesStream = raw.balances.map(b => mutable.Map(b.toSeq: _*))
+      val balancesStream = raw.balances.map(b => mutable.Map(b.toSeq: _*)).replay(1).refCount()
       val balanceChangesStream = raw.accountNotifications.filter(_.isInstanceOf[BalanceUpdate]).map(_.asInstanceOf[BalanceUpdate])
 
       val updatedBalance = balanceChangesStream.withLatestFrom(balancesStream, (n, b: mutable.Map[Currency, BigDecimal]) => (n, b)).concatMap { case (balanceUpdate, allBalances) => currencies.take(1).map(curr => {
@@ -117,7 +117,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
         allBalances
       })}
 
-      updatedBalance.replay(1).refCount()
+      Flux.merge(balancesStream, updatedBalance).replay(1).refCount()
     }
 
     val markets: Flux[MarketData] = {
@@ -142,7 +142,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
     val openOrders: Flux[mutable.Set[Trader.OpenOrder]] = {
       val initialOrdersStream: Flux[mutable.Set[Trader.OpenOrder]] = raw.openOrders.map(orders => {
         orders.flatMap(kv => kv._2.view.map(o => new Trader.OpenOrder(o.id, o.tpe, kv._1, o.rate, o.amount))).to[mutable.Set]
-      })
+      }).replay(1).refCount()
 
       val limitOrderCreatedStream = poloniexApi.accountNotificationStream.filter(_.isInstanceOf[LimitOrderCreated]).map(_.asInstanceOf[LimitOrderCreated])
       val orderUpdateStream = poloniexApi.accountNotificationStream.filter(_.isInstanceOf[OrderUpdate]).map(_.asInstanceOf[OrderUpdate])
@@ -195,7 +195,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
     }
 
     val tickers: Flux[mutable.Map[Market, Ticker]] = {
-      val allTickersStream = raw.ticker.map(allTickers => mutable.Map(allTickers.toSeq: _*))
+      val allTickersStream = raw.ticker.map(allTickers => mutable.Map(allTickers.toSeq: _*)).replay(1).refCount()
 
       val tickersUpdate = raw.tickerStream.withLatestFrom(allTickersStream, (ticker, allTickers: mutable.Map[Market, Ticker]) => {
         markets.take(1).map(market => {
@@ -215,7 +215,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
         })
       }).concatMap(o => o)
 
-      tickersUpdate.replay(1).refCount()
+      Flux.merge(allTickersStream, tickersUpdate).replay(1).refCount()
     }
 
     val orderBooks: Flux[GroupedFlux[Int, (PriceAggregatedBook, OrderBookNotification)]] = {
