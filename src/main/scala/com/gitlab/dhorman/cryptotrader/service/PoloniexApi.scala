@@ -27,6 +27,7 @@ import io.vertx.scala.core.net.ProxyOptions
 import io.vertx.scala.core.{MultiMap => MultiMapScala, Vertx => VertxScala}
 import io.vertx.scala.ext.web.client.{HttpResponse, WebClient, WebClientOptions}
 import reactor.core.publisher.FluxSink
+import reactor.core.publisher.FluxSink.OverflowStrategy
 import reactor.core.scala.publisher.{Flux, GroupedFlux, Mono}
 
 import scala.collection.mutable
@@ -99,8 +100,6 @@ class PoloniexApi(
       .subscribe((socket: WebSocket) => {
         logger.info("WebSocket connection established")
 
-        sink.next(socket)
-
         socket.closeHandler(_ => {
           logger.info("WebSocket connection closed")
           sink.complete()
@@ -119,9 +118,11 @@ class PoloniexApi(
         sink.onDispose(() => {
           socket.close()
         })
+
+        sink.next(socket)
       }, err => {
         sink.error(err)
-      })
+      }), OverflowStrategy.LATEST
     )
       .replay(1)
       .refCount()
@@ -129,7 +130,7 @@ class PoloniexApi(
 
   private val websocketMessages = {
     websocket
-      .flatMap(webSocket => Flux.from(webSocket.toFlowable))
+      .concatMap(webSocket => Flux.from(webSocket.toFlowable))
       .map(_.toString)
       .doOnNext(str => {
         logger.whenDebugEnabled {
@@ -139,7 +140,7 @@ class PoloniexApi(
         }
       })
       .map(parse)
-      .flatMap {
+      .concatMap {
         case Left(failure) =>
           logger.error(s"Can't parse received json: $failure")
           Flux.empty[Json]
@@ -152,7 +153,7 @@ class PoloniexApi(
     * Subscribe to ticker updates for all currency pairs.
     */
   val tickerStream: Flux[Ticker] = {
-    Flux.create(create(Command.Channel.TickerData))
+    Flux.create(create(Command.Channel.TickerData), OverflowStrategy.LATEST)
       .map(_.as[Seq[Ticker]] match {
         case Right(value) => value
         case Left(err) => throw new Exception(err)
@@ -162,7 +163,7 @@ class PoloniexApi(
   }
 
   val _24HourExchangeVolumeStream: Flux[_24HourExchangeVolume] = {
-    Flux.create(create(Command.Channel._24HourExchangeVolume))
+    Flux.create(create(Command.Channel._24HourExchangeVolume), OverflowStrategy.LATEST)
       .map(_24HourExchangeVolume.map)
       .filter(_.isDefined)
       .map(_.get)
@@ -170,14 +171,14 @@ class PoloniexApi(
   }
 
   val accountNotificationStream: Flux[AccountNotification] = {
-    Flux.create(create(Command.Channel.AccountNotifications, privateApi = true))
+    Flux.create(create(Command.Channel.AccountNotifications, privateApi = true), OverflowStrategy.BUFFER)
       .map(AccountNotification.map)
       .flatMapIterable(l => l)
       .share()
   }
 
   def orderBookStream(marketId: Int): Flux[(PriceAggregatedBook, OrderBookNotification)] = {
-    val notifications: Flux[OrderBookNotification] = Flux.create(create(marketId)).scan((None, Seq()), (state: (Option[Long], Seq[OrderBookNotification]), json) => {
+    val notifications: Flux[OrderBookNotification] = Flux.create(create(marketId), OverflowStrategy.BUFFER).scan((None, Seq()), (state: (Option[Long], Seq[OrderBookNotification]), json) => {
       val (stamp, _) = state
       val (_, currentOrderNumber, commandsJson) = json.as[(Int, Long, Json)].toOption.get
 
@@ -665,7 +666,7 @@ class PoloniexApi(
     resp
       .map(bodyToJson)
       .map(handleErrorResp)
-      .retryWhen(errors => errors.flatMap[Int]((error: Throwable) => error match {
+      .retryWhen(errors => errors.concatMap[Int]((error: Throwable) => error match {
         case _: IncorrectNonceException => Flux.just(1).delaySubscription(Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)))
         case _: ApiCallLimitException => Flux.just(1).delaySubscription(Mono.defer(() => Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)).delaySubscription(1.second)))
         case _ => Flux.error(error)

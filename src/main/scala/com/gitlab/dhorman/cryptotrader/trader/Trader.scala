@@ -29,7 +29,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
   private object raw {
     private def wrap[T](triggerStream: trigger.Trigger, stream: Flux[T]): Flux[T] = {
-      triggerStream.startWith(()).flatMap(_ => stream).replay(1).refCount()
+      triggerStream.startWith(()).flatMap(_ => stream.take(1)).replay(1).refCount()
     }
 
     val currencies: Flux[Map[Currency, CurrencyDetails]] = {
@@ -95,7 +95,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
       val balancesStream = raw.balances.map(b => mutable.Map(b.toSeq: _*))
       val balanceChangesStream = raw.accountNotifications.filter(_.isInstanceOf[BalanceUpdate]).map(_.asInstanceOf[BalanceUpdate])
 
-      val updatedBalance = balanceChangesStream.withLatestFrom(balancesStream, (n, b: mutable.Map[Currency, BigDecimal]) => (n, b)).flatMap { case (balanceUpdate, allBalances) => currencies.map(curr => {
+      val updatedBalance = balanceChangesStream.withLatestFrom(balancesStream, (n, b: mutable.Map[Currency, BigDecimal]) => (n, b)).concatMap { case (balanceUpdate, allBalances) => currencies.take(1).map(curr => {
         logger.info(s"Account info: $balanceUpdate")
 
         if (balanceUpdate.walletType == WalletType.Exchange) {
@@ -115,8 +115,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
         }
 
         allBalances
-      })
-      }
+      })}
 
       updatedBalance.replay(1).refCount()
     }
@@ -144,13 +143,14 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
       val initialOrdersStream: Flux[mutable.Set[Trader.OpenOrder]] = raw.openOrders.map(orders => {
         orders.flatMap(kv => kv._2.view.map(o => new Trader.OpenOrder(o.id, o.tpe, kv._1, o.rate, o.amount))).to[mutable.Set]
       })
+
       val limitOrderCreatedStream = poloniexApi.accountNotificationStream.filter(_.isInstanceOf[LimitOrderCreated]).map(_.asInstanceOf[LimitOrderCreated])
       val orderUpdateStream = poloniexApi.accountNotificationStream.filter(_.isInstanceOf[OrderUpdate]).map(_.asInstanceOf[OrderUpdate])
 
       val ordersLimitOrderUpdate = limitOrderCreatedStream.withLatestFrom(initialOrdersStream, (limitOrderCreated, orders: mutable.Set[Trader.OpenOrder]) => {
         logger.info(s"Account info: $limitOrderCreated")
 
-        markets.map(market => {
+        markets.take(1).map(market => {
           val marketId = market._1.get(limitOrderCreated.marketId)
 
           if (marketId.isDefined) {
@@ -170,7 +170,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
           orders
         })
-      }).flatMap(o => o)
+      }).concatMap(o => o)
 
       val ordersUpdate = orderUpdateStream.withLatestFrom(initialOrdersStream, (orderUpdate, orders: mutable.Set[Trader.OpenOrder]) => {
         logger.info(s"Account info: $orderUpdate")
@@ -198,7 +198,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
       val allTickersStream = raw.ticker.map(allTickers => mutable.Map(allTickers.toSeq: _*))
 
       val tickersUpdate = raw.tickerStream.withLatestFrom(allTickersStream, (ticker, allTickers: mutable.Map[Market, Ticker]) => {
-        markets.map(market => {
+        markets.take(1).map(market => {
           val marketId = market._1.get(ticker.id)
 
           if (marketId.isDefined) {
@@ -213,7 +213,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
           allTickers
         })
-      }).flatMap(o => o)
+      }).concatMap(o => o)
 
       tickersUpdate.replay(1).refCount()
     }
@@ -225,11 +225,11 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
   def start(): Flux[Unit] = {
     Flux.create((sink: FluxSink[Unit]) => {
-      def defaultErrorHandler(error: Throwable): Unit = {
+      val defaultErrorHandler = (error: Throwable) => {
         error.printStackTrace()
       }
 
-      def defaultCompleted(): Unit = {
+      val defaultCompleted = () => {
         logger.debug("completed")
       }
 
@@ -238,7 +238,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
       val markets = data.markets.subscribe(markets => {}, defaultErrorHandler, defaultCompleted)
       val openOrders = data.openOrders.subscribe(orders => {}, defaultErrorHandler, defaultCompleted)
       val tickers = data.tickers.subscribe(tickers => {}, defaultErrorHandler, defaultCompleted)
-      val orderBooks = data.orderBooks.subscribe(tickers => {}, defaultErrorHandler, defaultCompleted)
+      val orderBooks = data.orderBooks.subscribe(orderBooks => {}, defaultErrorHandler, defaultCompleted)
 
       val disposable = new Disposable {
         override def dispose(): Unit = {
