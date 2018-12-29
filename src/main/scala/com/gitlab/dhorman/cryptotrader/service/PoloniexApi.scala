@@ -133,10 +133,10 @@ class PoloniexApi(
       .concatMap(webSocket => Flux.from(webSocket.toFlowable))
       .map(_.toString)
       .doOnNext(str => {
-        logger.whenDebugEnabled {
+        logger.whenTraceEnabled {
           val len = str.length
           val s = str.substring(0, if (len >= 60) 59 else len)
-          logger.debug(s)
+          logger.trace(s)
         }
       })
       .map(parse)
@@ -226,9 +226,8 @@ class PoloniexApi(
     }).skip(1)
   }
 
-  def orderBooksStream(marketIds: Int*): Flux[GroupedFlux[Int, (PriceAggregatedBook, OrderBookNotification)]] = {
-    val orderBooks = marketIds.map(marketId => orderBookStream(marketId).map(orderBook => (marketId, orderBook)))
-    Flux.merge(orderBooks).groupBy(_._1, _._2)
+  def orderBooksStream(marketIds: Int*): Map[Int, Flux[(PriceAggregatedBook, OrderBookNotification)]] = {
+    marketIds.map(marketId => (marketId, orderBookStream(marketId))).toMap
   }
 
   /**
@@ -853,14 +852,21 @@ object PoloniexApi {
   }
 
   class PriceAggregatedBook() {
-    var stamp: Option[Long] = None
-    val asks = new mutable.TreeMap[BigDecimal, BigDecimal]()
-    val bids = new mutable.TreeMap[BigDecimal, BigDecimal]()(implicitly[Ordering[BigDecimal]].reverse)
+    import PriceAggregatedBook._
 
-    def init(_asks: Map[BigDecimal, BigDecimal], _bids: Map[BigDecimal, BigDecimal]): Unit = {
+    var stamp: Option[Long] = None
+    val asks = new mutable.TreeMap[Price, Size]()
+    val bids = new mutable.TreeMap[Price, Size]()(implicitly[Ordering[Price]].reverse)
+
+    def init(_asks: Map[Price, Size], _bids: Map[Price, Size]): Unit = {
       _asks.foreach(ask => asks += ask)
       _bids.foreach(bid => bids += bid)
     }
+  }
+
+  object PriceAggregatedBook {
+    type Price = BigDecimal
+    type Size = BigDecimal
   }
 
   sealed trait OrderBookNotification
