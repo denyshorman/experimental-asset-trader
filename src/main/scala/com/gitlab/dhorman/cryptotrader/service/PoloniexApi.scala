@@ -158,7 +158,7 @@ class PoloniexApi(
         case Right(value) => value
         case Left(err) => throw new Exception(err)
       })
-      .flatMapIterable(arr => arr)
+      .flatMapIterable(identity)
       .share()
   }
 
@@ -173,7 +173,7 @@ class PoloniexApi(
   val accountNotificationStream: Flux[AccountNotification] = {
     Flux.create(create(Command.Channel.AccountNotifications, privateApi = true), OverflowStrategy.BUFFER)
       .map(AccountNotification.map)
-      .flatMapIterable(l => l)
+      .flatMapIterable(identity)
       .share()
   }
 
@@ -732,11 +732,11 @@ class PoloniexApi(
     // Unsubscribe from stream
     sink.onDispose(() => {
       websocket.take(1).subscribe(socket => {
+        messagesSubscription.dispose()
+
         val jsonStr = Command(Command.Type.Unsubscribe, channel).asJson.noSpaces
         socket.writeTextMessage(jsonStr)
         logger.info(s"Unsubscribe from $channel channel")
-
-        messagesSubscription.dispose()
       })
     })
   }

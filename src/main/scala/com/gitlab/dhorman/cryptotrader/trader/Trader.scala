@@ -3,6 +3,7 @@ package com.gitlab.dhorman.cryptotrader.trader
 import java.time.LocalDateTime
 
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.PriceAggregatedBook.Price
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
 import com.typesafe.scalalogging.Logger
 import reactor.core.Disposable
@@ -208,7 +209,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
           if (marketId.isDefined) {
             allTickers.put(marketId.get, ticker)
-            logger.whenTraceEnabled() {
+            logger.whenTraceEnabled {
               logger.trace(ticker.toString)
             }
           } else {
@@ -218,7 +219,7 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
           allTickers
         })
-      }).concatMap(o => o)
+      }).concatMap(identity)
 
       Flux.merge(allTickersStream, tickersUpdate).replay(1).refCount()
     }
@@ -260,6 +261,64 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
 
       (marketId, singleCandlestick)
     })
+
+    val closePrices: Flux[Map[Int, Flux[Price]]] = {
+      data.orderBooks.map(_.map {case (marketId, orderBook) =>
+        val price = orderBook
+          .map(_._1)
+          .filter(_.asks.nonEmpty)
+          .map(_.asks.head._1)
+          .sample(1 minute)
+
+        (marketId, price)
+      }).share()
+    }
+  }
+
+  object sellBuyIndicators {
+    trait BuyTrait
+    trait SellTrait
+
+    case class SimpleBuy(prices: List[Price]) extends BuyTrait
+    case class SimpleSell(prices: List[Price]) extends SellTrait
+
+    object buy {
+      val simple: Flux[Map[Int, Flux[SimpleBuy]]] = indicators.closePrices.map(marketPrice => {
+        marketPrice.map(mp => {
+          val x = mp._2.buffer(3).filter(buffer => {
+            (1 until buffer.length).forall(i => buffer(i-1) < buffer(i))
+          }).map(buffer => SimpleBuy(buffer.toList))
+
+          (mp._1, x)
+        })
+      })
+    }
+
+    object sell {
+      val simple: Flux[Map[Int, Flux[SimpleSell]]] = indicators.closePrices.map(marketPrice => {
+        marketPrice.map(mp => {
+          val x = mp._2.buffer(3).filter(buffer => {
+            (1 until buffer.length).forall(i => buffer(i-1) > buffer(i))
+          }).map(buffer => SimpleSell(buffer.toList))
+
+          (mp._1, x)
+        })
+      })
+    }
+
+    val buyStream: Flux[(Market, BuyTrait)] = buy.simple.map(_.map(t => t._2.map(a => (t._1, a))))
+      .flatMapIterable(identity)
+      .flatMap(identity)
+      .concatMap(marketAdvice =>
+        data.markets.take(1).map(market => (market._1(marketAdvice._1), marketAdvice._2))
+      )
+
+    val sellStream: Flux[(Market, SellTrait)] = sell.simple.map(_.map(t => t._2.map(a => (t._1, a))))
+      .flatMapIterable(identity)
+      .flatMap(identity)
+      .concatMap(marketAdvice =>
+        data.markets.take(1).map(market => (market._1(marketAdvice._1), marketAdvice._2))
+      )
   }
 
   def start(): Flux[Unit] = {
@@ -279,9 +338,9 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
       val tickers = data.tickers.subscribe(tickers => {}, defaultErrorHandler, defaultCompleted)
       val orderBooks = data.orderBooks.subscribe(orderBooks => {}, defaultErrorHandler, defaultCompleted)
 
-      val minMaxPrice = indicators.candlestick.switchMap(marketBookMap => {
+      indicators.closePrices.switchMap((price: Map[Int, Flux[Price]]) => {
         data.markets.take(1).map(markets => {
-          marketBookMap.map(marketBook => {
+          price.map(marketBook => {
             (markets._1(marketBook._1), marketBook._2)
           })
         })
@@ -289,6 +348,22 @@ class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: 
         p("USDT_BTC").subscribe(x => {
           logger.debug(s"${x.asJson.spaces2}")
         })
+      })
+
+      sellBuyIndicators.buyStream.subscribe(buy => {
+        logger.info(s"BUY(market = ${buy._1}, details = ${buy._2.toString})")
+      }, err => {
+        logger.error(err.getMessage, err)
+      }, () => {
+        logger.info("sell stream has been completed")
+      })
+
+      sellBuyIndicators.sellStream.subscribe(sell => {
+        logger.info(s"SELL(market = ${sell._1}, details = ${sell._2.toString})")
+      }, err => {
+        logger.error(err.getMessage, err)
+      }, () => {
+        logger.info("sell stream has been completed")
       })
 
       val disposable = new Disposable {
