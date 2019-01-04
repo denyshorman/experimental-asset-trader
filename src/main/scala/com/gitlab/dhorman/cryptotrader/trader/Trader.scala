@@ -14,7 +14,6 @@ import reactor.core.scheduler.Scheduler
 import scala.concurrent.duration._
 import scala.collection.mutable
 import io.circe.syntax._
-import io.circe.generic.auto._
 
 class Trader(private val poloniexApi: PoloniexApi)(implicit val vertxScheduler: Scheduler) {
   private val logger = Logger[Trader]

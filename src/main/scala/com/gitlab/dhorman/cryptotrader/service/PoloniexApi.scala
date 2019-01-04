@@ -28,9 +28,9 @@ import io.vertx.scala.core.{MultiMap => MultiMapScala, Vertx => VertxScala}
 import io.vertx.scala.ext.web.client.{HttpResponse, WebClient, WebClientOptions}
 import reactor.core.publisher.FluxSink
 import reactor.core.publisher.FluxSink.OverflowStrategy
-import reactor.core.scala.publisher.{Flux, GroupedFlux, Mono}
+import reactor.core.scala.publisher.{Flux, Mono}
 
-import scala.collection.mutable
+import scala.collection.immutable.TreeMap
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 import scala.util.Try
@@ -198,28 +198,32 @@ class PoloniexApi(
       (newStamp, notifications)
     }).skip(1).flatMapIterable(_._2)
 
-    notifications.scan((new PriceAggregatedBook(), null), (state: (PriceAggregatedBook, OrderBookNotification), notification) => {
-      val (oBook, _) = state
+    notifications.scan((PriceAggregatedBook(), null), (state: (PriceAggregatedBook, OrderBookNotification), notification) => {
+      val (oldBook, _) = state
 
       val newState: (PriceAggregatedBook, OrderBookNotification) = notification match {
         case orderBookInit: OrderBookInit =>
-          oBook.init(orderBookInit.asks, orderBookInit.bids)
-          (oBook, orderBookInit)
+          val newAsks = oldBook.asks ++ orderBookInit.asks
+          val newBids = oldBook.bids ++ orderBookInit.bids
+          val newBook = PriceAggregatedBook(newAsks, newBids)
+          (newBook, orderBookInit)
         case orderBookModification: OrderBookModification =>
-          val book = orderBookModification.orderType match {
-            case OrderType.Sell => oBook.asks
-            case OrderType.Buy => oBook.bids
+          def modifyBook(book: TreeMap[Price, Size]): TreeMap[Price, Size] = {
+            if (orderBookModification.quantity == 0) {
+              book - orderBookModification.price
+            } else {
+              book.updated(orderBookModification.price, orderBookModification.quantity)
+            }
           }
 
-          if (orderBookModification.quantity == 0) {
-            book.remove(orderBookModification.price)
-          } else {
-            book.update(orderBookModification.price, orderBookModification.quantity)
+          val newBook = orderBookModification.orderType match {
+            case OrderType.Sell => PriceAggregatedBook(modifyBook(oldBook.asks), oldBook.bids)
+            case OrderType.Buy => PriceAggregatedBook(oldBook.asks, modifyBook(oldBook.bids))
           }
 
-          (oBook, orderBookModification)
+          (newBook, orderBookModification)
         case orderBookTrade: OrderBookTrade =>
-          (oBook, orderBookTrade)
+          (oldBook, orderBookTrade)
       }
 
       newState
@@ -753,6 +757,9 @@ object PoloniexApi {
   type Market = String // BTC_LTC
   type Currency = String // BTC
 
+  type Price = BigDecimal
+  type Size = BigDecimal
+
   case class Ticker(
     id: Int,
     last: BigDecimal,
@@ -851,23 +858,10 @@ object PoloniexApi {
     implicit val decoder: Decoder[OrderBook] = deriveDecoder
   }
 
-  class PriceAggregatedBook() {
-    import PriceAggregatedBook._
-
-    var stamp: Option[Long] = None
-    val asks = new mutable.TreeMap[Price, Size]()
-    val bids = new mutable.TreeMap[Price, Size]()(implicitly[Ordering[Price]].reverse)
-
-    def init(_asks: Map[Price, Size], _bids: Map[Price, Size]): Unit = {
-      _asks.foreach(ask => asks += ask)
-      _bids.foreach(bid => bids += bid)
-    }
-  }
-
-  object PriceAggregatedBook {
-    type Price = BigDecimal
-    type Size = BigDecimal
-  }
+  case class PriceAggregatedBook(
+    asks: TreeMap[Price, Size] = TreeMap(),
+    bids: TreeMap[Price, Size] = TreeMap()(implicitly[Ordering[Price]].reverse),
+  )
 
   sealed trait OrderBookNotification
 
