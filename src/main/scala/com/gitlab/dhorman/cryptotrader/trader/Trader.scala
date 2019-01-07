@@ -304,10 +304,10 @@ class Trader(private val poloniexApi: PoloniexApi) {
           }).flatMapIterable(identity)
 
           pathValuations.replay(1).refCount()
-        })
+        }).toSeq // TODO: review to seq implemetation
 
-        Flux.merge(pathValuations)
-    }
+        Flux.just(Flux.empty[Trader.Valuation], pathValuations: _*).skip(1).flatMap(identity, pathValuations.length)
+    }.share()
   }
 
   /*object sellBuyIndicators {
@@ -366,10 +366,10 @@ class Trader(private val poloniexApi: PoloniexApi) {
         logger.debug("completed")
       }
 
-      val currencies = data.currencies.subscribe(currencies => {}, defaultErrorHandler, defaultCompleted)
-      val balances = data.balances.subscribe(balances => {}, defaultErrorHandler, defaultCompleted)
+      //val currencies = data.currencies.subscribe(currencies => {}, defaultErrorHandler, defaultCompleted)
+      //val balances = data.balances.subscribe(balances => {}, defaultErrorHandler, defaultCompleted)
       val markets = data.markets.subscribe(markets => {}, defaultErrorHandler, defaultCompleted)
-      val openOrders = data.openOrders.subscribe(orders => {}, defaultErrorHandler, defaultCompleted)
+      //val openOrders = data.openOrders.subscribe(orders => {}, defaultErrorHandler, defaultCompleted)
       //val tickers = data.tickers.subscribe(tickers => {}, defaultErrorHandler, defaultCompleted)
 
 
@@ -391,10 +391,10 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
       val disposable = new Disposable {
         override def dispose(): Unit = {
-          currencies.dispose()
-          balances.dispose()
           markets.dispose()
-          openOrders.dispose()
+          /*currencies.dispose()
+          balances.dispose()
+          openOrders.dispose()*/
           //tickers.dispose()
           //orderBooks.dispose()
         }

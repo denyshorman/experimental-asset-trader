@@ -8,7 +8,7 @@ import io.vertx.scala.ext.bridge.PermittedOptions
 import io.vertx.scala.ext.web.Router
 import io.vertx.scala.ext.web.handler.{ErrorHandler, LoggerHandler, ResponseContentTypeHandler}
 import io.vertx.scala.ext.web.handler.sockjs.{BridgeOptions, SockJSHandler}
-import reactor.core.scheduler.Scheduler
+import reactor.core.scheduler.{Scheduler, Schedulers}
 import io.circe.generic.auto._
 import io.circe.syntax._
 
@@ -46,11 +46,15 @@ class HttpServer(
       logger.debug("websocket connection established")
 
       val sub = trader.indicators.priceMovement
-        .onBackpressureLatest()
         .buffer(3 seconds)
+        .publishOn(Schedulers.parallel())
         .subscribe(valuation => {
           val json = valuation.asJson.noSpaces
+          logger.debug(s"stream size: ${valuation.size}")
           ws.writeTextMessage(json)
+        }, err => {
+          logger.error(err.getMessage, err)
+          ws.close()
         })
 
       ws.textMessageHandler(msg => {
@@ -67,6 +71,6 @@ class HttpServer(
   }
 
   def start(): Unit = {
-    server.requestHandler(router).websocketHandler(webSocketHandler).listen(8080)
+    server.requestHandler(router).websocketHandler(webSocketHandler).listen(8080, "0.0.0.0")
   }
 }

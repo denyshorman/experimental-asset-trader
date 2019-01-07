@@ -227,7 +227,7 @@ class PoloniexApi(
       }
 
       newState
-    }).skip(1).share()
+    }).skip(1).replay(1).refCount()
   }
 
   def orderBooksStream(marketIds: MarketId*): Map[MarketId, Flux[(PriceAggregatedBook, OrderBookNotification)]] = {
