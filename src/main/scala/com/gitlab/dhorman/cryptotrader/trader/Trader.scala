@@ -287,7 +287,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
       case (marketInfo, orderBooks) =>
         val targetMarket = MarketPathGenerator.Market("USDC", "USDT")
         val targetCurrencies = (targetMarket.a, targetMarket.b)
-        val paths = new MarketPathGenerator(targetMarket, marketInfo._2.keys).generate()
+        val paths = new MarketPathGenerator(marketInfo._2.keys).generate(targetCurrencies)
         logger.debug("paths")
         val pathValuations = paths.map(path => {
           val pathOrderBooks = path.map(market => orderBooks(marketInfo._2(market.toString)))
@@ -526,68 +526,61 @@ object Trader {
     }
   }
 
-  class MarketPathGenerator(targetMarket: MarketPathGenerator.Market, availableMarkets: Iterable[MarketPathGenerator.Market]) {
+  class MarketPathGenerator(availableMarkets: Iterable[MarketPathGenerator.Market]) {
     import MarketPathGenerator._
 
-    private val markets = availableMarkets.map(m => (m, m)).toMap
+    private val allPaths: Map[TargetPath, Market] = availableMarkets
+      .view
+      .flatMap(m => Set(((m.a, m.b), m), ((m.b, m.a), m)))
+      .toMap
 
-    private def f1(targetMarket: Market): Set[Path] = {
-      if (markets.contains(targetMarket)) {
-        Set(List(targetMarket))
-      } else {
-        Set(List())
-      }
+    def generate(targetPath: TargetPath): Set[Path] = {
+      f(targetPath).filter(_.nonEmpty)
     }
 
-    private def f2(targetMarket: Market): Set[Path] = {
-      // (a_x - y_b)
+    def generateAll(targetPath: TargetPath): Set[Path] = {
+      val (a,b) = targetPath
+      generate((a,a)) ++ generate((a,b)) ++ generate((b,a)) ++ generate((b,b))
+    }
+
+    private def f1(targetPath: TargetPath): Set[Path] = {
+      allPaths.get(targetPath)
+        .map(m => Set(List(m)))
+        .getOrElse({Set(List())})
+    }
+
+    private def f2(targetPath: TargetPath): Iterable[Path] = {
+      // (a->x - y->b)
+      val (p,q) = targetPath
       for {
-        a <- Set(targetMarket.a)
-        b <- Set(targetMarket.b)
-        x <- markets.keys.filter(_.contains(a)).map(_.other(a))
-        y <- markets.keys.filter(_.contains(b)).map(_.other(b))
-        if a != b && a != x && y != b && x == y
-      } yield List(Market(a,x), Market(y,b))
+        ((_,x),m1) <- allPaths.view.filter(h => h._1._1 == p && h._1._2 != q)
+        (_,m2) <- allPaths.view.filter(h => h._1._1 == x && h._1._2 == q)
+      } yield List(m1,m2)
     }
 
-    private def f3(targetMarket: Market): Set[Path] = {
-      // (a_x - x_y - y_b)
-      val s = Set(targetMarket.a, targetMarket.b)
-
+    private def f3(targetPath: TargetPath): Iterable[Path] = {
+      // (a->x - y->z - k->b)
+      val (p,q) = targetPath
       for {
-        a <- s
-        b <- s
-        x <- markets.keys.filter(_.contains(a)).map(_.other(a))
-        y <- markets.keys.filter(_.contains(b)).map(_.other(b))
-        if !s.contains(x) && !s.contains(y) && x != y && markets.contains(Market(x,y))
-      } yield List(Market(a,x), Market(x,y), Market(y,b))
+        ((_,x),m1) <- allPaths.view.filter(h => h._1._1 == p && h._1._2 != q)
+        ((_,z),m2) <- allPaths.view.filter(h => h._1._1 == x && h._1._2 != p && h._1._2 != q)
+        (_,m3) <- allPaths.view.filter(h => h._1._1 == z && h._1._2 == q)
+      } yield List(m1,m2,m3)
     }
 
-    private def f4(targetMarket: Market): Set[Path] = {
-      // (a_x - x_i - j_y - y_b)
-      val s = Set(targetMarket.a, targetMarket.b)
-
+    private def f4(targetPath: TargetPath): Iterable[Path] = {
+      // (a->x - y->z - i->j - k->b)
+      val (p,q) = targetPath
       for {
-        a <- s
-        b <- s
-        x <- markets.keys.filter(_.contains(a)).map(_.other(a))
-        y <- markets.keys.filter(_.contains(b)).map(_.other(b))
-        i <- markets.keys.filter(_.contains(x)).map(_.other(x))
-        j <- markets.keys.filter(_.contains(y)).map(_.other(y))
-        if !s.contains(x) && !s.contains(y) && !s.contains(i) && !s.contains(j) && i == j && x != y
-      } yield List(Market(a,x), Market(x,i), Market(j,y), Market(y,b))
+        ((_,x),m1) <- allPaths.view.filter(h => h._1._1 == p && h._1._2 != q)
+        ((y,z),m2) <- allPaths.view.filter(h => h._1._1 == x && h._1._2 != p && h._1._2 != q)
+        ((_,j),m3) <- allPaths.view.filter(h => h._1._1 == z && h._1._2 != p && h._1._2 != q && h._1._2 != y)
+        (_,m4) <- allPaths.view.filter(h => h._1._1 == j && h._1._2 == q)
+      } yield List(m1,m2,m3,m4)
     }
 
-    private def f(targetMarket: Market): Set[Path] = {
-      f1(targetMarket) ++ f2(targetMarket) ++ f3(targetMarket) ++ f4(targetMarket)
-    }
-
-    private def normalize(paths: Set[Path]): Set[Path] = {
-      paths.map(_.map(market => markets(market)))
-    }
-
-    def generate(): Iterable[Path] = {
-      normalize(f(targetMarket))
+    private def f(targetPath: TargetPath): Set[Path] = {
+      f1(targetPath) ++ f2(targetPath) ++ f3(targetPath) ++ f4(targetPath)
     }
   }
   
@@ -634,6 +627,7 @@ object Trader {
       }
     }
 
+    type TargetPath = (Currency, Currency)
     type Path = List[Market]
 
     implicit def convert(markets: Iterable[String]): Iterable[Market] = {
