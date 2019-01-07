@@ -285,28 +285,29 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
     val priceMovement: Flux[Trader.Valuation] = Flux.zip(data.markets, data.orderBooks).switchMap {
       case (marketInfo, orderBooks) =>
-        val targetMarket = MarketPathGenerator.Market("USDC", "USDT")
-        val targetCurrencies = (targetMarket.a, targetMarket.b)
-        val paths = new MarketPathGenerator(marketInfo._2.keys).generate(targetCurrencies)
-        logger.debug("paths")
-        val pathValuations = paths.map(path => {
-          val pathOrderBooks = path.map(market => orderBooks(marketInfo._2(market.toString)))
+        val mainTargetCurrencies = ("USDC", "USDT")
 
-          // Main variable that contains calculations
-          val pathValuations = Flux.combineLatest(pathOrderBooks, (orderBooksAnyRefs: Array[AnyRef]) => {
-            val orderBooks = orderBooksAnyRefs.view.map(_.asInstanceOf[data.OrderBookData])
+        val pathValuations = new MarketPathGenerator(marketInfo._2.keys)
+          .generateAll(mainTargetCurrencies)
+          .flatMap {
+            case (targetCurrencies, simplePaths) =>
+              simplePaths.map(simplePath => {
+              val pathOrderBooks = simplePath.map(market => orderBooks(marketInfo._2(market.toString)))
 
-            val orderBooks2 = path.zip(orderBooks).map {
-              case (market, (_, _, book, _)) => (market, book)
-            }.toArray
+              // Main variable that contains calculations
+              val valuationFlux = Flux.combineLatest(pathOrderBooks, (orderBooksAnyRefs: Array[AnyRef]) => {
+                val orderBooks = orderBooksAnyRefs.view.map(_.asInstanceOf[data.OrderBookData])
+                val orderBooks2 = simplePath.zip(orderBooks).map {case (market, (_, _, book, _)) => (market, book)}.toArray
+                OrderPlan.generate(targetCurrencies, orderBooks2)
+              })
 
-            OrderPlan.generate(targetCurrencies, orderBooks2)
-          }).flatMapIterable(identity)
+              valuationFlux.replay(1).refCount()
+            })
+          }.toSeq // TODO: Review to seq
 
-          pathValuations.replay(1).refCount()
-        }).toSeq // TODO: review to seq implemetation
-
-        Flux.just(Flux.empty[Trader.Valuation], pathValuations: _*).skip(1).flatMap(identity, pathValuations.length)
+        Flux.just(Flux.empty[Trader.Valuation], pathValuations: _*)
+          .skip(1)
+          .flatMap(identity, pathValuations.length)
     }.share()
   }
 
@@ -440,18 +441,20 @@ object Trader {
   object OrderPlan {
     import MarketPathGenerator._
 
-    def generate(targetCurrencies: (Currency, Currency), path: Array[(Market, PriceAggregatedBook)]): Set[Valuation] = {
+    def generate(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
       path.length match {
-        case 1 => Set(f1((targetCurrencies._1, ""), path), f1((targetCurrencies._2, ""), path))
-        case 2 => Set(f2(targetCurrencies, path), f2(targetCurrencies, path.reverse))
-        case 3 => Set(f3(targetCurrencies, path), f3(targetCurrencies, path.reverse))
-        case 4 => Set(f4(targetCurrencies, path), f4(targetCurrencies, path.reverse))
+        case 1 => f1(targetPath, path)
+        case 2 => f2(targetPath, path)
+        case 3 => f3(targetPath, path)
+        case 4 => f4(targetPath, path)
         case _ => throw new NotImplementedError("Operation not supported")
       }
     }
 
-    private def f1(targetCurrencies: (Currency, Currency), path: Array[(Market, PriceAggregatedBook)]): Valuation = {
+    private def f1(targetCurrencies: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
       val (m1, b1) = path(0)
+
+      // TODO: Handle a -> b and b -> a
 
       // a_b
       val a = m1.main(targetCurrencies)
@@ -462,12 +465,12 @@ object Trader {
       Valuation(ShortPath(a, b), List(m1), k)
     }
 
-    private def f2(targetCurrencies: (Currency, Currency), path: Array[(Market, PriceAggregatedBook)]): Valuation = {
+    private def f2(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
       val (m1, b1) = path(0)
       val (m2, b2) = path(1)
 
       // a_c - b_c
-      val a = m1.main(targetCurrencies)
+      val a = m1.main(targetPath)
       val c = m1.other(a)
       val b = m2.other(c)
 
@@ -476,13 +479,13 @@ object Trader {
       Valuation(ShortPath(a, b), List(m1, m2), k)
     }
 
-    private def f3(targetCurrencies: (Currency, Currency), path: Array[(Market, PriceAggregatedBook)]): Valuation = {
+    private def f3(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
       val (m1, b1) = path(0)
       val (m2, b2) = path(1)
       val (m3, b3) = path(2)
 
       // a_x - x_y - b_y
-      val a = m1.main(targetCurrencies)
+      val a = m1.main(targetPath)
       val x = m1.other(a)
       val y = m2.other(x)
       val b = m3.other(y)
@@ -492,14 +495,14 @@ object Trader {
       Valuation(ShortPath(a, b), List(m1, m2, m3), k)
     }
 
-    private def f4(targetCurrencies: (Currency, Currency), path: Array[(Market, PriceAggregatedBook)]): Valuation = {
+    private def f4(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
       val (m1, b1) = path(0)
       val (m2, b2) = path(1)
       val (m3, b3) = path(2)
       val (m4, b4) = path(3)
 
       // a_x - x_z - z_y - b_y
-      val a = m1.main(targetCurrencies)
+      val a = m1.main(targetPath)
       val x = m1.other(a)
       val z = m2.other(x)
       val y = m3.other(z)
@@ -538,9 +541,16 @@ object Trader {
       f(targetPath).filter(_.nonEmpty)
     }
 
-    def generateAll(targetPath: TargetPath): Set[Path] = {
+    def generateAll(targetPath: TargetPath): Map[TargetPath, Set[Path]] = {
       val (a,b) = targetPath
-      generate((a,a)) ++ generate((a,b)) ++ generate((b,a)) ++ generate((b,b))
+      val p = Array((a,a), (a,b), (b,a), (b,b))
+
+      Map(
+        p(0) -> generate(p(0)),
+        p(1) -> generate(p(1)),
+        p(2) -> generate(p(2)),
+        p(3) -> generate(p(3)),
+      )
     }
 
     private def f1(targetPath: TargetPath): Set[Path] = {
@@ -604,7 +614,7 @@ object Trader {
         throw new IllegalStateException("Must be passed valid value")
       }
 
-      def main(targetCurrencies: (Currency, Currency)): Currency = {
+      def main(targetCurrencies: TargetPath): Currency = {
         val c = targetCurrencies._1
         val d = targetCurrencies._2
 

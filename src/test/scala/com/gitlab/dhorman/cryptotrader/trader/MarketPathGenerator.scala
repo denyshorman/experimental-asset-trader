@@ -142,7 +142,7 @@ class MarketPathGenerator extends FlatSpec {
 
   "MarketPathGenerator" should "generate all permutations for USDC and USDT" in {
     val paths = marketPathGenerator.generateAll(("USDC", "USDT"))
-    paths.toList.sortBy(_.length).foreach(p => {
+    paths.toList.sortBy(_._2.size).foreach(p => {
       println(p)
     })
   }
