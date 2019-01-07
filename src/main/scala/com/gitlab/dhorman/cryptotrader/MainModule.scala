@@ -3,6 +3,7 @@ package com.gitlab.dhorman.cryptotrader
 import com.gitlab.dhorman.cryptotrader.config.HttpServer
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{PoloniexApiKeyTag, PoloniexApiSecretTag}
+import com.gitlab.dhorman.cryptotrader.trader.Trader
 import com.gitlab.dhorman.cryptotrader.util.Secrets
 import com.softwaremill.macwire._
 import com.softwaremill.tagging._
@@ -33,4 +34,6 @@ trait MainModule {
   lazy val poloniexApi: PoloniexApi = wire[PoloniexApi]
 
   lazy val httpServer: HttpServer = wire[HttpServer]
+
+  lazy val trader: Trader = wire[Trader]
 }

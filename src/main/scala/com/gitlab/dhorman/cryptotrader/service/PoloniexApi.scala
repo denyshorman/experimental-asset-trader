@@ -177,7 +177,7 @@ class PoloniexApi(
       .share()
   }
 
-  def orderBookStream(marketId: Int): Flux[(PriceAggregatedBook, OrderBookNotification)] = {
+  def orderBookStream(marketId: MarketId): Flux[(PriceAggregatedBook, OrderBookNotification)] = {
     val notifications: Flux[OrderBookNotification] = Flux.create(create(marketId), OverflowStrategy.BUFFER).scan((None, Seq()), (state: (Option[Long], Seq[OrderBookNotification]), json) => {
       val (stamp, _) = state
       val (_, currentOrderNumber, commandsJson) = json.as[(Int, Long, Json)].toOption.get
@@ -227,10 +227,10 @@ class PoloniexApi(
       }
 
       newState
-    }).skip(1)
+    }).skip(1).share()
   }
 
-  def orderBooksStream(marketIds: Int*): Map[Int, Flux[(PriceAggregatedBook, OrderBookNotification)]] = {
+  def orderBooksStream(marketIds: MarketId*): Map[MarketId, Flux[(PriceAggregatedBook, OrderBookNotification)]] = {
     marketIds.map(marketId => (marketId, orderBookStream(marketId))).toMap
   }
 
@@ -755,6 +755,7 @@ object PoloniexApi {
   trait PoloniexApiSecretTag
 
   type Market = String // BTC_LTC
+  type MarketId = Int
   type Currency = String // BTC
 
   type Price = BigDecimal

@@ -27,6 +27,25 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
     Await.result(p.future, Duration.Inf)
   }
 
+  "PoloniexApi order book stream" should "return order book and updates" in {
+    val p = Promise[Unit]()
+
+    val usdcUsdt = 226
+
+    poloniexApi.orderBookStream(usdcUsdt)
+      .doOnTerminate(() => {
+        p.success(())
+      })
+      .subscribe(book => {
+        logger.info(book.toString)
+      }, err => {
+        logger.error(err.toString)
+        fail(err)
+      })
+
+    Await.result(p.future, Duration.Inf)
+  }
+
   "PoloniexApi _24HourExchangeVolumeStream" should "return one 24 hours exchange volume" in {
     val p = Promise[Unit]()
 
