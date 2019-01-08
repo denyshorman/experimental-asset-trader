@@ -31,7 +31,7 @@ class HttpServer(
   })
 
   private val priceMovement = trader.indicators.priceMovement
-    .buffer(2 seconds)
+    .buffer(200 millis)
     /*.doOnNext(v => {
       logger.debug(s"stream size: ${v.size}")
     })*/
