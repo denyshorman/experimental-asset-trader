@@ -1,6 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.gitlab.dhorman.cryptotrader.trader.Trader.MarketPathGenerator.Market
+import com.gitlab.dhorman.cryptotrader.trader.Trader.MarketPathGenerator.{Market, Path}
 import org.scalatest.FlatSpec
 
 class MarketPathGenerator extends FlatSpec {
@@ -131,7 +131,9 @@ class MarketPathGenerator extends FlatSpec {
     Market("USDC", "BCHSV"),
   )
 
-  val marketPathGenerator = new Trader.MarketPathGenerator(markets)
+  private val currencies = markets.flatMap(m => Set(m.a, m.b))
+
+  private val marketPathGenerator = new Trader.MarketPathGenerator(markets)
 
   "MarketPathGenerator" should "generate for USDC -> USDT" in {
     val paths = marketPathGenerator.generate(("USDC", "USDT"))
@@ -140,11 +142,15 @@ class MarketPathGenerator extends FlatSpec {
     })
   }
 
+  "MarketPathGenerator" should "generate all possible ways between currency A -> A" in {
+    val set = currencies.par.flatMap(c => marketPathGenerator.generate((c, c)))
+    println(set.size)
+  }
+
   "MarketPathGenerator" should "generate all permutations for USDC and USDT" in {
     val paths = marketPathGenerator.generateAll(("USDC", "USDT"))
-    paths.toList.sortBy(_._2.size).foreach(p => {
-      println(p)
-    })
+    val flattenPaths: List[Path] = paths.flatMap(_._2).toList.sortBy(_.size)
+    for (path <- flattenPaths) println(path)
   }
 
 }

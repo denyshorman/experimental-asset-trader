@@ -532,10 +532,11 @@ object Trader {
   class MarketPathGenerator(availableMarkets: Iterable[MarketPathGenerator.Market]) {
     import MarketPathGenerator._
 
-    private val allPaths: Map[TargetPath, Market] = availableMarkets
+    private val allPaths = availableMarkets
       .view
       .flatMap(m => Set(((m.a, m.b), m), ((m.b, m.a), m)))
-      .toMap
+      .groupBy(p => p._1._1)
+      .map(x => (x._1, x._2.toSet))
 
     def generate(targetPath: TargetPath): Set[Path] = {
       f(targetPath).filter(_.nonEmpty)
@@ -554,8 +555,9 @@ object Trader {
     }
 
     private def f1(targetPath: TargetPath): Set[Path] = {
-      allPaths.get(targetPath)
-        .map(m => Set(List(m)))
+      allPaths(targetPath._1)
+        .find(_._1._2 == targetPath._2)
+        .map(m => Set(List(m._2)))
         .getOrElse({Set(List())})
     }
 
@@ -563,8 +565,8 @@ object Trader {
       // (a->x - y->b)
       val (p,q) = targetPath
       for {
-        ((_,x),m1) <- allPaths.view.filter(h => h._1._1 == p && h._1._2 != q)
-        (_,m2) <- allPaths.view.filter(h => h._1._1 == x && h._1._2 == q)
+        ((_,x),m1) <- allPaths(p).view.filter(_._1._2 != q)
+        (_,m2) <- allPaths(x).view.filter(_._1._2 == q)
       } yield List(m1,m2)
     }
 
@@ -572,9 +574,9 @@ object Trader {
       // (a->x - y->z - k->b)
       val (p,q) = targetPath
       for {
-        ((_,x),m1) <- allPaths.view.filter(h => h._1._1 == p && h._1._2 != q)
-        ((_,z),m2) <- allPaths.view.filter(h => h._1._1 == x && h._1._2 != p && h._1._2 != q)
-        (_,m3) <- allPaths.view.filter(h => h._1._1 == z && h._1._2 == q)
+        ((_,x),m1) <- allPaths(p).view.filter(_._1._2 != q)
+        ((_,z),m2) <- allPaths(x).view.filter(h => h._1._2 != p && h._1._2 != q)
+        (_,m3) <- allPaths(z).view.filter(_._1._2 == q)
       } yield List(m1,m2,m3)
     }
 
@@ -582,10 +584,10 @@ object Trader {
       // (a->x - y->z - i->j - k->b)
       val (p,q) = targetPath
       for {
-        ((_,x),m1) <- allPaths.view.filter(h => h._1._1 == p && h._1._2 != q)
-        ((y,z),m2) <- allPaths.view.filter(h => h._1._1 == x && h._1._2 != p && h._1._2 != q)
-        ((_,j),m3) <- allPaths.view.filter(h => h._1._1 == z && h._1._2 != p && h._1._2 != q && h._1._2 != y)
-        (_,m4) <- allPaths.view.filter(h => h._1._1 == j && h._1._2 == q)
+        ((_,x),m1) <- allPaths(p).view.filter(_._1._2 != q)
+        ((y,z),m2) <- allPaths(x).view.filter(h => h._1._2 != p && h._1._2 != q)
+        ((_,j),m3) <- allPaths(z).view.filter(h => h._1._2 != p && h._1._2 != q && h._1._2 != y)
+        (_,m4) <- allPaths(j).view.filter(_._1._2 == q)
       } yield List(m1,m2,m3,m4)
     }
 
