@@ -31,7 +31,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
   private object raw {
     private def wrap[T](triggerStream: trigger.Trigger, stream: Flux[T]): Flux[T] = {
-      triggerStream.startWith(()).flatMap(_ => stream.take(1)).replay(1).refCount()
+      triggerStream.startWith(()).switchMap(_ => stream.take(1)).replay(1).refCount()
     }
 
     val currencies: Flux[Map[Currency, CurrencyDetails]] = {
@@ -374,6 +374,8 @@ class Trader(private val poloniexApi: PoloniexApi) {
       //val tickers = data.tickers.subscribe(tickers => {}, defaultErrorHandler, defaultCompleted)
 
 
+      data.tickers.subscribe(_ => {}, _.printStackTrace())
+
       val x = data.orderBooks.map(_.values).switchMap(Flux.merge(_))
 
       x.subscribe((market: (Market, MarketId, PriceAggregatedBook, OrderBookNotification)) => {
@@ -383,26 +385,26 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
       /*indicators.priceMovement.subscribe(valuation => {
         logger.debug(valuation.toString)
-      }, defaultErrorHandler, defaultCompleted)*/
+      }, defaultErrorHandler, defaultCompleted)
 
       // TODO: Test trigger. Fails with exception
-      /*Flux.just(1).delaySubscription(30 seconds).subscribe(_ => {
+      Flux.just(1).delaySubscription(30 seconds).subscribe(_ => {
         trigger.ticker.onNext(())
-      })*/
+      })
 
       val disposable = new Disposable {
         override def dispose(): Unit = {
           markets.dispose()
-          /*currencies.dispose()
+          currencies.dispose()
           balances.dispose()
-          openOrders.dispose()*/
+          openOrders.dispose()
           //tickers.dispose()
           //orderBooks.dispose()
         }
       }
 
       sink.onCancel(disposable)
-      sink.onDispose(disposable)
+      sink.onDispose(disposable)*/
 
       logger.info("Start trading")
     })

@@ -1,5 +1,7 @@
 package com.gitlab.dhorman.cryptotrader
 
+import java.util.concurrent.ThreadFactory
+
 import com.gitlab.dhorman.cryptotrader.config.HttpServer
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{PoloniexApiKeyTag, PoloniexApiSecretTag}
@@ -12,7 +14,7 @@ import io.vertx.lang.scala.VertxExecutionContext
 import io.vertx.reactivex.RxHelper
 import io.vertx.scala.core.Vertx
 import reactor.adapter.rxjava.RxJava2Scheduler
-import reactor.core.scheduler.Scheduler
+import reactor.core.scheduler.{Scheduler, Schedulers}
 
 import scala.concurrent.ExecutionContext
 
@@ -20,6 +22,12 @@ trait MainModule {
   implicit val vertx: Vertx
 
   implicit lazy val vertxScheduler: Scheduler = RxJava2Scheduler.from(RxHelper.scheduler(vertx.asJava.asInstanceOf[JavaVertx]))
+
+  lazy val schedulersFactory: Schedulers.Factory = new Schedulers.Factory {
+    override def newParallel(parallelism: Int, threadFactory: ThreadFactory): Scheduler = {
+      vertxScheduler
+    }
+  }
 
   implicit lazy val ec: ExecutionContext = VertxExecutionContext(vertx.getOrCreateContext())
 
