@@ -1,9 +1,10 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.gitlab.dhorman.cryptotrader.trader.Trader.MarketPathGenerator.{Market, Path}
+import com.gitlab.dhorman.cryptotrader.core.Market
+import com.gitlab.dhorman.cryptotrader.trader.Trader.MarketPathGenerator._
 import org.scalatest.FlatSpec
 
-class MarketPathGenerator extends FlatSpec {
+class MarketPathGeneratorTest extends FlatSpec {
 
   private val markets = Set(
     Market("BTC", "BCN"),
@@ -131,7 +132,7 @@ class MarketPathGenerator extends FlatSpec {
     Market("USDC", "BCHSV"),
   )
 
-  private val currencies = markets.flatMap(m => Set(m.a, m.b))
+  private val currencies = markets.flatMap(m => Set(m.b, m.q))
 
   private val marketPathGenerator = new Trader.MarketPathGenerator(markets)
 

@@ -1,12 +1,14 @@
 package com.gitlab.dhorman.cryptotrader.service
 
-import java.time.LocalDateTime
+import java.time.{Instant, LocalDateTime}
 import java.time.format.DateTimeFormatter
 
 import cats.syntax.either._
+import com.gitlab.dhorman.cryptotrader.core._
+import com.gitlab.dhorman.cryptotrader.core.PriceUtil._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.Codecs._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.ErrorMsgPattern._
-import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.{OrderType, _}
+import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.exception._
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.roundeights.hasher.Implicits._
@@ -208,11 +210,11 @@ class PoloniexApi(
           val newBook = PriceAggregatedBook(newAsks, newBids)
           (newBook, orderBookInit)
         case orderBookModification: OrderBookModification =>
-          def modifyBook(book: TreeMap[Price, Size]): TreeMap[Price, Size] = {
-            if (orderBookModification.quantity == 0) {
+          def modifyBook(book: TreeMap[Price, Amount]): TreeMap[Price, Amount] = {
+            if (orderBookModification.amount == 0) {
               book - orderBookModification.price
             } else {
-              book.updated(orderBookModification.price, orderBookModification.quantity)
+              book.updated(orderBookModification.price, orderBookModification.amount)
             }
           }
 
@@ -253,15 +255,15 @@ class PoloniexApi(
     callPublicApi(command).map(jsonToObject[Map[Market, Map[Currency, BigDecimal]]])
   }
 
-  def orderBook(currencyPair: Option[String], depth: Int): Mono[Map[Market, OrderBook]] = {
+  def orderBook(market: Option[Market], depth: Int): Mono[Map[Market, OrderBook0]] = {
     val command = "returnOrderBook"
-    val params = Map("currencyPair" -> currencyPair.getOrElse("all"), "depth" -> depth.toString)
-    if (currencyPair.isEmpty) {
-      val jsonToObjectMapper = jsonToObject[Map[Market, OrderBook]]
+    val params = Map("currencyPair" -> market.getOrElse("all").toString, "depth" -> depth.toString)
+    if (market.isEmpty) {
+      val jsonToObjectMapper = jsonToObject[Map[Market, OrderBook0]]
       callPublicApi(command, params).map(jsonToObjectMapper)
     } else {
-      val jsonToObjectMapper = jsonToObject[OrderBook]
-      callPublicApi(command, params).map(jsonToObjectMapper).map(orderBook => Map(currencyPair.get -> orderBook))
+      val jsonToObjectMapper = jsonToObject[OrderBook0]
+      callPublicApi(command, params).map(jsonToObjectMapper).map(orderBook => Map(market.get -> orderBook))
     }
   }
 
@@ -351,8 +353,8 @@ class PoloniexApi(
   /**
     * Returns your open orders for a given market, specified by the currencyPair.
     */
-  def openOrders(currencyPair: Market): Mono[List[OpenOrder]] = {
-    callPrivateApi("returnOpenOrders", Map("currencyPair" -> currencyPair))
+  def openOrders(market: Market): Mono[List[OpenOrder]] = {
+    callPrivateApi("returnOpenOrders", Map("currencyPair" -> market.toString))
       .map(jsonToObject[List[OpenOrder]])
   }
 
@@ -365,7 +367,7 @@ class PoloniexApi(
 
   def tradeHistory(market: Option[Market]): Mono[Map[Market, List[TradeHistoryPrivate]]] = {
     val command = "returnTradeHistory"
-    val params = Map("currencyPair" -> market.getOrElse("all"))
+    val params = Map("currencyPair" -> market.getOrElse("all").toString)
     if (market.isEmpty) {
       val jsonToObjectMapper = jsonToObject[Map[Market, List[TradeHistoryPrivate]]]
       callPrivateApi(command, params).map(jsonToObjectMapper)
@@ -414,7 +416,7 @@ class PoloniexApi(
     */
   private def buySell(command: String, market: Market, price: BigDecimal, amount: BigDecimal, tpe: Option[BuyOrderType]): Mono[Buy] = {
     val params = Map(
-      "currencyPair" -> market,
+      "currencyPair" -> market.toString,
       "rate" -> price.toString,
       "amount" -> amount.toString,
     )
@@ -538,7 +540,7 @@ class PoloniexApi(
     */
   private def marginBuySell(command: String, market: Market, price: BigDecimal, amount: BigDecimal, lendingRate: Option[BigDecimal]): Mono[MarginBuySell] = {
     val params = Map(
-      "currencyPair" -> market,
+      "currencyPair" -> market.toString,
       "rate" -> price.toString,
       "amount" -> amount.toString,
     )
@@ -556,14 +558,14 @@ class PoloniexApi(
   def marginPosition(market: Option[Market] = None): Mono[MarginPosition] = {
     val command = "getMarginPosition"
     val params = Map(
-      "currencyPair" -> market.getOrElse("all")
+      "currencyPair" -> market.getOrElse("all").toString
     )
     callPrivateApi(command, params).map(jsonToObject[MarginPosition])
   }
 
   def closeMarginPosition(market: Market): Mono[CloseMarginPosition] = {
     val command = "closeMarginPosition"
-    val params = Map("currencyPair" -> market)
+    val params = Map("currencyPair" -> market.toString)
     callPrivateApi(command, params)
       .map(convertJsonSuccessFieldFromIntToBool)
       .map(jsonToObject[CloseMarginPosition])
@@ -572,7 +574,7 @@ class PoloniexApi(
   /**
     * Creates a loan offer for a given currency.
     */
-  def createLoanOffer(currency: Currency, amount: BigDecimal, duration: Long, autoRenew: Boolean, lendingRate: BigDecimal): Mono[CreateLoanOffer] = {
+  def createLoanOffer(currency: Currency, amount: Amount, duration: Long, autoRenew: Boolean, lendingRate: BigDecimal): Mono[CreateLoanOffer] = {
     val command = "createLoanOffer"
     val params = Map(
       "currency" -> currency,
@@ -754,12 +756,7 @@ object PoloniexApi {
   trait PoloniexApiKeyTag
   trait PoloniexApiSecretTag
 
-  type Market = String // BTC_LTC
   type MarketId = Int
-  type Currency = String // BTC
-
-  type Price = BigDecimal
-  type Size = BigDecimal
 
   case class Ticker(
     id: Int,
@@ -848,25 +845,25 @@ object PoloniexApi {
     }
   }
 
-  case class OrderBook(
+  case class OrderBook0(
     asks: Array[Array[BigDecimal]],
     bids: Array[Array[BigDecimal]],
     isFrozen: Boolean,
     seq: BigDecimal,
   )
 
-  object OrderBook {
-    implicit val decoder: Decoder[OrderBook] = deriveDecoder
+  object OrderBook0 {
+    implicit val decoder: Decoder[OrderBook0] = deriveDecoder
   }
 
   case class PriceAggregatedBook(
-    asks: TreeMap[Price, Size] = TreeMap(),
-    bids: TreeMap[Price, Size] = TreeMap()(implicitly[Ordering[Price]].reverse),
+    asks: TreeMap[Price, Amount] = TreeMap(),
+    bids: TreeMap[Price, Amount] = TreeMap()(implicitly[Ordering[Price]].reverse),
   )
 
   sealed trait OrderBookNotification
 
-  case class OrderBookInit(asks: Map[BigDecimal, BigDecimal], bids: Map[BigDecimal, BigDecimal]) extends OrderBookNotification
+  final case class OrderBookInit(asks: Map[Price, Amount], bids: Map[Price, Amount]) extends OrderBookNotification
 
   object OrderBookInit {
     private[PoloniexApi] type ArrayDecoder = (Map[BigDecimal, BigDecimal], Map[BigDecimal, BigDecimal])
@@ -876,30 +873,30 @@ object PoloniexApi {
     }
   }
 
-  case class OrderBookModification(
+  final case class OrderBookModification(
     orderType: OrderType,
-    price: BigDecimal,
-    quantity: BigDecimal,
+    price: Price,
+    amount: Amount,
   ) extends OrderBookNotification
 
   object OrderBookModification {
-    private[PoloniexApi] type ArrayDecoder = (String, OrderType, BigDecimal, BigDecimal)
+    private[PoloniexApi] type ArrayDecoder = (String, OrderType, Price, Amount)
 
     private[PoloniexApi] implicit val decoder: Decoder[OrderBookModification] = (c: HCursor) => {
       c.as[ArrayDecoder].map(b => OrderBookModification(b._2, b._3, b._4))
     }
   }
 
-  case class OrderBookTrade(
-    tradeId: BigDecimal,
+  final case class OrderBookTrade(
+    tradeId: Long,
     orderType: OrderType,
-    price: BigDecimal,
-    quantity: BigDecimal,
-    timestamp: Long,
-  ) extends OrderBookNotification
+    price: Price,
+    amount: Amount,
+    timestamp: Instant,
+  ) extends Trade with OrderBookNotification
 
   object OrderBookTrade {
-    private[PoloniexApi] type ArrayDecoder = (String, BigDecimal, OrderType, BigDecimal, BigDecimal, Long)
+    private[PoloniexApi] type ArrayDecoder = (String, Long, OrderType, Price, Amount, Instant)
 
     private[PoloniexApi] implicit val decoder: Decoder[OrderBookTrade] = (c: HCursor) => {
       c.as[ArrayDecoder].map(b => OrderBookTrade(b._2, b._3, b._4, b._5, b._6))
@@ -911,8 +908,8 @@ object PoloniexApi {
   case class OpenOrder(
     id: Long,
     tpe: OrderType,
-    rate: BigDecimal,
-    amount: BigDecimal,
+    price: Price,
+    amount: Amount,
     total: BigDecimal,
   ) {
     override def equals(o: Any): Boolean = o match {
@@ -927,14 +924,14 @@ object PoloniexApi {
 
   case class TradeHistory(
     date: LocalDateTime,
-    `type`: OrderType,
-    rate: BigDecimal,
-    amount: BigDecimal,
+    tpe: OrderType,
+    price: Price,
+    amount: Amount,
     total: BigDecimal
   )
 
   object TradeHistory {
-    implicit val decoder: Decoder[TradeHistory] = deriveDecoder
+    implicit val decoder: Decoder[TradeHistory] = Decoder.forProduct5("date", "type", "rate", "amount", "total")(TradeHistory.apply)
   }
 
   case class ChartData(
@@ -970,8 +967,8 @@ object PoloniexApi {
   )
 
   case class LoanOrderDetails(
-    rate: BigDecimal,
-    amount: BigDecimal,
+    rate: Price,
+    amount: Amount,
     rangeMin: BigDecimal,
     rangeMax: BigDecimal,
   )
@@ -994,10 +991,10 @@ object PoloniexApi {
   case class DepositDetails(
     currency: Currency,
     address: String,
-    amount: BigDecimal,
+    amount: Amount,
     confirmations: Int,
     txid: String,
-    timestamp: Long,
+    timestamp: Instant,
     status: String,
   )
 
@@ -1010,8 +1007,8 @@ object PoloniexApi {
     withdrawalNumber: BigDecimal,
     currency: Currency,
     address: String,
-    amount: BigDecimal,
-    timestamp: Long,
+    amount: Amount,
+    timestamp: Instant,
     status: String,
     ipAddress: String,
   )
@@ -1292,7 +1289,7 @@ object PoloniexApi {
 
   final case class OrderUpdate(
     orderId: Long,
-    newAmount: BigDecimal
+    newAmount: Amount
   ) extends AccountNotification
 
   object OrderUpdate {
@@ -1304,19 +1301,19 @@ object PoloniexApi {
   }
 
   final case class TradeNotification(
+    orderId: Long,
     tradeId: Long,
-    rate: BigDecimal,
-    amount: BigDecimal,
+    price: Price,
+    amount: Amount,
     feeMultiplier: BigDecimal,
     fundingType: FundingType,
-    orderId: Long,
   ) extends AccountNotification
 
   object TradeNotification {
-    private[PoloniexApi] type ArrayDecoder = (String, Long, BigDecimal, BigDecimal, BigDecimal, FundingType, Long)
+    private[PoloniexApi] type ArrayDecoder = (String, Long, Price, Amount, BigDecimal, FundingType, Long)
 
     private[PoloniexApi] implicit val decoder: Decoder[TradeNotification] = (c: HCursor) => {
-      c.as[ArrayDecoder].map(o => TradeNotification(o._2, o._3, o._4, o._5, o._6, o._7))
+      c.as[ArrayDecoder].map(o => TradeNotification(o._7, o._2, o._3, o._4, o._5.oneMinus, o._6))
     }
   }
 
@@ -1332,30 +1329,6 @@ object PoloniexApi {
       case "l" => Right(WalletType.Lending)
       case _ => Left("Not recognized wallet type. New wallet added ?")
     }
-  }
-
-  type OrderType = OrderType.Value
-  object OrderType extends Enumeration {
-    val Sell: OrderType = Value
-    val Buy: OrderType = Value
-
-    private[PoloniexApi] implicit val decoder: Decoder[OrderType] = Decoder.decodeJson.emap(json => {
-      if (json.isString) {
-        json.asString.get match {
-          case "sell" => Right(OrderType.Sell)
-          case "buy" => Right(OrderType.Buy)
-          case str => Left(s"""Not recognized string "$str" """)
-        }
-      } else if (json.isNumber) {
-        json.asNumber.get.toInt.get match {
-          case 0 => Right(OrderType.Sell)
-          case 1 => Right(OrderType.Buy)
-          case int => Left(s"""Not recognized integer "$int" """)
-        }
-      } else {
-        Left("Can't parse OrderType")
-      }
-    })
   }
 
   type FundingType = FundingType.Value
@@ -1408,6 +1381,9 @@ object PoloniexApi {
     implicit val localDateTimeDecoder: Decoder[LocalDateTime] = Decoder.decodeString.emap[LocalDateTime](str => {
       Either.catchNonFatal(LocalDateTime.parse(str, localDateTimeFormatter)).leftMap(_.getMessage)
     })
+
+    implicit val instantEncoder: Encoder[Instant] = Encoder.encodeLong.contramap[Instant](_.toEpochMilli)
+    implicit val instantDecoder: Decoder[Instant] = Decoder.decodeLong.map(Instant.ofEpochMilli)
 
     implicit val bigDecimalMapKeyDecoder: KeyDecoder[BigDecimal] = KeyDecoder.decodeKeyString.map(str => BigDecimal(str))
     implicit val bigDecimalMapKeyEncoder: KeyEncoder[BigDecimal] = KeyEncoder.encodeKeyString.contramap(_.toString)

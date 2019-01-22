@@ -182,4 +182,21 @@ class PoloniexApiSpec extends FlatSpec with TestModule {
 
     Await.result(p.future, Duration.Inf)
   }
+
+  "PoloniexApi feeInfo" should "return all fees" in {
+    val p = Promise[Unit]()
+
+    poloniexApi.feeInfo()
+      .doOnTerminate(() => {
+        p.success(())
+      })
+      .subscribe(fees => {
+        logger.info(fees.toString)
+      }, err => {
+        logger.error(err.toString)
+        fail(err)
+      })
+
+    Await.result(p.future, Duration.Inf)
+  }
 }

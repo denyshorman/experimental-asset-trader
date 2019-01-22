@@ -2,11 +2,11 @@ package com.gitlab.dhorman.cryptotrader.trader
 
 import java.time.LocalDateTime
 
+import com.gitlab.dhorman.cryptotrader.core._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
 import com.gitlab.dhorman.cryptotrader.trader.Trader.{MarketPathGenerator, OrderPlan}
 import com.typesafe.scalalogging.Logger
-import reactor.core.Disposable
 import reactor.core.publisher.{FluxSink, ReplayProcessor}
 import reactor.core.scala.publisher.{Flux, FluxProcessor}
 
@@ -146,7 +146,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
     val openOrders: Flux[mutable.Set[Trader.OpenOrder]] = {
       val initialOrdersStream: Flux[mutable.Set[Trader.OpenOrder]] = raw.openOrders.map(orders => {
-        orders.flatMap(kv => kv._2.view.map(o => new Trader.OpenOrder(o.id, o.tpe, kv._1, o.rate, o.amount))).to[mutable.Set]
+        orders.flatMap(kv => kv._2.view.map(o => new Trader.OpenOrder(o.id, o.tpe, kv._1, o.price, o.amount))).to[mutable.Set]
       }).replay(1).refCount()
 
       val limitOrderCreatedStream = poloniexApi.accountNotificationStream.filter(_.isInstanceOf[LimitOrderCreated]).map(_.asInstanceOf[LimitOrderCreated])
@@ -434,7 +434,7 @@ object Trader {
     override def toString = s"OpenOrder($id, $tpe, $market, $rate, $amount)"
   }
 
-  case class Valuation(shortPath: ShortPath, longPath: List[MarketPathGenerator.Market], k: BigDecimal)
+  case class Valuation(shortPath: ShortPath, longPath: List[Market], k: BigDecimal)
 
   case class ShortPath(fromCurrency: Currency, toCurrency: Currency) {
     override def toString: Currency = s"$fromCurrency->$toCurrency"
@@ -453,14 +453,14 @@ object Trader {
       }
     }
 
-    private def f1(targetCurrencies: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
+    private def f1(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
       val (m1, b1) = path(0)
 
       // TODO: Handle a -> b and b -> a
 
       // a_b
-      val a = m1.main(targetCurrencies)
-      val b = m1.other(a)
+      val a = m1.find(Iterable(targetPath._1, targetPath._2)).get
+      val b = m1.other(a).get
 
       val k = op(b, m1, b1) // a_b
 
@@ -472,9 +472,9 @@ object Trader {
       val (m2, b2) = path(1)
 
       // a_c - b_c
-      val a = m1.main(targetPath)
-      val c = m1.other(a)
-      val b = m2.other(c)
+      val a = m1.find(Iterable(targetPath._1, targetPath._2)).get
+      val c = m1.other(a).get
+      val b = m2.other(c).get
 
       val k = op(c, m1, b1)*op(b, m2, b2)
 
@@ -487,10 +487,10 @@ object Trader {
       val (m3, b3) = path(2)
 
       // a_x - x_y - b_y
-      val a = m1.main(targetPath)
-      val x = m1.other(a)
-      val y = m2.other(x)
-      val b = m3.other(y)
+      val a = m1.find(Iterable(targetPath._1, targetPath._2)).get
+      val x = m1.other(a).get
+      val y = m2.other(x).get
+      val b = m3.other(y).get
 
       val k = op(x, m1, b1)*op(y, m2, b2)*op(b, m3, b3)
 
@@ -504,11 +504,11 @@ object Trader {
       val (m4, b4) = path(3)
 
       // a_x - x_z - z_y - b_y
-      val a = m1.main(targetPath)
-      val x = m1.other(a)
-      val z = m2.other(x)
-      val y = m3.other(z)
-      val b = m4.other(y)
+      val a = m1.find(Iterable(targetPath._1, targetPath._2)).get
+      val x = m1.other(a).get
+      val z = m2.other(x).get
+      val y = m3.other(z).get
+      val b = m4.other(y).get
 
       val k = op(x, m1, b1)*op(z, m2, b2)*op(y, m3, b3)*op(b, m4, b4)
 
@@ -516,9 +516,9 @@ object Trader {
     }
 
     private def op(targetCurrency: Currency, market: Market, orderBook: PriceAggregatedBook): Price = {
-      market.tpe(targetCurrency) match {
-        case Market.CurrencyType.Master => sell(orderBook)
-        case Market.CurrencyType.Slave => buy(orderBook)
+      market.tpe(targetCurrency).get match {
+        case CurrencyType.Base => sell(orderBook)
+        case CurrencyType.Quote => buy(orderBook)
       }
     }
 
@@ -531,12 +531,12 @@ object Trader {
     }
   }
 
-  class MarketPathGenerator(availableMarkets: Iterable[MarketPathGenerator.Market]) {
+  class MarketPathGenerator(availableMarkets: Iterable[Market]) {
     import MarketPathGenerator._
 
     private val allPaths = availableMarkets
       .view
-      .flatMap(m => Set(((m.a, m.b), m), ((m.b, m.a), m)))
+      .flatMap(m => Set(((m.b, m.q), m), ((m.q, m.b), m)))
       .groupBy(p => p._1._1)
       .map(x => (x._1, x._2.toSet))
 
@@ -599,59 +599,7 @@ object Trader {
   }
   
   object MarketPathGenerator {
-    case class Market(a: Currency, b: Currency) {
-      override def toString: String = s"${a}_$b"
-
-      override def equals(o: Any): Boolean = o match {
-        case m: Market => (m.a == this.a || m.a == this.b) && (m.b == this.a || m.b == this.b)
-        case _ => false
-      }
-
-      override def hashCode(): Int = a.hashCode + b.hashCode
-
-      def masterCurrency: Currency = a
-      def slaveCurrency: Currency = b
-
-      def tpe(x: Currency): Market.CurrencyType = {
-        if (x == a) return Market.CurrencyType.Master
-        if (x == b) return Market.CurrencyType.Slave
-        throw new IllegalStateException("Must be passed valid value")
-      }
-
-      def main(targetCurrencies: TargetPath): Currency = {
-        val c = targetCurrencies._1
-        val d = targetCurrencies._2
-
-        if (a == c || a == d) return a
-        if (b == c || b == d) return b
-
-        throw new IllegalStateException()
-      }
-
-      def contains(x: Currency): Boolean = x == a || x == b
-
-      def other(x: Currency): Currency = if (x == a) b else a
-    }
-
-    object Market {
-      type CurrencyType = CurrencyType.Value
-      object CurrencyType extends Enumeration {
-        val Master: CurrencyType = Value
-        val Slave: CurrencyType = Value
-      }
-    }
-
     type TargetPath = (Currency, Currency)
     type Path = List[Market]
-
-    implicit def convert(markets: Iterable[String]): Iterable[Market] = {
-      markets.map(_.split('_')).filter(_.length == 2).map(c => Market(c(0), c(1)))
-    }
-
-    implicit def convert(market: String): Market = {
-      val c = market.split('_')
-      require(c.length == 2, "market must be in format A_B. Example: USDT_USDC.")
-      Market(c(0), c(1))
-    }
   }
 }
