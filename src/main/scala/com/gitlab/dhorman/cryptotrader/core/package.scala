@@ -67,4 +67,22 @@ package object core {
       FeeMultiplier(1 - makerFeePercent, 1 - takerFeePercent)
     }
   }
+
+  case class TradeStat(
+    sell: TradeStatOrder,
+    buy: TradeStatOrder,
+  )
+
+  case class TradeStatOrder(
+    ttwAvgMs: Long,
+    ttwVariance: Long,
+    ttwStdDev: Long,
+    minAmount: BigDecimal,
+    maxAmount: BigDecimal,
+    avgAmount: BigDecimal,
+    varianceAmount: BigDecimal,
+    stdDevAmount: BigDecimal,
+    firstTranTs: Instant,
+    lastTranTs: Instant,
+  )
 }

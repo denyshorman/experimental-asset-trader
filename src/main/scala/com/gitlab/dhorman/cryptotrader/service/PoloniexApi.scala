@@ -1,6 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.service
 
-import java.time.{Instant, LocalDateTime}
+import java.time.{Instant, LocalDateTime, ZoneId, ZonedDateTime}
 import java.time.format.DateTimeFormatter
 
 import cats.syntax.either._
@@ -267,7 +267,7 @@ class PoloniexApi(
     }
   }
 
-  def tradeHistoryPublic(market: Market, fromDate: Option[Long], toDate: Option[Long]): Mono[Array[TradeHistory]] = {
+  def tradeHistoryPublic(market: Market, fromDate: Option[Long] = None, toDate: Option[Long] = None): Mono[Array[TradeHistory]] = {
     val command = "returnTradeHistory"
 
     val params = Map(
@@ -923,7 +923,7 @@ object PoloniexApi {
   }
 
   case class TradeHistory(
-    date: LocalDateTime,
+    date: ZonedDateTime,
     tpe: OrderType,
     price: Price,
     amount: Amount,
@@ -1358,6 +1358,8 @@ object PoloniexApi {
   }
 
   object Codecs {
+    val utc0Zone: ZoneId = ZoneId.of("Z")
+
     val localDateTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     val localDateTimeHourMinuteFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
@@ -1382,8 +1384,13 @@ object PoloniexApi {
       Either.catchNonFatal(LocalDateTime.parse(str, localDateTimeFormatter)).leftMap(_.getMessage)
     })
 
+    implicit val zonedDateTimeEncoder: Encoder[ZonedDateTime] = Encoder.encodeString.contramap[ZonedDateTime](_.format(localDateTimeFormatter))
+    implicit val zonedDateTimeDecoder: Decoder[ZonedDateTime] = Decoder.decodeString.emap[ZonedDateTime](str => {
+      Either.catchNonFatal(LocalDateTime.parse(str, localDateTimeFormatter).atZone(utc0Zone)).leftMap(_.getMessage)
+    })
+
     implicit val instantEncoder: Encoder[Instant] = Encoder.encodeLong.contramap[Instant](_.toEpochMilli)
-    implicit val instantDecoder: Decoder[Instant] = Decoder.decodeLong.map(Instant.ofEpochMilli)
+    implicit val instantDecoder: Decoder[Instant] = Decoder.decodeLong.map(Instant.ofEpochSecond)
 
     implicit val bigDecimalMapKeyDecoder: KeyDecoder[BigDecimal] = KeyDecoder.decodeKeyString.map(str => BigDecimal(str))
     implicit val bigDecimalMapKeyEncoder: KeyEncoder[BigDecimal] = KeyEncoder.encodeKeyString.contramap(_.toString)

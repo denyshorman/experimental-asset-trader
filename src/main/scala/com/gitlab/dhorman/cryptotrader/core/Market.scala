@@ -98,48 +98,27 @@ case class Market(baseCurrency: Currency, quoteCurrency: Currency) {
     fromAmount: Amount,
     makerFeeMultiplier: BigDecimal,
     orderBook: OrderBook,
-    lastTrades: List[Trade],
+    stat: TradeStatOrder,
   ): Option[Market.DelayedOrder] = {
     for {
       fromCurrency <- other(targetCurrency)
       orderTpe <- orderType(targetCurrency)
     } yield {
-      orderTpe match {
-        case OrderType.Buy =>
-          val subMarket = orderBook.bids
-          val basePrice = subMarket.head._1.cut8add1
-          val quoteAmount = fromAmount / basePrice
-          val toAmount = quoteAmount * makerFeeMultiplier
-          val avgWaitTimeSec = 60 // TODO: calc avg time
+      val subMarket = if (orderTpe == OrderType.Buy) orderBook.bids else orderBook.asks
+      val basePrice = subMarket.head._1.cut8add1
+      val quoteAmount = if (orderTpe == OrderType.Buy) fromAmount / basePrice else fromAmount
+      val toAmount = if (orderTpe == OrderType.Buy) quoteAmount * makerFeeMultiplier else quoteAmount * basePrice * makerFeeMultiplier
 
-          Market.DelayedOrder(
-            fromCurrency,
-            targetCurrency,
-            fromAmount,
-            basePrice,
-            quoteAmount,
-            toAmount,
-            orderTpe,
-            avgWaitTimeSec,
-          )
-        case OrderType.Sell =>
-          val subMarket = orderBook.asks
-          val basePrice = subMarket.head._1.cut8add1
-          val quoteAmount = fromAmount
-          val toAmount = quoteAmount * basePrice * makerFeeMultiplier
-          val avgWaitTimeSec = 60 // TODO: calc avg time
-
-          Market.DelayedOrder(
-            fromCurrency,
-            targetCurrency,
-            fromAmount,
-            basePrice,
-            quoteAmount,
-            toAmount,
-            orderTpe,
-            avgWaitTimeSec,
-          )
-      }
+      Market.DelayedOrder(
+        fromCurrency,
+        targetCurrency,
+        fromAmount,
+        basePrice,
+        quoteAmount,
+        toAmount,
+        orderTpe,
+        stat,
+      )
     }
   }
 
@@ -245,6 +224,6 @@ object Market {
     quoteAmount: Amount,
     toAmount: Amount,
     orderTpe: OrderType,
-    avgWaitTimeSec: Long,
+    stat: TradeStatOrder,
   )
 }
