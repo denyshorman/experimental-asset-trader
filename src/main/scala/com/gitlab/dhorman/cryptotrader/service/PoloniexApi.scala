@@ -5,7 +5,7 @@ import java.time.format.DateTimeFormatter
 
 import cats.syntax.either._
 import com.gitlab.dhorman.cryptotrader.core._
-import com.gitlab.dhorman.cryptotrader.core.PriceUtil._
+import com.gitlab.dhorman.cryptotrader.core.Prices._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.Codecs._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi.ErrorMsgPattern._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
@@ -888,12 +888,12 @@ object PoloniexApi {
   }
 
   final case class OrderBookTrade(
-    tradeId: Long,
+    id: Long,
     orderType: OrderType,
     price: Price,
     amount: Amount,
     timestamp: Instant,
-  ) extends Trade with OrderBookNotification
+  ) extends OrderBookNotification
 
   object OrderBookTrade {
     private[PoloniexApi] type ArrayDecoder = (String, Long, OrderType, Price, Amount, Instant)

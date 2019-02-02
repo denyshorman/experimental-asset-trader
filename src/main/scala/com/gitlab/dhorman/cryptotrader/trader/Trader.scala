@@ -5,12 +5,10 @@ import java.time.{Instant, LocalDateTime}
 import com.gitlab.dhorman.cryptotrader.core._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
-import com.gitlab.dhorman.cryptotrader.trader.Trader.{MarketPathGenerator, OrderPlan}
+import com.gitlab.dhorman.cryptotrader.trader.Trader.OrderPlan
 import com.typesafe.scalalogging.Logger
 import reactor.core.publisher.{FluxSink, ReplayProcessor}
 import reactor.core.scala.publisher.{Flux, FluxProcessor}
-
-import scala.collection.mutable
 
 class Trader(private val poloniexApi: PoloniexApi) {
   private val logger = Logger[Trader]
@@ -83,8 +81,8 @@ class Trader(private val poloniexApi: PoloniexApi) {
   }
 
   object data {
-    type MarketIntMap = mutable.Map[MarketId, Market]
-    type MarketStringMap = mutable.Map[Market, MarketId]
+    type MarketIntMap = Map[MarketId, Market]
+    type MarketStringMap = Map[Market, MarketId]
     type MarketData = (MarketIntMap, MarketStringMap)
     type OrderBookData = (Market, MarketId, PriceAggregatedBook, OrderBookNotification)
     type OrderBookDataMap = Map[MarketId, Flux[OrderBookData]]
@@ -92,59 +90,66 @@ class Trader(private val poloniexApi: PoloniexApi) {
     val currencies: Flux[(Map[Currency, CurrencyDetails], Map[Int, Currency])] = {
       raw.currencies.map(curr => {
         (curr, curr.map(kv => (kv._2.id, kv._1)))
-      }).replay(1).refCount()
+      }).cache(1)
     }
 
-    val balances: Flux[mutable.Map[Currency, BigDecimal]] = {
-      val balancesStream = raw.balances.map(b => mutable.Map(b.toSeq: _*)).replay(1).refCount()
-      val balanceChangesStream = raw.accountNotifications.filter(_.isInstanceOf[BalanceUpdate]).map(_.asInstanceOf[BalanceUpdate])
+    val balances: Flux[Map[Currency, Amount]] = {
+      raw.balances.switchMap { balanceInfo =>
+        currencies.switchMap { curr =>
+          raw.accountNotifications
+            .filter(_.isInstanceOf[BalanceUpdate])
+            .map(_.asInstanceOf[BalanceUpdate])
+            .scan(balanceInfo, (allBalances: Map[Currency, Amount], balanceUpdate: BalanceUpdate) => {
+              if (balanceUpdate.walletType == WalletType.Exchange) {
+                val currAmountOption = curr._2
+                  .get(balanceUpdate.currencyId)
+                  .flatMap { currencyId =>
+                    allBalances.get(currencyId).map(balance => (currencyId, balance))
+                  }
 
-      val updatedBalance = balanceChangesStream.withLatestFrom(balancesStream, (n, b: mutable.Map[Currency, BigDecimal]) => (n, b)).concatMap { case (balanceUpdate, allBalances) => currencies.take(1).map(curr => {
-        logger.info(s"Account info: $balanceUpdate")
+                if (currAmountOption.isDefined) {
+                  val (currencyId, balance) = currAmountOption.get
+                  val newBalance = balance + balanceUpdate.amount
 
-        if (balanceUpdate.walletType == WalletType.Exchange) {
-          val dataOpt = curr._2.get(balanceUpdate.currencyId).flatMap(currencyId => {
-            allBalances.get(currencyId).map(balance => (currencyId, balance))
-          })
+                  allBalances.updated(currencyId, newBalance)
+                } else {
+                  logger.warn("Balances and currencies can be not in sync. Fetch new balances and currencies.")
+                  trigger.currencies.onNext(())
+                  trigger.balances.onNext(())
 
-          if (dataOpt.isDefined) {
-            val (currencyId, balance) = dataOpt.get
-            val newBalance = balance + balanceUpdate.amount
-            allBalances(currencyId) = newBalance
-          } else {
-            logger.warn("Balances and currencies can be not in sync. Fetch new balances and currencies.")
-            trigger.currencies.onNext(())
-            trigger.balances.onNext(())
-          }
+                  allBalances
+                }
+              } else {
+                allBalances
+              }
+            }
+          )
         }
-
-        allBalances
-      })}
-
-      Flux.merge(balancesStream, updatedBalance).replay(1).refCount()
+      }.cache(1)
     }
 
     val markets: Flux[MarketData] = {
-      raw.ticker.map(tickers => {
-        val marketIntStringMap: MarketIntMap = mutable.Map()
-        val marketStringIntMap: MarketStringMap = mutable.Map()
+      raw.ticker.map { tickers =>
+        var marketIntStringMap = Map[MarketId, Market]()
+        var marketStringIntMap = Map[Market, MarketId]()
 
         // TODO: Review frozen filter
-        tickers.view.filter(!_._2.isFrozen).foreach(tick => {
-          marketIntStringMap.put(tick._2.id, tick._1)
-          marketStringIntMap.put(tick._1, tick._2.id)
+        tickers.view.filter(!_._2.isFrozen)
+        .foreach(tick => {
+          marketIntStringMap = marketIntStringMap.updated(tick._2.id, tick._1)
+          marketStringIntMap = marketStringIntMap.updated(tick._1, tick._2.id)
         })
 
         (marketIntStringMap, marketStringIntMap)
-      }).doOnNext(markets => {
+      }.doOnNext { markets =>
         logger.info("Markets fetched")
         logger.whenDebugEnabled {
           logger.debug(markets.toString)
         }
-      }).cache(1)
+      }.cache(1)
     }
 
-    val tradesStat: Flux[mutable.Map[MarketId, Flux[TradeStat]]] = {
+    val tradesStat: Flux[Map[MarketId, Flux[TradeStat]]] = {
       import Trader.TradeStatModels._
 
       val BufferLimit = 100
@@ -246,83 +251,95 @@ class Trader(private val poloniexApi: PoloniexApi) {
       }
     }
 
-    val openOrders: Flux[mutable.Set[Trader.OpenOrder]] = {
-      val initialOrdersStream: Flux[mutable.Set[Trader.OpenOrder]] = raw.openOrders.map(orders => {
-        orders.flatMap(kv => kv._2.view.map(o => new Trader.OpenOrder(o.id, o.tpe, kv._1, o.price, o.amount))).to[mutable.Set]
-      }).replay(1).refCount()
+    val openOrders: Flux[Map[Long, Trader.OpenOrder]] = {
+      val initialOrdersStream: Flux[Map[Long, Trader.OpenOrder]] = raw.openOrders.map { marketOrdersMap =>
+        marketOrdersMap.flatMap {case (market, ordersSet) =>
+          ordersSet.map(o => new Trader.OpenOrder(o.id, o.tpe, market, o.price, o.amount))
+        }.map {order =>
+          (order.id, order)
+        }.toMap
+      }
 
       val limitOrderCreatedStream = poloniexApi.accountNotificationStream.filter(_.isInstanceOf[LimitOrderCreated]).map(_.asInstanceOf[LimitOrderCreated])
       val orderUpdateStream = poloniexApi.accountNotificationStream.filter(_.isInstanceOf[OrderUpdate]).map(_.asInstanceOf[OrderUpdate])
 
-      val ordersLimitOrderUpdate = limitOrderCreatedStream.withLatestFrom(initialOrdersStream, (limitOrderCreated, orders: mutable.Set[Trader.OpenOrder]) => {
-        logger.info(s"Account info: $limitOrderCreated")
+      val orderUpdates = Flux.merge[AccountNotification](limitOrderCreatedStream, orderUpdateStream)
 
-        markets.take(1).map(market => {
-          val marketId = market._1.get(limitOrderCreated.marketId)
+      Flux.combineLatest[Map[Long, Trader.OpenOrder], MarketData, Flux[Map[Long, Trader.OpenOrder]]](initialOrdersStream, markets, (initOrders, marketsInfo) => {
+        orderUpdates.scan(initOrders, (orders: Map[Long, Trader.OpenOrder], update: AccountNotification) => {
+          update match {
+            case limitOrderCreated: LimitOrderCreated =>
+              logger.info(s"Account info: $limitOrderCreated")
 
-          if (marketId.isDefined) {
-            val newOrder = new Trader.OpenOrder(
-              limitOrderCreated.orderNumber,
-              limitOrderCreated.orderType,
-              marketId.get,
-              limitOrderCreated.rate,
-              limitOrderCreated.amount,
-            )
+              val marketId = marketsInfo._1.get(limitOrderCreated.marketId)
 
-            orders += newOrder
-          } else {
-            logger.warn("Market id not found in local cache. Fetching markets from API...")
-            trigger.ticker.onNext(())
+              if (marketId.isDefined) {
+                val newOrder = new Trader.OpenOrder(
+                  limitOrderCreated.orderNumber,
+                  limitOrderCreated.orderType,
+                  marketId.get,
+                  limitOrderCreated.rate,
+                  limitOrderCreated.amount,
+                )
+
+                orders.updated(newOrder.id, newOrder)
+              } else {
+                logger.warn("Market id not found in local cache. Fetching markets from API...")
+                trigger.ticker.onNext(())
+                orders
+              }
+            case orderUpdate: OrderUpdate =>
+              logger.info(s"Account info: $orderUpdate")
+
+              if (orderUpdate.newAmount == 0) {
+                orders - orderUpdate.orderId
+              } else {
+                val order = orders.get(orderUpdate.orderId)
+
+                if (order.isDefined) {
+                  val oldOrder = order.get
+                  val newOrder = new Trader.OpenOrder(
+                    oldOrder.id,
+                    oldOrder.tpe,
+                    oldOrder.market,
+                    oldOrder.rate,
+                    orderUpdate.newAmount,
+                  )
+
+                  orders.updated(oldOrder.id, newOrder)
+                } else {
+                  logger.warn("Order not found in local cache. Fetch orders from the server.")
+                  trigger.openOrders.onNext(())
+                  orders
+                }
+              }
+            case other =>
+              logger.warn(s"Received not recognized order update event: $other")
+              orders
           }
-
-          orders
         })
-      }).concatMap(o => o)
-
-      val ordersUpdate = orderUpdateStream.withLatestFrom(initialOrdersStream, (orderUpdate, orders: mutable.Set[Trader.OpenOrder]) => {
-        logger.info(s"Account info: $orderUpdate")
-
-        if (orderUpdate.newAmount == 0) {
-          orders.remove(new Trader.OpenOrder(orderUpdate.orderId))
-        } else {
-          val order = orders.view.find(_.id == orderUpdate.orderId)
-
-          if (order.isDefined) {
-            order.get.amount = orderUpdate.newAmount
-          } else {
-            logger.warn("Order not found in local cache. Fetch orders from the server.")
-            trigger.openOrders.onNext(())
-          }
-        }
-
-        orders
-      })
-
-      Flux.merge(initialOrdersStream, ordersLimitOrderUpdate, ordersUpdate).replay(1).refCount()
+      }).concatMap(identity).cache(1)
     }
 
-    val tickers: Flux[mutable.Map[Market, Ticker]] = {
-      val allTickersStream = raw.ticker.map(allTickers => mutable.Map(allTickers.toSeq: _*)).replay(1).refCount()
+    val tickers: Flux[Map[Market, Ticker]] = {
+      markets.switchMap { marketInfo =>
+        raw.ticker.switchMap { allTickers =>
+          raw.tickerStream.scan(allTickers, (tickers: Map[Market, Ticker], ticker: Ticker) => {
+            val marketId = marketInfo._1.get(ticker.id)
 
-      val tickersUpdate = raw.tickerStream.withLatestFrom(allTickersStream, (ticker, allTickers: mutable.Map[Market, Ticker]) => {
-        markets.take(1).map(market => {
-          val marketId = market._1.get(ticker.id)
-
-          if (marketId.isDefined) {
-            allTickers.put(marketId.get, ticker)
-            logger.whenTraceEnabled {
-              logger.trace(ticker.toString)
+            if (marketId.isDefined) {
+              logger.whenTraceEnabled {
+                logger.trace(ticker.toString)
+              }
+              tickers.updated(marketId.get, ticker)
+            } else {
+              logger.warn("Market not found in local market cache. Updating market cache...")
+              trigger.ticker.onNext(())
+              allTickers
             }
-          } else {
-            logger.warn("Market not found in local market cache. Updating market cache...")
-            trigger.ticker.onNext(())
-          }
-
-          allTickers
-        })
-      }).concatMap(identity)
-
-      Flux.merge(allTickersStream, tickersUpdate).replay(1).refCount()
+          })
+        }
+      }.cache(1)
     }
 
     val orderBooks: Flux[OrderBookDataMap] = {
@@ -526,8 +543,8 @@ object Trader {
     val id: Long,
     val tpe: OrderType,
     val market: Market,
-    val rate: BigDecimal,
-    var amount: BigDecimal,
+    val rate: Price,
+    val amount: Amount,
   ) {
 
     def this(id: Long) {
@@ -544,6 +561,9 @@ object Trader {
     override def toString = s"OpenOrder($id, $tpe, $market, $rate, $amount)"
   }
 
+
+
+  // TODO: Valuation, ShortPath, and Order Plan was replaced by modern Orders API
   case class Valuation(shortPath: ShortPath, longPath: List[Market], k: BigDecimal)
 
   case class ShortPath(fromCurrency: Currency, toCurrency: Currency) {
@@ -641,79 +661,6 @@ object Trader {
     }
   }
 
-  class MarketPathGenerator(availableMarkets: Iterable[Market]) {
-    import MarketPathGenerator._
-
-    private val allPaths = availableMarkets
-      .view
-      .flatMap(m => Set(((m.b, m.q), m), ((m.q, m.b), m)))
-      .groupBy(p => p._1._1)
-      .map(x => (x._1, x._2.toSet))
-
-    def generate(targetPath: TargetPath): Set[Path] = {
-      f(targetPath).filter(_.nonEmpty)
-    }
-
-    def generateAll(targetPath: TargetPath): Map[TargetPath, Set[Path]] = {
-      val (a,b) = targetPath
-      val p = Array((a,a), (a,b), (b,a), (b,b))
-
-      Map(
-        p(0) -> generate(p(0)),
-        p(1) -> generate(p(1)),
-        p(2) -> generate(p(2)),
-        p(3) -> generate(p(3)),
-      )
-    }
-
-    private def f1(targetPath: TargetPath): Set[Path] = {
-      allPaths(targetPath._1)
-        .find(_._1._2 == targetPath._2)
-        .map(m => Set(List(m._2)))
-        .getOrElse({Set(List())})
-    }
-
-    private def f2(targetPath: TargetPath): Iterable[Path] = {
-      // (a->x - y->b)
-      val (p,q) = targetPath
-      for {
-        ((_,x),m1) <- allPaths(p).view.filter(_._1._2 != q)
-        (_,m2) <- allPaths(x).view.filter(_._1._2 == q)
-      } yield List(m1,m2)
-    }
-
-    private def f3(targetPath: TargetPath): Iterable[Path] = {
-      // (a->x - y->z - k->b)
-      val (p,q) = targetPath
-      for {
-        ((_,x),m1) <- allPaths(p).view.filter(_._1._2 != q)
-        ((_,z),m2) <- allPaths(x).view.filter(h => h._1._2 != p && h._1._2 != q)
-        (_,m3) <- allPaths(z).view.filter(_._1._2 == q)
-      } yield List(m1,m2,m3)
-    }
-
-    private def f4(targetPath: TargetPath): Iterable[Path] = {
-      // (a->x - y->z - i->j - k->b)
-      val (p,q) = targetPath
-      for {
-        ((_,x),m1) <- allPaths(p).view.filter(_._1._2 != q)
-        ((y,z),m2) <- allPaths(x).view.filter(h => h._1._2 != p && h._1._2 != q)
-        ((_,j),m3) <- allPaths(z).view.filter(h => h._1._2 != p && h._1._2 != q && h._1._2 != y)
-        (_,m4) <- allPaths(j).view.filter(_._1._2 == q)
-      } yield List(m1,m2,m3,m4)
-    }
-
-    private def f(targetPath: TargetPath): Set[Path] = {
-      f1(targetPath) ++ f2(targetPath) ++ f3(targetPath) ++ f4(targetPath)
-    }
-  }
-  
-  object MarketPathGenerator {
-    type TargetPath = (Currency, Currency)
-    type Path = List[Market]
-  }
-
-
   object TradeStatModels {
     case class SimpleTrade(
       price: Price,
@@ -788,7 +735,7 @@ object Trader {
           stat.lastTranTs,
         )
       }
-      
+
       def from0() : Trade2State = {
         Trade2State(
           ttwSumMs = 0,

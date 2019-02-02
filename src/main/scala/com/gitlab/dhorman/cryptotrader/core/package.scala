@@ -53,13 +53,6 @@ package object core {
     bids: SubOrderBook = TreeMap()(implicitly[Ordering[Price]].reverse),
   )
 
-  trait Trade {
-    val orderType: OrderType
-    val price: Price
-    val amount: Amount
-    val timestamp: Instant
-  }
-
   case class FeeMultiplier(maker: BigDecimal, taker: BigDecimal)
 
   object FeeMultiplier {

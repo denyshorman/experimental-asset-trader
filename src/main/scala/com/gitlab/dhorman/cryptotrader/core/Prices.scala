@@ -2,7 +2,7 @@ package com.gitlab.dhorman.cryptotrader.core
 
 import scala.math.BigDecimal.RoundingMode
 
-object PriceUtil {
+object Prices {
   private final val _8_1 = BigDecimal(0.00000001)
   private final val _1 = BigDecimal(1)
 

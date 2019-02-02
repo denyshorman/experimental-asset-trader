@@ -19,7 +19,8 @@ class MarketTest extends FlatSpec {
       )(implicitly[Ordering[Price]].reverse),
     )
 
-    val result = market.getInstantOrder(
+    val result = Orders.getInstantOrder(
+      market,
       "BTC",
       100,
       0.998,
@@ -43,7 +44,8 @@ class MarketTest extends FlatSpec {
       )(implicitly[Ordering[Price]].reverse),
     )
 
-    val result = market.getInstantOrder(
+    val result = Orders.getInstantOrder(
+      market,
       "USDT",
       1.2,
       0.998,
