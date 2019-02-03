@@ -3,13 +3,12 @@ package com.gitlab.dhorman.cryptotrader.trader
 import java.time.Instant
 
 import com.gitlab.dhorman.cryptotrader.core.TradeStatOrder
-import com.gitlab.dhorman.cryptotrader.trader.TradeStatTest._
+import com.gitlab.dhorman.cryptotrader.util.BigDecimalUtil._
 import com.gitlab.dhorman.cryptotrader.trader.Trader.TradeStatModels.{SimpleTrade, Trade2State}
 import io.circe.generic.auto._
 import io.circe.syntax._
 import org.scalatest.FlatSpec
 
-import scala.math.BigDecimal.RoundingMode
 import scala.util.Random
 
 class TradeStatTest extends FlatSpec {
@@ -223,11 +222,5 @@ class TradeStatTest extends FlatSpec {
     println(actual.asJson.spaces2)
 
     assert(expected, actual, checkMinMax = false)
-  }
-}
-
-object TradeStatTest {
-  implicit final class BigDecimalUtil(val num: BigDecimal) extends AnyVal {
-    def cut8: BigDecimal = num.setScale(8, RoundingMode.HALF_DOWN)
   }
 }

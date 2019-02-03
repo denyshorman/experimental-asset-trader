@@ -52,12 +52,25 @@ object Orders {
       fromCurrency <- market.other(targetCurrency)
       orderTpe <- market.orderType(targetCurrency)
     } yield {
-      val subMarket = if (orderTpe == OrderType.Buy) orderBook.bids else orderBook.asks
-      val basePrice = subMarket.head._1.cut8add1
-      val quoteAmount = if (orderTpe == OrderType.Buy) fromAmount / basePrice else fromAmount
-      val toAmount =
-        if (orderTpe == OrderType.Buy) quoteAmount * makerFeeMultiplier
-        else quoteAmount * basePrice * makerFeeMultiplier
+      var subMarket: Map[Price, Amount] = null
+      var basePrice: Price = null
+      var quoteAmount: Amount = null
+      var toAmount: Amount = null
+      var orderMultiplier: BigDecimal = null
+
+      if (orderTpe == OrderType.Buy) {
+        subMarket = orderBook.bids
+        basePrice = subMarket.head._1.cut8add1
+        quoteAmount = fromAmount / basePrice
+        toAmount = quoteAmount * makerFeeMultiplier
+        orderMultiplier = makerFeeMultiplier / basePrice
+      } else {
+        subMarket = orderBook.asks
+        basePrice = subMarket.head._1.cut8add1
+        quoteAmount = fromAmount
+        toAmount = quoteAmount * basePrice * makerFeeMultiplier
+        orderMultiplier = makerFeeMultiplier * basePrice
+      }
 
       DelayedOrder(
         market,
@@ -68,6 +81,54 @@ object Orders {
         quoteAmount,
         toAmount,
         orderTpe,
+        orderMultiplier,
+        stat,
+      )
+    }
+  }
+
+  def getDelayedOrderReverse(
+    market: Market,
+    targetCurrency: Currency,
+    toAmount: Amount,
+    makerFeeMultiplier: BigDecimal,
+    orderBook: OrderBook,
+    stat: TradeStatOrder,
+  ): Option[DelayedOrder] = {
+    for {
+      fromCurrency <- market.other(targetCurrency)
+      orderTpe <- market.orderType(targetCurrency)
+    } yield {
+      var subMarket: Map[Price, Amount] = null
+      var basePrice: Price = null
+      var quoteAmount: Amount = null
+      var fromAmount: Amount = null
+      var orderMultiplier: BigDecimal = null
+
+      if (orderTpe == OrderType.Buy) {
+        subMarket = orderBook.bids
+        basePrice = subMarket.head._1.cut8add1
+        quoteAmount = toAmount / makerFeeMultiplier
+        fromAmount = quoteAmount * basePrice
+        orderMultiplier = makerFeeMultiplier / basePrice
+      } else {
+        subMarket = orderBook.asks
+        basePrice = subMarket.head._1.cut8add1
+        quoteAmount = toAmount / (basePrice * makerFeeMultiplier)
+        fromAmount = quoteAmount
+        orderMultiplier = makerFeeMultiplier * basePrice
+      }
+
+      DelayedOrder(
+        market,
+        fromCurrency,
+        targetCurrency,
+        fromAmount,
+        basePrice,
+        quoteAmount,
+        toAmount,
+        orderTpe,
+        orderMultiplier,
         stat,
       )
     }
@@ -155,6 +216,7 @@ object Orders {
     quoteAmount: Amount,
     toAmount: Amount,
     orderTpe: OrderType,
+    orderMultiplier: BigDecimal,
     stat: TradeStatOrder,
   )
 
