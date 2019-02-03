@@ -3,8 +3,7 @@ package com.gitlab.dhorman.cryptotrader.core
 import com.gitlab.dhorman.cryptotrader.core.Prices._
 import io.circe.Encoder
 import io.circe.generic.semiauto.deriveEncoder
-
-import scala.annotation.tailrec
+import scala.util.control.Breaks._
 
 object Orders {
   def getInstantOrder(
@@ -18,13 +17,46 @@ object Orders {
       fromCurrency <- market.other(targetCurrency)
       orderTpe <- market.orderType(targetCurrency)
     } yield {
-      val (unusedFromCurrencyAmount, targetCurrencyAmount, trades) = getInstantTrades(
-        market = market,
-        fromAmount = initCurrencyAmount,
-        subBook = getInstantSubOrderBook(orderBook, orderTpe),
-        orderTpe = orderTpe,
-        takerFeeMultiplier = takerFeeMultiplier,
-      )
+      var trades: List[InstantOrder.Trade] = Nil
+      var unusedFromCurrencyAmount: Amount = initCurrencyAmount
+      var targetCurrencyAmount: BigDecimal = 0
+
+      if (orderTpe == OrderType.Buy) {
+        breakable {
+          for ((basePrice, quoteAmount) <- orderBook.asks) {
+            val availableAmount = quoteAmount * basePrice
+
+            if (unusedFromCurrencyAmount <= availableAmount) {
+              targetCurrencyAmount += unusedFromCurrencyAmount / basePrice
+              val tradeAmount = unusedFromCurrencyAmount / basePrice
+              trades = InstantOrder.Trade(basePrice, tradeAmount) :: trades
+              unusedFromCurrencyAmount = 0
+              break
+            } else {
+              unusedFromCurrencyAmount -= availableAmount
+              targetCurrencyAmount += availableAmount / basePrice
+              trades = InstantOrder.Trade(basePrice, quoteAmount) :: trades
+            }
+          }
+        }
+      } else {
+        breakable {
+          for ((basePrice, quoteAmount) <- orderBook.bids) {
+            if (unusedFromCurrencyAmount <= quoteAmount) {
+              targetCurrencyAmount += unusedFromCurrencyAmount * basePrice
+              trades = InstantOrder.Trade(basePrice, unusedFromCurrencyAmount) :: trades
+              unusedFromCurrencyAmount = 0
+              break
+            } else {
+              unusedFromCurrencyAmount -= quoteAmount
+              targetCurrencyAmount += quoteAmount * basePrice
+              trades = InstantOrder.Trade(basePrice, quoteAmount) :: trades
+            }
+          }
+        }
+      }
+
+      targetCurrencyAmount *= takerFeeMultiplier
 
       InstantOrder(
         market,
@@ -130,67 +162,6 @@ object Orders {
         orderTpe,
         orderMultiplier,
         stat,
-      )
-    }
-  }
-
-  private def getInstantSubOrderBook(orderBook: OrderBook, orderTpe: OrderType): SubOrderBook = {
-    orderTpe match {
-      case OrderType.Buy => orderBook.asks
-      case OrderType.Sell => orderBook.bids
-    }
-  }
-
-  private def buyOrSell(
-    orderTpe: OrderType,
-    price: Price,
-    amount: Amount,
-    feeMultiplier: BigDecimal,
-  ): BigDecimal = orderTpe match {
-    case OrderType.Buy => (amount / price) * feeMultiplier
-    case OrderType.Sell => (amount * price) * feeMultiplier
-  }
-
-  @tailrec
-  private def getInstantTrades(
-    market: Market,
-    fromAmount: Amount,
-    targetAmount: Amount = 0,
-    subBook: SubOrderBook,
-    orderTpe: OrderType,
-    takerFeeMultiplier: BigDecimal,
-    trades: List[InstantOrder.Trade] = Nil
-  ): (Amount, Amount, List[InstantOrder.Trade]) = {
-    if (subBook.isEmpty) return (fromAmount, targetAmount, trades)
-    val (basePrice, quoteAmount) = subBook.head
-
-    val availableAmount = orderTpe match {
-      case OrderType.Buy => quoteAmount * basePrice
-      case OrderType.Sell => quoteAmount
-    }
-
-    if (fromAmount <= availableAmount) {
-      val fromBalance = 0
-      val targetBalance = targetAmount + buyOrSell(orderTpe, basePrice, fromAmount, takerFeeMultiplier)
-      val tradeAmount = orderTpe match {
-        case OrderType.Buy => fromAmount / basePrice
-        case OrderType.Sell => fromAmount
-      }
-      val newTrades = InstantOrder.Trade(basePrice, tradeAmount) :: trades
-      (fromBalance, targetBalance, newTrades)
-    } else {
-      val fromBalance = fromAmount - availableAmount
-      val toBalance = targetAmount + buyOrSell(orderTpe, basePrice, availableAmount, takerFeeMultiplier)
-      val trade = InstantOrder.Trade(basePrice, quoteAmount)
-
-      getInstantTrades(
-        market,
-        fromBalance,
-        toBalance,
-        subBook.tail,
-        orderTpe,
-        takerFeeMultiplier,
-        trade :: trades
       )
     }
   }

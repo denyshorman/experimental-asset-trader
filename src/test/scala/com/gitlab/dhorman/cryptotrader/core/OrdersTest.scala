@@ -12,7 +12,7 @@ import scala.math.BigDecimal.RoundingMode
 class OrdersTest extends FlatSpec {
   private val logger = Logger[OrdersTest]
 
-  "Orders" should "generate correct trades USDT => BTC" in {
+  "Orders getInstantOrder BUY" should "generate correct trades USDT => BTC" in {
     val market: Market = "USDT_BTC"
 
     val orderBook = OrderBook(
@@ -26,18 +26,43 @@ class OrdersTest extends FlatSpec {
       )(implicitly[Ordering[Price]].reverse),
     )
 
-    val result = Orders.getInstantOrder(
+    val fromAmount = 100
+    val toAmount = 1.1976
+    val fee = 0.998
+
+    val actual = Orders.getInstantOrder(
       market,
-      "BTC",
-      100,
-      0.998,
+      market.quoteCurrency,
+      fromAmount,
+      fee,
       orderBook
+    ).get
+
+    val expected = Orders.InstantOrder(
+      market,
+      market.baseCurrency,
+      market.quoteCurrency,
+      fromAmount,
+      toAmount,
+      OrderType.Buy,
+      38,
+      fee,
+      List(
+        Orders.InstantOrder.Trade(60, 0.2),
+        Orders.InstantOrder.Trade(50, 1),
+      )
     )
 
-    println(result.get.asJson.spaces2)
+    logger.info(
+      s"""
+         |USDT -> BTC
+         |${actual.asJson.spaces2}
+       """.stripMargin)
+
+    assert(actual == expected)
   }
 
-  "Orders" should "generate correct trades BTC => USDT" in {
+  "Orders getInstantOrder SELL" should "generate correct trades BTC => USDT" in {
     val market: Market = "USDT_BTC"
 
     val orderBook = OrderBook(
@@ -51,15 +76,40 @@ class OrdersTest extends FlatSpec {
       )(implicitly[Ordering[Price]].reverse),
     )
 
-    val result = Orders.getInstantOrder(
+    val fromAmount = 1.2
+    val toAmount = 45.9080
+    val fee = 0.998
+
+    val actual = Orders.getInstantOrder(
       market,
-      "USDT",
-      1.2,
-      0.998,
+      market.baseCurrency,
+      fromAmount,
+      fee,
       orderBook
+    ).get
+
+    val expected = Orders.InstantOrder(
+      market,
+      market.quoteCurrency,
+      market.baseCurrency,
+      fromAmount,
+      toAmount,
+      OrderType.Sell,
+      0,
+      fee,
+      List(
+        Orders.InstantOrder.Trade(30, 0.2),
+        Orders.InstantOrder.Trade(40, 1),
+      )
     )
 
-    println(result.get.asJson.spaces2)
+    logger.info(
+      s"""
+         |BTC -> USDT
+         |${actual.asJson.spaces2}
+       """.stripMargin)
+
+    assert(actual == expected)
   }
 
   "Orders getDelayedOrderReverse BUY" should "generate correct fromAmount and toAmount amounts" in {
