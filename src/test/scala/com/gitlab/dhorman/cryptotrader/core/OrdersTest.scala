@@ -45,6 +45,8 @@ class OrdersTest extends FlatSpec {
       fromAmount,
       toAmount,
       OrderType.Buy,
+      0.01996,
+      0.011976,
       38,
       fee,
       List(
@@ -76,8 +78,8 @@ class OrdersTest extends FlatSpec {
       )(implicitly[Ordering[Price]].reverse),
     )
 
-    val fromAmount = 1.2
-    val toAmount = 45.9080
+    val fromAmount = BigDecimal(1.2)
+    val toAmount = BigDecimal(45.9080)
     val fee = 0.998
 
     val actual = Orders.getInstantOrder(
@@ -95,6 +97,8 @@ class OrdersTest extends FlatSpec {
       fromAmount,
       toAmount,
       OrderType.Sell,
+      39.920,
+      toAmount/fromAmount,
       0,
       fee,
       List(

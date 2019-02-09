@@ -20,6 +20,8 @@ object Orders {
       var trades: List[InstantOrder.Trade] = Nil
       var unusedFromCurrencyAmount: Amount = initCurrencyAmount
       var targetCurrencyAmount: BigDecimal = 0
+      var orderMultiplierSimple: BigDecimal = 0
+      var orderMultiplierAmount: BigDecimal = 0
 
       if (orderTpe == OrderType.Buy) {
         breakable {
@@ -39,6 +41,8 @@ object Orders {
             }
           }
         }
+
+        orderMultiplierSimple = orderBook.asks.headOption.map {case (price, _) => (1/price) * takerFeeMultiplier }.getOrElse {0}
       } else {
         breakable {
           for ((basePrice, quoteAmount) <- orderBook.bids) {
@@ -54,9 +58,12 @@ object Orders {
             }
           }
         }
+
+        orderMultiplierSimple = orderBook.bids.headOption.map {case (price, _) => price * takerFeeMultiplier}.getOrElse {0}
       }
 
       targetCurrencyAmount *= takerFeeMultiplier
+      orderMultiplierAmount = targetCurrencyAmount / initCurrencyAmount
 
       InstantOrder(
         market,
@@ -65,6 +72,8 @@ object Orders {
         initCurrencyAmount,
         targetCurrencyAmount,
         orderTpe,
+        orderMultiplierSimple,
+        orderMultiplierAmount,
         unusedFromCurrencyAmount,
         takerFeeMultiplier,
         trades,
@@ -166,6 +175,8 @@ object Orders {
     }
   }
 
+  sealed trait InstantDelayedOrder
+
   case class InstantOrder(
     market: Market,
     fromCurrency: Currency,
@@ -173,10 +184,12 @@ object Orders {
     fromCurrencyAmount: Amount,
     targetCurrencyAmount: Amount,
     orderType: OrderType,
+    orderMultiplierSimple: BigDecimal,
+    orderMultiplierAmount: BigDecimal,
     unusedFromCurrencyAmount: Amount,
     feeMultiplier: BigDecimal,
     trades: List[InstantOrder.Trade],
-  )
+  ) extends InstantDelayedOrder
 
   case class DelayedOrder(
     market: Market,
@@ -189,7 +202,7 @@ object Orders {
     orderTpe: OrderType,
     orderMultiplier: BigDecimal,
     stat: TradeStatOrder,
-  )
+  ) extends InstantDelayedOrder
 
   object InstantOrder {
     implicit val encoder: Encoder[InstantOrder] = deriveEncoder
