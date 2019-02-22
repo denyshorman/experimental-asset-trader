@@ -5,11 +5,7 @@ import java.util.concurrent.ConcurrentHashMap
 import com.gitlab.dhorman.cryptotrader.config.HttpServer.{Msg, ReqMsg, RespMsg}
 import com.gitlab.dhorman.cryptotrader.trader.Trader
 import com.typesafe.scalalogging.Logger
-import io.circe._
 import io.circe.generic.auto._
-import io.circe.generic.extras._
-import io.circe.generic.semiauto._
-import io.circe.optics.JsonPath._
 import io.circe.parser.parse
 import io.circe.syntax._
 import io.vertx.scala.core.http.ServerWebSocket
@@ -17,6 +13,7 @@ import io.vertx.scala.core.{Vertx, http}
 import io.vertx.scala.ext.web.Router
 import io.vertx.scala.ext.web.handler.{ErrorHandler, LoggerHandler, ResponseContentTypeHandler}
 import reactor.core.Disposable
+import reactor.core.scala.publisher.Flux
 import reactor.core.scheduler.Scheduler
 
 import scala.concurrent.duration._
@@ -46,11 +43,14 @@ class HttpServer(
       .map(data => RespMsg(Msg.Ticker, data))
       .map(_.asJson.noSpaces)
       .share(),
-    Msg.PriceMovement -> trader.indicators.priceMovement
-      .buffer(200 millis)
-      .map(data => RespMsg(Msg.PriceMovement, data))
+    Msg.Paths -> trader.indicators.paths
+      .cache(1)
+      .sampleFirst(30 seconds)
+      .onBackpressureLatest()
+      .concatMap(paths => Flux.fromIterable(paths).buffer(500), 1)
+      .map(data => RespMsg(Msg.Paths, data))
       .map(_.asJson.noSpaces)
-      .share()
+      .share(),
   )
 
   def webSocketHandler(ws: ServerWebSocket): Unit = {
@@ -80,14 +80,14 @@ class HttpServer(
                         })
 
                         map.put(Msg.Ticker, disposable)
-                      case Msg.PriceMovement =>
-                        val disposable = streams(Msg.PriceMovement).subscribe(json => {
+                      case Msg.Paths =>
+                        val disposable = streams(Msg.Paths).subscribe(json => {
                           Try{ws.writeTextMessage(json)}
                         }, e => {
                           logger.error(e.getMessage, e)
                         })
 
-                        map.put(Msg.PriceMovement, disposable)
+                        map.put(Msg.Paths, disposable)
                     }
                   case Msg.Unsubscribe =>
                     val dis = map.get(req.id)
@@ -130,6 +130,6 @@ object HttpServer {
     val Unsubscribe = 1
 
     val Ticker = 0
-    val PriceMovement = 1
+    val Paths = 2
   }
 }

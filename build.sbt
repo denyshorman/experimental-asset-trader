@@ -23,6 +23,7 @@ lazy val `crypto-trader` = (project in file("."))
       "-unchecked",
       "-language:postfixOps",
       "-language:implicitConversions",
+      "-language:dynamics",
     ),
     libraryDependencies ++= Seq(
       "io.vertx" %% "vertx-lang-scala" % vertxVersion,

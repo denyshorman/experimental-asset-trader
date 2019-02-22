@@ -48,10 +48,16 @@ package object core {
 
   type SubOrderBook = TreeMap[Price, Amount]
 
-  case class OrderBook(
-    asks: SubOrderBook = TreeMap(),
-    bids: SubOrderBook = TreeMap()(implicitly[Ordering[Price]].reverse),
+  // TODO: WTF Duplication ?
+  abstract class OrderBookAbstract (
+    val asks: SubOrderBook = TreeMap(),
+    val bids: SubOrderBook = TreeMap()(implicitly[Ordering[Price]].reverse),
   )
+
+  case class OrderBook(
+    override val asks: SubOrderBook = TreeMap(),
+    override val bids: SubOrderBook = TreeMap()(implicitly[Ordering[Price]].reverse),
+  ) extends OrderBookAbstract
 
   case class FeeMultiplier(maker: BigDecimal, taker: BigDecimal)
 

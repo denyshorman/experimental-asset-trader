@@ -1,7 +1,8 @@
 package com.gitlab.dhorman.cryptotrader.util
 
 import org.reactivestreams.Publisher
-import reactor.core.scala.publisher.Flux
+import reactor.core.publisher.ReplayProcessor
+import reactor.core.scala.publisher.{Flux, FluxProcessor}
 import reactor.retry.Retry
 
 import scala.compat.java8.DurationConverters._
@@ -20,4 +21,14 @@ object ReactorUtil {
 
   implicit def convert(d: scala.concurrent.duration.FiniteDuration): java.time.Duration = d.toJava
   implicit def convert(d: java.time.Duration): scala.concurrent.duration.FiniteDuration = d.toScala
+
+  def createReplayProcessor[T](defaultValue: Option[T] = None): FluxProcessor[T, T] = {
+    val p = if (defaultValue.isDefined) {
+      ReplayProcessor.cacheLastOrDefault(defaultValue.get)
+    } else {
+      ReplayProcessor.cacheLast[T]()
+    }
+
+    FluxProcessor.wrap(p, p)
+  }
 }

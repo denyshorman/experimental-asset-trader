@@ -1,14 +1,19 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import java.time.{Instant, LocalDateTime}
+import java.time.Instant
 
+import com.gitlab.dhorman.cryptotrader.core.MarketPathGenerator.{ExhaustivePath, PathOrderType, TargetPath}
+import com.gitlab.dhorman.cryptotrader.core.Orders.InstantDelayedOrder
+import com.gitlab.dhorman.cryptotrader.core.Prices._
 import com.gitlab.dhorman.cryptotrader.core._
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.PoloniexApi._
-import com.gitlab.dhorman.cryptotrader.trader.Trader.OrderPlan
+import com.gitlab.dhorman.cryptotrader.util.ReactorUtil._
 import com.typesafe.scalalogging.Logger
-import reactor.core.publisher.{FluxSink, ReplayProcessor}
 import reactor.core.scala.publisher.{Flux, FluxProcessor}
+
+import scala.collection.immutable.TreeSet
+import scala.collection.mutable.ListBuffer
 
 class Trader(private val poloniexApi: PoloniexApi) {
   private val logger = Logger[Trader]
@@ -16,15 +21,10 @@ class Trader(private val poloniexApi: PoloniexApi) {
   private object trigger {
     type Trigger = FluxProcessor[Unit, Unit]
 
-    private def createTrigger(): Trigger = {
-      val p = ReplayProcessor.cacheLast[Unit]()
-      FluxProcessor.wrap(p, p)
-    }
-
-    val currencies: Trigger = createTrigger()
-    val ticker: Trigger = createTrigger()
-    val balances: Trigger = createTrigger()
-    val openOrders: Trigger = createTrigger()
+    val currencies: Trigger = createReplayProcessor()
+    val ticker: Trigger = createReplayProcessor()
+    val balances: Trigger = createReplayProcessor()
+    val openOrders: Trigger = createReplayProcessor()
   }
 
   private object raw {
@@ -154,7 +154,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
       val BufferLimit = 100
 
-      markets map {case (_, marketInfo) =>
+      markets.map {case (_, marketInfo) =>
         marketInfo map {case (market, marketId) =>
           val initialTrades: Flux[Array[TradeHistory]] = poloniexApi.tradeHistoryPublic(market).retry().flux() // TODO: Specify backoff
 
@@ -248,7 +248,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
           (marketId, statStream)
         }
-      }
+      }.cache(1)
     }
 
     val openOrders: Flux[Map[Long, Trader.OpenOrder]] = {
@@ -353,188 +353,151 @@ class Trader(private val poloniexApi: PoloniexApi) {
             }
             (marketId, newBookStream)
         }
-      }).replay(1).refCount()
+      }).cache(1)
+    }
+
+    val fee: Flux[FeeMultiplier] = {
+      poloniexApi.feeInfo()
+        .map{fee =>
+          FeeMultiplier(fee.makerFee.oneMinus, fee.takerFee.oneMinus)
+        }.flux().cache(1)
     }
   }
 
   object indicators {
-    type MinMaxPrice = (BigDecimal, BigDecimal)
-    type SellBuyMinMaxPrice = (MinMaxPrice, MinMaxPrice)
+    val paths: Flux[TreeSet[ExhaustivePath]] = Flux.combineLatest(data.markets, data.orderBooks, data.tradesStat, data.fee, support.pathsSettings, (data0: Array[AnyRef]) => {
+      val (_, marketInfoStringMap) = data0(0).asInstanceOf[data.MarketData]
+      val orderBooks = data0(1).asInstanceOf[data.OrderBookDataMap]
+      val stats = data0(2).asInstanceOf[Map[MarketId, Flux[TradeStat]]]
+      val fee = data0(3).asInstanceOf[FeeMultiplier]
+      val settings = data0(4).asInstanceOf[support.PathsSettings]
 
-    case class Candlestick(timeStart: LocalDateTime, timeStop: LocalDateTime, low: BigDecimal, close: BigDecimal, open: BigDecimal, high: BigDecimal)
+      val pathsPermutations = support.PathsUtil.generateSimplePaths(marketInfoStringMap.keys, settings.currencies)
+      val pathsPermutationsDelta = support.PathsUtil.wrapPathsPermutationsToStream(pathsPermutations, orderBooks, stats, marketInfoStringMap, settings.initialAmount, fee)
 
-    object Candlestick {
-      def create(price: BigDecimal): Candlestick = {
-        val t = LocalDateTime.now()
-        Candlestick(t, t, price, price, price, price)
-      }
-    }
+      pathsPermutationsDelta.scan(TreeSet[ExhaustivePath]()(support.ExhaustivePathOrdering), (state: TreeSet[ExhaustivePath], delta: ExhaustivePath) => state + delta)
+    }).switchMap(identity).share()
 
-    /*val candlestick: Flux[Map[Int, Flux[Candlestick]]] = data.orderBooks.map(_.map {case (marketId, orderBook) =>
-      val singleCandlestick = orderBook.map(_._1)
-        .map(_.asks.head._1)
-        .map(Candlestick.create(_))
-        .window(30 seconds)
-        .switchMap(_.reduce((candlestick0: Candlestick, candlestick1: Candlestick) => {
-          Candlestick(
-            candlestick0.timeStart,
-            candlestick1.timeStop,
-            candlestick0.low.min(candlestick1.low),
-            candlestick1.close,
-            candlestick0.open,
-            candlestick0.high.max(candlestick1.high),
-          )
-        })
+    object support {
+      case class PathsSettings(
+        initialAmount: Amount,
+        currencies: List[Currency],
       )
 
-      (marketId, singleCandlestick)
-    })
-
-    val closePrices: Flux[Map[Int, Flux[Price]]] = {
-      data.orderBooks.map(_.map {case (marketId, orderBook) =>
-        val price = orderBook
-          .map(_._1)
-          .filter(_.asks.nonEmpty)
-          .map(_.asks.head._1)
-          .sample(1 minute)
-
-        (marketId, price)
-      }).share()
-    }*/
-
-    val priceMovement: Flux[Trader.Valuation] = Flux.zip(data.markets, data.orderBooks).switchMap {
-      case (marketInfo, orderBooks) =>
-        val mainTargetCurrencies = ("USDC", "USDT")
-
-        val pathValuations = new MarketPathGenerator(marketInfo._2.keys)
-          .generateAll(mainTargetCurrencies)
-          .flatMap {
-            case (targetCurrencies, simplePaths) =>
-              simplePaths.map(simplePath => {
-              val pathOrderBooks = simplePath.map(market => orderBooks(marketInfo._2(market.toString)))
-
-              // Main variable that contains calculations
-              val valuationFlux = Flux.combineLatest(pathOrderBooks, (orderBooksAnyRefs: Array[AnyRef]) => {
-                val orderBooks = orderBooksAnyRefs.view.map(_.asInstanceOf[data.OrderBookData])
-                val orderBooks2 = simplePath.zip(orderBooks).map {case (market, (_, _, book, _)) => (market, book)}.toArray
-                OrderPlan.generate(targetCurrencies, orderBooks2)
-              })
-
-              valuationFlux.replay(1).refCount()
-            })
-          }.toSeq // TODO: Review to seq
-
-        Flux.just(Flux.empty[Trader.Valuation], pathValuations: _*)
-          .skip(1)
-          .flatMap(identity, pathValuations.length)
-    }.share()
-  }
-
-  /*object sellBuyIndicators {
-    trait BuyTrait
-    trait SellTrait
-
-    case class SimpleBuy(prices: List[Price]) extends BuyTrait
-    case class SimpleSell(prices: List[Price]) extends SellTrait
-
-    object buy {
-      val simple: Flux[Map[Int, Flux[SimpleBuy]]] = indicators.closePrices.map(marketPrice => {
-        marketPrice.map(mp => {
-          val x = mp._2.buffer(3).filter(buffer => {
-            (1 until buffer.length).forall(i => buffer(i-1) < buffer(i))
-          }).map(buffer => SimpleBuy(buffer.toList))
-
-          (mp._1, x)
-        })
-      })
-    }
-
-    object sell {
-      val simple: Flux[Map[Int, Flux[SimpleSell]]] = indicators.closePrices.map(marketPrice => {
-        marketPrice.map(mp => {
-          val x = mp._2.buffer(3).filter(buffer => {
-            (1 until buffer.length).forall(i => buffer(i-1) > buffer(i))
-          }).map(buffer => SimpleSell(buffer.toList))
-
-          (mp._1, x)
-        })
-      })
-    }
-
-    val buyStream: Flux[(Market, BuyTrait)] = buy.simple.map(_.map(t => t._2.map(a => (t._1, a))))
-      .flatMapIterable(identity)
-      .flatMap(identity)
-      .concatMap(marketAdvice =>
-        data.markets.take(1).map(market => (market._1(marketAdvice._1), marketAdvice._2))
-      )
-
-    val sellStream: Flux[(Market, SellTrait)] = sell.simple.map(_.map(t => t._2.map(a => (t._1, a))))
-      .flatMapIterable(identity)
-      .flatMap(identity)
-      .concatMap(marketAdvice =>
-        data.markets.take(1).map(market => (market._1(marketAdvice._1), marketAdvice._2))
-      )
-  }*/
-
-  def start(): Flux[Unit] = {
-    Flux.create((sink: FluxSink[Unit]) => {
-      val defaultErrorHandler = (error: Throwable) => {
-        error.printStackTrace()
+      val pathsSettings: FluxProcessor[PathsSettings, PathsSettings] = {
+        val defaultSettings = PathsSettings(40, List("USDT", "USDC"))
+        createReplayProcessor(Some(defaultSettings))
       }
 
-      val defaultCompleted = () => {
-        logger.debug("completed")
-      }
+      object PathsUtil {
+        def generateSimplePaths(markets: Iterable[Market], currencies: Iterable[Currency]): Map[(Currency, Currency), Set[List[(PathOrderType, Market)]]] = {
+          new MarketPathGenerator(markets)
+            .generateAllPermutationsWithOrders(currencies)
+        }
 
-      //val currencies = data.currencies.subscribe(currencies => {}, defaultErrorHandler, defaultCompleted)
-      //val balances = data.balances.subscribe(balances => {}, defaultErrorHandler, defaultCompleted)
-      val markets = data.markets.subscribe(markets => {}, defaultErrorHandler, defaultCompleted)
-      //val openOrders = data.openOrders.subscribe(orders => {}, defaultErrorHandler, defaultCompleted)
-      //val tickers = data.tickers.subscribe(tickers => {}, defaultErrorHandler, defaultCompleted)
+        def wrapPathsPermutationsToStream(pathsPermutations: Map[(Currency, Currency), Set[List[(PathOrderType, Market)]]], orderBooks: data.OrderBookDataMap, stats: Map[MarketId, Flux[TradeStat]], marketInfoStringMap: data.MarketStringMap, initialAmount: Amount, fee: FeeMultiplier): Flux[ExhaustivePath] = {
 
+          val pathsIterable: Iterable[Flux[ExhaustivePath]] = for {
+            (targetPath, paths) <- pathsPermutations
+            path <- paths
+          } yield {
+            val dependencies = new ListBuffer[Flux[AnyRef]]()
 
-      data.tickers.subscribe(_ => {}, _.printStackTrace())
+            for {
+              (tpe, market) <- path
+            } {
+              val marketId = marketInfoStringMap(market)
+              val orderBook = orderBooks(marketId).map(_._3.asInstanceOf[AnyRef])
+              dependencies += orderBook
 
-      val x = data.orderBooks.map(_.values).switchMap(Flux.merge(_))
+              tpe match {
+                case PathOrderType.Delayed =>
+                  val stat = stats(marketId).map(_.asInstanceOf[AnyRef])
+                  dependencies += stat
+                case PathOrderType.Instant => // ignore
+              }
+            }
 
-      x.subscribe((market: (Market, MarketId, PriceAggregatedBook, OrderBookNotification)) => {
-        //logger.debug(s"book update from market ${market._1}")
+            val dependenciesStream = Flux.combineLatest(dependencies, (arr: Array[AnyRef]) => arr)
 
-      })
+            val exhaustivePath = dependenciesStream.map{booksStats =>
+              map(targetPath, initialAmount, fee, path, booksStats)
+            }
 
-      data.tradesStat.switchMap {orderBookStat =>
-        orderBookStat(121)
-      }.subscribe(stat => {
-        import io.circe.generic.auto._
-        import io.circe.syntax._
-        logger.info(stat.asJson.spaces2)
-      })
+            exhaustivePath
+          }
 
-      /*indicators.priceMovement.subscribe(valuation => {
-        logger.debug(valuation.toString)
-      }, defaultErrorHandler, defaultCompleted)
+          val pathsStream = pathsIterable.toSeq
 
-      // TODO: Test trigger. Fails with exception
-      Flux.just(1).delaySubscription(30 seconds).subscribe(_ => {
-        trigger.ticker.onNext(())
-      })
+          Flux.just(Flux.empty[ExhaustivePath], pathsStream: _*)
+            .skip(1)
+            .flatMap(identity, pathsStream.length)
+        }
 
-      val disposable = new Disposable {
-        override def dispose(): Unit = {
-          markets.dispose()
-          currencies.dispose()
-          balances.dispose()
-          openOrders.dispose()
-          //tickers.dispose()
-          //orderBooks.dispose()
+        def map(targetPath: TargetPath, startAmount: Amount, fee: FeeMultiplier, path: List[(PathOrderType, Market)], booksStats: Array[AnyRef]): ExhaustivePath = {
+          val chain = new ListBuffer[InstantDelayedOrder]()
+          var targetCurrency = targetPath._1
+          var fromAmount = startAmount
+
+          var i = 0
+
+          for {
+            (tpe, market) <- path
+          } {
+            targetCurrency = market.other(targetCurrency).get
+            val orderBook = booksStats(i).asInstanceOf[OrderBookAbstract]
+            i += 1
+
+            val order = tpe match {
+              case PathOrderType.Instant =>
+                mapInstantOrder(market, targetCurrency, fromAmount, fee.taker, orderBook)
+              case PathOrderType.Delayed =>
+                val stat = booksStats(i).asInstanceOf[TradeStat]
+                i += 1
+                mapDelayedOrder(market, targetCurrency, fromAmount, fee.maker, orderBook, stat)
+            }
+
+            fromAmount = order.toAmount
+
+            chain += order
+          }
+
+          ExhaustivePath(targetPath, chain.toList)
+        }
+
+        private def mapInstantOrder(market: Market, targetCurrency: Currency, fromAmount: Amount, takerFee: BigDecimal, orderBook: OrderBookAbstract): Orders.InstantOrder = {
+          Orders.getInstantOrder(market, targetCurrency, fromAmount, takerFee, orderBook).get
+        }
+
+        private def mapDelayedOrder(market: Market, targetCurrency: Currency, fromAmount: Amount, makerFee: BigDecimal, orderBook: OrderBookAbstract, stat: TradeStat): Orders.DelayedOrder = {
+          val stat0 = statOrder(market, targetCurrency, stat)
+          Orders.getDelayedOrder(market, targetCurrency, fromAmount, makerFee, orderBook, stat0).get
+        }
+
+        private def statOrder(market: Market, targetCurrency: Currency, stat: TradeStat): TradeStatOrder = {
+          market.orderType(targetCurrency).get match {
+            case OrderType.Buy => stat.buy
+            case OrderType.Sell => stat.sell
+          }
         }
       }
 
-      sink.onCancel(disposable)
-      sink.onDispose(disposable)*/
+      object ExhaustivePathOrdering extends Ordering[ExhaustivePath] {
+        override def compare(x: ExhaustivePath, y: ExhaustivePath): Int = {
+          x.simpleMultiplier.compare(y.simpleMultiplier)
+        }
+      }
+    }
+  }
 
-      logger.info("Start trading")
+  def start(): Flux[Unit] = {
+    logger.info("Start trading")
+
+    indicators.paths.subscribe(x => {
+      println("state received")
     })
+
+    Flux.just(())
   }
 }
 
@@ -559,106 +522,6 @@ object Trader {
     }
 
     override def toString = s"OpenOrder($id, $tpe, $market, $rate, $amount)"
-  }
-
-
-
-  // TODO: Valuation, ShortPath, and Order Plan was replaced by modern Orders API
-  case class Valuation(shortPath: ShortPath, longPath: List[Market], k: BigDecimal)
-
-  case class ShortPath(fromCurrency: Currency, toCurrency: Currency) {
-    override def toString: Currency = s"$fromCurrency->$toCurrency"
-  }
-
-  object OrderPlan {
-    import MarketPathGenerator._
-
-    def generate(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
-      path.length match {
-        case 1 => f1(targetPath, path)
-        case 2 => f2(targetPath, path)
-        case 3 => f3(targetPath, path)
-        case 4 => f4(targetPath, path)
-        case _ => throw new NotImplementedError("Operation not supported")
-      }
-    }
-
-    private def f1(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
-      val (m1, b1) = path(0)
-
-      // TODO: Handle a -> b and b -> a
-
-      // a_b
-      val a = m1.find(Iterable(targetPath._1, targetPath._2)).get
-      val b = m1.other(a).get
-
-      val k = op(b, m1, b1) // a_b
-
-      Valuation(ShortPath(a, b), List(m1), k)
-    }
-
-    private def f2(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
-      val (m1, b1) = path(0)
-      val (m2, b2) = path(1)
-
-      // a_c - b_c
-      val a = m1.find(Iterable(targetPath._1, targetPath._2)).get
-      val c = m1.other(a).get
-      val b = m2.other(c).get
-
-      val k = op(c, m1, b1)*op(b, m2, b2)
-
-      Valuation(ShortPath(a, b), List(m1, m2), k)
-    }
-
-    private def f3(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
-      val (m1, b1) = path(0)
-      val (m2, b2) = path(1)
-      val (m3, b3) = path(2)
-
-      // a_x - x_y - b_y
-      val a = m1.find(Iterable(targetPath._1, targetPath._2)).get
-      val x = m1.other(a).get
-      val y = m2.other(x).get
-      val b = m3.other(y).get
-
-      val k = op(x, m1, b1)*op(y, m2, b2)*op(b, m3, b3)
-
-      Valuation(ShortPath(a, b), List(m1, m2, m3), k)
-    }
-
-    private def f4(targetPath: TargetPath, path: Array[(Market, PriceAggregatedBook)]): Valuation = {
-      val (m1, b1) = path(0)
-      val (m2, b2) = path(1)
-      val (m3, b3) = path(2)
-      val (m4, b4) = path(3)
-
-      // a_x - x_z - z_y - b_y
-      val a = m1.find(Iterable(targetPath._1, targetPath._2)).get
-      val x = m1.other(a).get
-      val z = m2.other(x).get
-      val y = m3.other(z).get
-      val b = m4.other(y).get
-
-      val k = op(x, m1, b1)*op(z, m2, b2)*op(y, m3, b3)*op(b, m4, b4)
-
-      Valuation(ShortPath(a, b), List(m1, m2, m3, m4), k)
-    }
-
-    private def op(targetCurrency: Currency, market: Market, orderBook: PriceAggregatedBook): Price = {
-      market.tpe(targetCurrency).get match {
-        case CurrencyType.Base => sell(orderBook)
-        case CurrencyType.Quote => buy(orderBook)
-      }
-    }
-
-    private def buy(orderBook: PriceAggregatedBook): Price = {
-      BigDecimal(1) / orderBook.bids.head._1
-    }
-
-    private def sell(orderBook: PriceAggregatedBook): Price = {
-      orderBook.asks.head._1
-    }
   }
 
   object TradeStatModels {

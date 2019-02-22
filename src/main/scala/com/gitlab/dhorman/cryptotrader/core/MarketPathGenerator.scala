@@ -1,5 +1,9 @@
 package com.gitlab.dhorman.cryptotrader.core
 
+import com.gitlab.dhorman.cryptotrader.core.Orders.{DelayedOrder, InstantDelayedOrder, InstantOrder}
+import io.circe._
+import io.circe.generic.auto._
+
 class MarketPathGenerator(availableMarkets: Iterable[Market]) {
   import MarketPathGenerator._
 
@@ -28,6 +32,31 @@ class MarketPathGenerator(availableMarkets: Iterable[Market]) {
       p(2) -> generate(p(2)),
       p(3) -> generate(p(3)),
     )
+  }
+
+  def generateAllPermutationsWithOrders(currencies: Iterable[Currency]): Map[TargetPath, Set[List[(PathOrderType, Market)]]] = {
+    val permutations = for {
+      a <- currencies
+      b <- currencies
+    } yield {
+      val target = (a,b)
+      val paths = generate(target).flatMap(generateAllPermutationsWithOrders)
+      (target, paths)
+    }
+
+    permutations.toMap
+  }
+
+  private def generateAllPermutationsWithOrders(path: List[Market]): Seq[List[(PathOrderType, Market)]] = {
+    (0 until 1 << path.length).map{i =>
+      path.zipWithIndex.map{case (market, j) =>
+        if ((i & (1 << j)) == 0) {
+          (PathOrderType.Delayed, market)
+        } else {
+          (PathOrderType.Instant, market)
+        }
+      }
+    }
   }
 
   private def f1(targetPath: TargetPath): Set[Path] = {
@@ -75,4 +104,90 @@ class MarketPathGenerator(availableMarkets: Iterable[Market]) {
 object MarketPathGenerator {
   type TargetPath = (Currency, Currency)
   type Path = List[Market]
+
+  case class TargetPath0(from: Currency, to: Currency)
+  type InstantDelayedOrderChain = List[InstantDelayedOrder]
+
+  case class ExhaustivePath(
+    targetPath: TargetPath,
+    chain: InstantDelayedOrderChain
+  ) {
+    @volatile lazy val id: String = chain.view.map {
+      case i: InstantOrder => s"${i.market}0"
+      case d: DelayedOrder => s"${d.market}1"
+    }.mkString("")
+
+    @volatile lazy val simpleMultiplier: BigDecimal = chain.view.map {
+      case i: InstantOrder => i.orderMultiplierSimple
+      case d: DelayedOrder => d.orderMultiplier
+    }.product
+
+    @volatile lazy val amountMultiplier: BigDecimal = chain.view.map {
+      case i: InstantOrder => i.orderMultiplierAmount
+      case d: DelayedOrder => d.orderMultiplier
+    }.product
+
+    @volatile lazy val avgWaitTime: BigDecimal = chain.view.map {
+      case _: InstantOrder => 0
+      case d: DelayedOrder => d.stat.ttwAvgMs
+    }.sum
+
+    @volatile lazy val maxWaitTime: BigDecimal = chain.view.map {
+      case _: InstantOrder => 0
+      case d: DelayedOrder => d.stat.ttwAvgMs + d.stat.ttwStdDev
+    }.sum
+
+    @volatile lazy val recommendedStartAmount: Amount = {
+      var recommendedStartAmount: BigDecimal = null
+      var targetCurrency = targetPath._2
+
+      for (order <- chain.reverseIterator) {
+        order match {
+          case d: DelayedOrder =>
+            if (d.market.quoteCurrency == targetCurrency) {
+              recommendedStartAmount = if (recommendedStartAmount == null) {
+                d.stat.avgAmount / d.orderMultiplier
+              } else {
+                (d.stat.avgAmount min recommendedStartAmount) / d.orderMultiplier
+              }
+            } else {
+              recommendedStartAmount = if (recommendedStartAmount == null) {
+                d.stat.avgAmount
+              } else {
+                (recommendedStartAmount * d.orderMultiplier) min d.stat.avgAmount
+              }
+            }
+          case _ => // Ignore
+        }
+
+        targetCurrency = order.market.other(targetCurrency).get
+      }
+
+      if (recommendedStartAmount == null) {
+        recommendedStartAmount = chain.head.fromAmount
+      }
+
+      recommendedStartAmount
+    }
+
+    override def hashCode(): Int = id.hashCode()
+
+    override def equals(obj: Any): Boolean = obj match {
+      case o: ExhaustivePath => id == o.id
+      case _ => false
+    }
+  }
+
+  object ExhaustivePath {
+    implicit val encoder: Encoder[ExhaustivePath] = Encoder.forProduct8("targetPath", "chain", "id", "simpleMultiplier", "amountMultiplier", "avgWaitTime", "maxWaitTime", "recommendedStartAmount")(u => {
+      (u.targetPath, u.chain, u.id, u.simpleMultiplier, u.amountMultiplier, u.avgWaitTime, u.maxWaitTime, u.recommendedStartAmount)
+    })
+  }
+
+  type PathOrderType = PathOrderType.Value
+  object PathOrderType extends Enumeration {
+    val Instant: PathOrderType = Value
+    val Delayed: PathOrderType = Value
+  }
+
 }

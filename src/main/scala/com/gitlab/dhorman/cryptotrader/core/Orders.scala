@@ -1,8 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.core
 
 import com.gitlab.dhorman.cryptotrader.core.Prices._
-import io.circe.Encoder
-import io.circe.generic.semiauto.deriveEncoder
 import scala.util.control.Breaks._
 
 object Orders {
@@ -11,7 +9,7 @@ object Orders {
     targetCurrency: Currency,
     initCurrencyAmount: Amount,
     takerFeeMultiplier: BigDecimal,
-    orderBook: OrderBook,
+    orderBook: OrderBookAbstract,
   ): Option[InstantOrder] = {
     for {
       fromCurrency <- market.other(targetCurrency)
@@ -86,7 +84,7 @@ object Orders {
     targetCurrency: Currency,
     fromAmount: Amount,
     makerFeeMultiplier: BigDecimal,
-    orderBook: OrderBook,
+    orderBook: OrderBookAbstract,
     stat: TradeStatOrder,
   ): Option[DelayedOrder] = {
     for {
@@ -133,7 +131,7 @@ object Orders {
     targetCurrency: Currency,
     toAmount: Amount,
     makerFeeMultiplier: BigDecimal,
-    orderBook: OrderBook,
+    orderBook: OrderBookAbstract,
     stat: TradeStatOrder,
   ): Option[DelayedOrder] = {
     for {
@@ -175,14 +173,21 @@ object Orders {
     }
   }
 
-  sealed trait InstantDelayedOrder
+  sealed trait InstantDelayedOrder {
+    val market: Market
+    val fromCurrency: Currency
+    val targetCurrency: Currency
+    val fromAmount: Amount
+    val toAmount: Amount
+    val orderType: OrderType
+  }
 
   case class InstantOrder(
     market: Market,
     fromCurrency: Currency,
     targetCurrency: Currency,
-    fromCurrencyAmount: Amount,
-    targetCurrencyAmount: Amount,
+    fromAmount: Amount,
+    toAmount: Amount,
     orderType: OrderType,
     orderMultiplierSimple: BigDecimal,
     orderMultiplierAmount: BigDecimal,
@@ -199,21 +204,15 @@ object Orders {
     basePrice: Price,
     quoteAmount: Amount,
     toAmount: Amount,
-    orderTpe: OrderType,
+    orderType: OrderType,
     orderMultiplier: BigDecimal,
     stat: TradeStatOrder,
   ) extends InstantDelayedOrder
 
   object InstantOrder {
-    implicit val encoder: Encoder[InstantOrder] = deriveEncoder
-
     case class Trade(
       price: Price,
       amount: Amount,
     )
-
-    object Trade {
-      implicit val encoder: Encoder[Trade] = deriveEncoder
-    }
   }
 }

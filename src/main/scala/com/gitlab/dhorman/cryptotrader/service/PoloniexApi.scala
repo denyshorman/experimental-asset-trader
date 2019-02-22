@@ -857,9 +857,9 @@ object PoloniexApi {
   }
 
   case class PriceAggregatedBook(
-    asks: TreeMap[Price, Amount] = TreeMap(),
-    bids: TreeMap[Price, Amount] = TreeMap()(implicitly[Ordering[Price]].reverse),
-  )
+    override val asks: TreeMap[Price, Amount] = TreeMap(),
+    override val bids: TreeMap[Price, Amount] = TreeMap()(implicitly[Ordering[Price]].reverse),
+  ) extends OrderBookAbstract
 
   sealed trait OrderBookNotification
 

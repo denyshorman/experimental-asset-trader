@@ -1,8 +1,13 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.gitlab.dhorman.cryptotrader.core.MarketPathGenerator.Path
-import com.gitlab.dhorman.cryptotrader.core.{Market, MarketPathGenerator}
+import java.time.Instant
+
+import com.gitlab.dhorman.cryptotrader.core
+import com.gitlab.dhorman.cryptotrader.core.MarketPathGenerator.{ExhaustivePath, Path}
+import com.gitlab.dhorman.cryptotrader.core.Orders.{DelayedOrder, InstantOrder}
+import com.gitlab.dhorman.cryptotrader.core._
 import org.scalatest.FlatSpec
+import io.circe.syntax._
 
 class MarketPathGeneratorTest extends FlatSpec {
 
@@ -154,4 +159,12 @@ class MarketPathGeneratorTest extends FlatSpec {
     for (path <- flattenPaths) println(path)
   }
 
+  "MarketPathGenerator ExhaustivePath" should "generate json" in {
+    val i = InstantOrder("USDC_BTC", "BTC", "BTC", 40, 0.5, OrderType.Buy, 1.2, 1.3, 0, 0.99, List())
+    val d = DelayedOrder("USDT_BTC", "BTC", "USDT", 0.5, 1.2, 40, 41, OrderType.Sell, 1.2, core.TradeStatOrder(0, 0, 0, 0, 0, 0, 0, 0, Instant.MIN, Instant.MIN))
+
+    val json = ExhaustivePath(("USDC", "USDT"), List(i, d)).asJson.spaces2
+
+    println(json)
+  }
 }
