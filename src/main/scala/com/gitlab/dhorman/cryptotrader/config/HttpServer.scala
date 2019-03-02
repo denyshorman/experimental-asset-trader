@@ -47,7 +47,7 @@ class HttpServer(
       .cache(1)
       .sampleFirst(30 seconds)
       .onBackpressureLatest()
-      .concatMap(paths => Flux.fromIterable(paths).buffer(500), 1)
+      .flatMapSequential(paths => Flux.fromIterable(paths).buffer(500), 1, 1)
       .map(data => RespMsg(Msg.Paths, data))
       .map(_.asJson.noSpaces)
       .share(),

@@ -1,6 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicLong
 
 import com.gitlab.dhorman.cryptotrader.core.MarketPathGenerator.{ExhaustivePath, PathOrderType, TargetPath}
 import com.gitlab.dhorman.cryptotrader.core.Orders.InstantDelayedOrder
@@ -12,7 +13,7 @@ import com.gitlab.dhorman.cryptotrader.util.ReactorUtil._
 import com.typesafe.scalalogging.Logger
 import reactor.core.scala.publisher.{Flux, FluxProcessor}
 
-import scala.collection.immutable.TreeSet
+import scala.collection.immutable.{TreeMap, TreeSet}
 import scala.collection.mutable.ListBuffer
 
 class Trader(private val poloniexApi: PoloniexApi) {
@@ -29,16 +30,12 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
   private object raw {
     private def wrap[T](triggerStream: trigger.Trigger, stream: Flux[T]): Flux[T] = {
-      triggerStream.startWith(()).switchMap(_ => stream.take(1)).replay(1).refCount()
+      triggerStream.startWith(()).switchMap(_ => stream.take(1), 1).replay(1).refCount()
     }
 
     val currencies: Flux[Map[Currency, CurrencyDetails]] = {
       val callApiStream = poloniexApi.currencies().flux().doOnNext(curr => {
-        logger.info("All currencies fetched")
-
-        logger.whenDebugEnabled {
-          logger.debug(curr.toString)
-        }
+        logger.info(s"${curr.size} currencies fetched")
       })
       wrap(trigger.currencies, callApiStream)
     }
@@ -142,7 +139,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
         (marketIntStringMap, marketStringIntMap)
       }.doOnNext { markets =>
-        logger.info("Markets fetched")
+        logger.info(s"Markets fetched: ${markets._2.size}")
         logger.whenDebugEnabled {
           logger.debug(markets.toString)
         }
@@ -156,7 +153,15 @@ class Trader(private val poloniexApi: PoloniexApi) {
 
       markets.map {case (_, marketInfo) =>
         marketInfo map {case (market, marketId) =>
-          val initialTrades: Flux[Array[TradeHistory]] = poloniexApi.tradeHistoryPublic(market).retry().flux() // TODO: Specify backoff
+          val initialTrades: Flux[Array[TradeHistory]] = poloniexApi.tradeHistoryPublic(market).retry().flux().doOnNext{_ =>
+            logger.whenDebugEnabled{
+              logger.debug(s"Received initial trades for $market")
+            }
+          }.doOnError{_ =>
+            logger.whenDebugEnabled{
+              logger.debug(s"Error received for initial trades for $market")
+            }
+          } // TODO: Specify backoff
 
           val tradesStream = orderBooks.map(_(marketId))
             .switchMap(identity)
@@ -191,7 +196,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
               buyOld = allTrades.buy,
               buyNew = allTrades.buy,
             )
-          }.switchMap { initTrade1 => tradesStream.scan(initTrade1, (trade1: Trade1, bookTrade: OrderBookTrade) => {
+          }.switchMap(initTrade1 => tradesStream.scan(initTrade1, (trade1: Trade1, bookTrade: OrderBookTrade) => {
             val newTrade = SimpleTrade(bookTrade.price, bookTrade.amount, bookTrade.timestamp)
             var sellOld: Vector[SimpleTrade] = null
             var sellNew: Vector[SimpleTrade] = null
@@ -211,7 +216,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
             }
 
             Trade1(sellOld, sellNew, buyOld, buyNew)
-          })}
+          }))
 
           val trades2 = trades1.scan(Trade2(null, null), (trade2: Trade2, trade1: Trade1) => {
             val a = trade1.sellOld eq trade1.sellNew
@@ -357,10 +362,11 @@ class Trader(private val poloniexApi: PoloniexApi) {
     }
 
     val fee: Flux[FeeMultiplier] = {
-      poloniexApi.feeInfo()
-        .map{fee =>
+      poloniexApi.feeInfo().map{fee =>
           FeeMultiplier(fee.makerFee.oneMinus, fee.takerFee.oneMinus)
-        }.flux().cache(1)
+        }.flux().doOnNext{fee =>
+        logger.info(s"Fee fetched: $fee")
+      }.cache(1)
     }
   }
 
@@ -373,6 +379,11 @@ class Trader(private val poloniexApi: PoloniexApi) {
       val settings = data0(4).asInstanceOf[support.PathsSettings]
 
       val pathsPermutations = support.PathsUtil.generateSimplePaths(marketInfoStringMap.keys, settings.currencies)
+
+      logger.whenDebugEnabled {
+        logger.debug(s"Paths generated: ${pathsPermutations.view.map(_._2.size).sum}")
+      }
+
       val pathsPermutationsDelta = support.PathsUtil.wrapPathsPermutationsToStream(pathsPermutations, orderBooks, stats, marketInfoStringMap, settings.initialAmount, fee)
 
       pathsPermutationsDelta.scan(TreeSet[ExhaustivePath]()(support.ExhaustivePathOrdering), (state: TreeSet[ExhaustivePath], delta: ExhaustivePath) => state + delta)
@@ -407,18 +418,18 @@ class Trader(private val poloniexApi: PoloniexApi) {
               (tpe, market) <- path
             } {
               val marketId = marketInfoStringMap(market)
-              val orderBook = orderBooks(marketId).map(_._3.asInstanceOf[AnyRef])
+              val orderBook = orderBooks(marketId).map(_._3.asInstanceOf[AnyRef]).onBackpressureLatest()
               dependencies += orderBook
 
               tpe match {
                 case PathOrderType.Delayed =>
-                  val stat = stats(marketId).map(_.asInstanceOf[AnyRef])
+                  val stat = stats(marketId).map(_.asInstanceOf[AnyRef]).onBackpressureLatest()
                   dependencies += stat
                 case PathOrderType.Instant => // ignore
               }
             }
 
-            val dependenciesStream = Flux.combineLatest(dependencies, (arr: Array[AnyRef]) => arr)
+            val dependenciesStream = Flux.combineLatest(dependencies, prefetch = 1, (arr: Array[AnyRef]) => arr)
 
             val exhaustivePath = dependenciesStream.map{booksStats =>
               map(targetPath, initialAmount, fee, path, booksStats)
@@ -427,11 +438,11 @@ class Trader(private val poloniexApi: PoloniexApi) {
             exhaustivePath
           }
 
-          val pathsStream = pathsIterable.toSeq
-
-          Flux.just(Flux.empty[ExhaustivePath], pathsStream: _*)
-            .skip(1)
-            .flatMap(identity, pathsStream.length)
+          Flux.empty[Flux[ExhaustivePath]]
+            .startWith(pathsIterable)
+            .flatMap((path: Flux[ExhaustivePath]) => {
+              path.onBackpressureLatest()
+            }, pathsIterable.size, prefetch = 1)
         }
 
         def map(targetPath: TargetPath, startAmount: Amount, fee: FeeMultiplier, path: List[(PathOrderType, Market)], booksStats: Array[AnyRef]): ExhaustivePath = {
@@ -493,9 +504,30 @@ class Trader(private val poloniexApi: PoloniexApi) {
   def start(): Flux[Unit] = {
     logger.info("Start trading")
 
-    indicators.paths.subscribe(x => {
-      println("state received")
+    /*indicators.paths.subscribe(x => {
+      println(s"state received ${x.size}")
+    })*/
+
+    data.tradesStat.switchMap(map => {
+      val allTradeStats: Iterable[Flux[TradeStat]] = map.values
+
+      val i = new AtomicLong(0)
+
+      val stat: Flux[(Long, TradeStat)] = Flux.empty[Flux[TradeStat]]
+        .startWith(allTradeStats)
+        .flatMap((stat: Flux[TradeStat]) => {
+          val id = i.getAndIncrement()
+          stat.map(s => (id, s)).onBackpressureLatest()
+        }, allTradeStats.size, 1)
+
+      stat
+    }, 1)
+    .scan(TreeMap[Long, TradeStat](), (state: TreeMap[Long, TradeStat], delta: (Long, TradeStat)) => {
+      state.updated(delta._1, delta._2)
     })
+    .subscribe{stat =>
+      logger.info(s"Trades fetched: ${stat.size}")
+    }
 
     Flux.just(())
   }

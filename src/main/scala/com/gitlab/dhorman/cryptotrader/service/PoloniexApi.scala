@@ -198,7 +198,7 @@ class PoloniexApi(
       })
 
       (newStamp, notifications)
-    }).skip(1).flatMapIterable(_._2)
+    }).skip(1).flatMapIterable(_._2, 8)
 
     notifications.scan((PriceAggregatedBook(), null), (state: (PriceAggregatedBook, OrderBookNotification), notification) => {
       val (oldBook, _) = state
@@ -673,7 +673,9 @@ class PoloniexApi(
       .map(handleErrorResp)
       .retryWhen(errors => errors.concatMap[Int]((error: Throwable) => error match {
         case _: IncorrectNonceException => Flux.just(1).delaySubscription(Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)))
-        case _: ApiCallLimitException => Flux.just(1).delaySubscription(Mono.defer(() => Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)).delaySubscription(1.second)))
+        case e : ApiCallLimitException =>
+          logger.warn(e.toString)
+          Flux.just(1).delaySubscription(Mono.defer(() => Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)).delaySubscription(1.second)))
         case _ => Flux.error(error)
       }))
       .delaySubscription(Mono.defer(() => Mono.delay(reqLimiter.get()).onErrorReturn(0)))
@@ -743,6 +745,10 @@ class PoloniexApi(
         val jsonStr = Command(Command.Type.Unsubscribe, channel).asJson.noSpaces
         socket.writeTextMessage(jsonStr)
         logger.info(s"Unsubscribe from $channel channel")
+      }, err => {
+        logger.whenTraceEnabled {
+          logger.trace(err.getMessage, err)
+        }
       })
     })
   }

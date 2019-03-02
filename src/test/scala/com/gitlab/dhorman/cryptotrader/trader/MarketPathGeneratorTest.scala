@@ -9,6 +9,8 @@ import com.gitlab.dhorman.cryptotrader.core._
 import org.scalatest.FlatSpec
 import io.circe.syntax._
 
+import scala.collection.immutable.{TreeMap, TreeSet}
+
 class MarketPathGeneratorTest extends FlatSpec {
 
   private val markets = Set(
@@ -135,6 +137,7 @@ class MarketPathGeneratorTest extends FlatSpec {
     Market("USDC", "FOAM"),
     Market("USDC", "BCHABC"),
     Market("USDC", "BCHSV"),
+    Market("USDC", "GRIN"),
   )
 
   private val currencies = markets.flatMap(m => Set(m.b, m.q))
@@ -159,6 +162,13 @@ class MarketPathGeneratorTest extends FlatSpec {
     for (path <- flattenPaths) println(path)
   }
 
+  "MarketPathGenerator" should "generate all permutations with orders" in {
+    val paths = marketPathGenerator.generateAllPermutationsWithOrders(Iterable("USDC", "USDT"))
+    val flattenPaths = paths.flatMap(_._2).toList.sortBy(_.size)
+    for (path <- flattenPaths) println(path)
+    println(s"Total: ${flattenPaths.size}")
+  }
+
   "MarketPathGenerator ExhaustivePath" should "generate json" in {
     val i = InstantOrder("USDC_BTC", "BTC", "BTC", 40, 0.5, OrderType.Buy, 1.2, 1.3, 0, 0.99, List())
     val d = DelayedOrder("USDT_BTC", "BTC", "USDT", 0.5, 1.2, 40, 41, OrderType.Sell, 1.2, core.TradeStatOrder(0, 0, 0, 0, 0, 0, 0, 0, Instant.MIN, Instant.MIN))
@@ -166,5 +176,21 @@ class MarketPathGeneratorTest extends FlatSpec {
     val json = ExhaustivePath(("USDC", "USDT"), List(i, d)).asJson.spaces2
 
     println(json)
+  }
+
+  "MarketPathGenerator ExhaustivePath TreeMap" should "generate json" in {
+    val i = InstantOrder("USDC_BTC", "BTC", "BTC", 40, 0.5, OrderType.Buy, 1.2, 1.3, 0, 0.99, List())
+    val d = DelayedOrder("USDT_BTC", "BTC", "USDT", 0.5, 1.2, 40, 41, OrderType.Sell, 1.2, core.TradeStatOrder(0, 0, 0, 0, 0, 0, 0, 0, Instant.MIN, Instant.MIN))
+
+    val path = ExhaustivePath(("USDC", "USDT"), List(i, d))
+
+    var state = TreeSet[ExhaustivePath]()((x,y) => {
+      x.simpleMultiplier.compare(y.simpleMultiplier)
+    })
+
+    state = state + path
+    state = state + path
+
+    assert(state.size == 1)
   }
 }
