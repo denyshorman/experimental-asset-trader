@@ -1,5 +1,7 @@
 .idea/
 .vertx/
+.gradle/
+*.iml
 /project/project
 /project/target
 /target
