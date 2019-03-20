@@ -106,7 +106,7 @@ class OrdersTest {
             toAmount,
             OrderType.Sell,
             39.920.toBigDecimal(),
-            toAmount / fromAmount,
+            toAmount.setScale(8, RoundingMode.HALF_EVEN) / fromAmount,
             0.toBigDecimal(),
             fee,
             list(

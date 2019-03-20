@@ -2,12 +2,11 @@ package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import io.vavr.Tuple2
 import io.vavr.collection.*
-import io.vavr.collection.Iterator
 import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.collection.Set
@@ -15,6 +14,7 @@ import io.vavr.collection.TreeSet
 import io.vavr.kotlin.component1
 import io.vavr.kotlin.component2
 import io.vavr.kotlin.toVavrList
+import io.vavr.kotlin.toVavrStream
 import mu.KotlinLogging
 import reactor.core.publisher.Flux
 import reactor.core.publisher.ReplayProcessor
@@ -35,7 +35,7 @@ class IndicatorStreams(data: DataStreams) {
         data.orderBooks,
         data.tradesStat,
         data.fee,
-        this.pathsSettings,
+        pathsSettings,
         Function<Array<Any>, Flux<TreeSet<ExhaustivePath>>> { data0 ->
             @Suppress("UNCHECKED_CAST")
             val marketInfoStringMap = (data0[0] as MarketData)._2
@@ -51,7 +51,7 @@ class IndicatorStreams(data: DataStreams) {
 
             val pathsPermutations = PathsUtil.generateSimplePaths(marketInfoStringMap.keySet(), settings.currencies)
 
-            if(logger.isDebugEnabled) logger.debug("Paths generated: ${pathsPermutations.iterator().map { it._2.size() }.sum()}")
+            if (logger.isDebugEnabled) logger.debug("Paths generated: ${pathsPermutations.iterator().map { it._2.size() }.sum()}")
 
             val pathsPermutationsDelta = PathsUtil.wrapPathsPermutationsToStream(
                 pathsPermutations,
@@ -62,12 +62,10 @@ class IndicatorStreams(data: DataStreams) {
                 fee
             )
 
-            pathsPermutationsDelta.scan(
-                TreeSet.empty<ExhaustivePath>(ExhaustivePathOrdering)
-            ) { state: TreeSet<ExhaustivePath>, delta: ExhaustivePath -> state.add(delta) }
-        }).switchMap { it }.share()
-
-
+            pathsPermutationsDelta.scan(TreeSet.empty(ExhaustivePathOrdering)) { state, delta -> state.add(delta) }
+        })
+        .switchMap { it }
+        .share()
 }
 
 object PathsUtil {
@@ -86,13 +84,10 @@ object PathsUtil {
         initialAmount: Amount,
         fee: FeeMultiplier
     ): Flux<ExhaustivePath> {
-
-
-        val pathsIterable: Iterator<Flux<ExhaustivePath>> =
-            pathsPermutations.iterator().flatMap { (targetPath, paths) ->
-                paths.iterator().map { path ->
+        val pathsIterable =
+            pathsPermutations.toVavrStream().flatMap { (targetPath, paths) ->
+                paths.toVavrStream().map { path ->
                     val dependencies = LinkedList<Flux<Any>>()
-
 
                     for ((tpe, market) in path) {
                         val marketId = marketInfoStringMap.get(market).get()
@@ -120,9 +115,7 @@ object PathsUtil {
 
         return Flux.empty<Flux<ExhaustivePath>>()
             .startWith(pathsIterable)
-            .flatMap({ path: Flux<ExhaustivePath> ->
-                path.onBackpressureLatest()
-            }, pathsIterable.size(), 1) // TODO: Check size and startWith. Iterates twice ?
+            .flatMap({ it.onBackpressureLatest() }, pathsIterable.size(), 1)
     }
 
     fun map(
@@ -198,7 +191,11 @@ object PathsUtil {
 
 object ExhaustivePathOrdering : Comparator<ExhaustivePath> {
     override fun compare(x: ExhaustivePath, y: ExhaustivePath): Int {
-        return x.simpleMultiplier.compareTo(y.simpleMultiplier)
+        return if (x.id == y.id) {
+            0
+        } else {
+            x.simpleMultiplier.compareTo(y.simpleMultiplier)
+        }
     }
 }
 

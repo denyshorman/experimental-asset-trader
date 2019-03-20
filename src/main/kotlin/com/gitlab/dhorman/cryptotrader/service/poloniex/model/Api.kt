@@ -56,7 +56,8 @@ data class TradeHistory(
     val type: OrderType,
     @JsonProperty("rate") val price: Price,
     val amount: Amount,
-    val total: BigDecimal
+    val total: BigDecimal,
+    val orderNumber: Long
 )
 
 data class CurrencyDetails(

@@ -19,7 +19,7 @@ import java.math.RoundingMode
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicLong
 
-class Trader(poloniexApi: PoloniexApi) {
+class Trader(private val poloniexApi: PoloniexApi) {
     private val logger = KotlinLogging.logger {}
 
     private val trigger = TriggerStreams()
@@ -94,7 +94,9 @@ object TradeStatModels {
         val sellOld: Queue<SimpleTrade>,
         val sellNew: Queue<SimpleTrade>,
         val buyOld: Queue<SimpleTrade>,
-        val buyNew: Queue<SimpleTrade>
+        val buyNew: Queue<SimpleTrade>,
+        val sellStatus: Trade1Status,
+        val buyStatus: Trade1Status
     ) {
         companion object Trade1 {
             fun newTrades(newTrade: SimpleTrade, trades: Queue<SimpleTrade>, limit: Int): Queue<SimpleTrade> {
@@ -107,6 +109,7 @@ object TradeStatModels {
         }
     }
 
+    enum class Trade1Status { Init, Changed, NotChanged }
 
     data class Trade2(
         val sell: Trade2State,
@@ -302,7 +305,7 @@ object TradeStatModels {
                     ttwVariance = ttwVarianceSum.setScale(12, RoundingMode.HALF_EVEN) / (size - 1).toBigDecimal()
                     ttwStdDev = ttwVariance.sqrt(MathContext.DECIMAL128).setScale(0, RoundingMode.DOWN)
                     avgAmount = sumAmount.setScale(12, RoundingMode.HALF_EVEN) / size.toBigDecimal()
-                    varianceAmount = varianceSumAmount / size.toBigDecimal()
+                    varianceAmount = varianceSumAmount.setScale(12, RoundingMode.HALF_EVEN) / size.toBigDecimal()
                     stdDevAmount = varianceAmount.sqrt(MathContext.DECIMAL128).setScale(8, RoundingMode.DOWN)
 
                     Trade2State(

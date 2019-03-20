@@ -52,14 +52,13 @@ class HttpServer(
             .share()
     )
 
-    fun webSocketHandler(ws: ServerWebSocket) {
+    private fun webSocketHandler(ws: ServerWebSocket) {
         if (ws.path() == "/api/ws") {
             logger.debug("websocket connection established")
 
             val map = ConcurrentHashMap<MsgId, Disposable>()
 
             ws.textMessageHandler { msg ->
-
                 try {
                     val req = Json.mapper.readValue<ReqMsg>(msg)
 

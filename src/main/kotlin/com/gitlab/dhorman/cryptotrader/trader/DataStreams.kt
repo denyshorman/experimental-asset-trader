@@ -104,10 +104,10 @@ class DataStreams(
         markets.map { (_, marketStringMap) ->
             marketStringMap.map { market, marketId ->
                 val initialTrades =
-                    poloniexApi.tradeHistoryPublic(market).retry().flux().doOnNext {
+                    poloniexApi.tradeHistoryPublic(market).flux().doOnNext {
                         if (logger.isDebugEnabled) logger.debug("Received initial trades for $market")
                     }.doOnError {
-                        if(logger.isDebugEnabled) logger.debug("Error received for initial trades for $market")
+                        if (logger.isDebugEnabled) logger.debug("Error received for initial trades for $market")
                     } // TODO: Specify backoff
 
                 val tradesStream = orderBooks.map { it.get(marketId).get() }
@@ -147,7 +147,9 @@ class DataStreams(
                         sellOld = allTrades.sell,
                         sellNew = allTrades.sell,
                         buyOld = allTrades.buy,
-                        buyNew = allTrades.buy
+                        buyNew = allTrades.buy,
+                        sellStatus = TradeStatModels.Trade1Status.Init,
+                        buyStatus = TradeStatModels.Trade1Status.Init
                     )
                 }.switchMap { initTrade1 ->
                     tradesStream.scan(
@@ -159,46 +161,50 @@ class DataStreams(
                         val sellNew: Queue<TradeStatModels.SimpleTrade>
                         val buyOld: Queue<TradeStatModels.SimpleTrade>
                         val buyNew: Queue<TradeStatModels.SimpleTrade>
+                        val sellStatus: TradeStatModels.Trade1Status
+                        val buyStatus: TradeStatModels.Trade1Status
 
                         if (bookTrade.orderType == OrderType.Sell) {
                             sellOld = trade1.sellNew
                             sellNew = TradeStatModels.Trade1.newTrades(newTrade, trade1.sellNew, bufferLimit)
                             buyOld = trade1.buyOld
                             buyNew = trade1.buyNew
+                            sellStatus = TradeStatModels.Trade1Status.Changed
+                            buyStatus = TradeStatModels.Trade1Status.NotChanged
                         } else {
                             buyOld = trade1.buyNew
                             buyNew = TradeStatModels.Trade1.newTrades(newTrade, trade1.buyNew, bufferLimit)
                             sellOld = trade1.sellOld
                             sellNew = trade1.sellNew
+                            buyStatus = TradeStatModels.Trade1Status.Changed
+                            sellStatus = TradeStatModels.Trade1Status.NotChanged
                         }
 
-                        TradeStatModels.Trade1(sellOld, sellNew, buyOld, buyNew)
+                        TradeStatModels.Trade1(sellOld, sellNew, buyOld, buyNew, sellStatus, buyStatus)
                     }
                 }
 
                 val trades2 = trades1.scan(
                     TradeStatModels.Trade2.DEFAULT
                 ) { trade2, trade1 ->
-                    val a = trade1.sellOld === trade1.sellNew
-                    val b = trade1.buyOld === trade1.buyNew
-                    val na = trade1.sellOld !== trade1.sellNew
-                    val nb = trade1.buyOld !== trade1.buyNew
+                    val sell = when (trade1.sellStatus) {
+                        TradeStatModels.Trade1Status.Changed -> TradeStatModels.Trade2State.calc(
+                            trade2.sell,
+                            trade1.sellOld,
+                            trade1.sellNew
+                        )
+                        TradeStatModels.Trade1Status.NotChanged -> trade2.sell
+                        TradeStatModels.Trade1Status.Init -> TradeStatModels.Trade2State.calcFull(trade1.sellNew)
+                    }
 
-                    val sell: TradeStatModels.Trade2State
-                    val buy: TradeStatModels.Trade2State
-
-                    if (na && b) {
-                        sell = TradeStatModels.Trade2State.calc(trade2.sell, trade1.sellOld, trade1.sellNew)
-                        buy = trade2.buy
-                    } else if (a && nb) {
-                        sell = trade2.sell
-                        buy = TradeStatModels.Trade2State.calc(trade2.buy, trade1.buyOld, trade1.buyNew)
-                    } else if (a && b) {
-                        sell = TradeStatModels.Trade2State.calcFull(trade1.sellNew)
-                        buy = TradeStatModels.Trade2State.calcFull(trade1.buyNew)
-                    } else {
-                        sell = TradeStatModels.Trade2State.calc(trade2.sell, trade1.sellOld, trade1.sellNew)
-                        buy = TradeStatModels.Trade2State.calc(trade2.buy, trade1.buyOld, trade1.buyNew)
+                    val buy = when (trade1.buyStatus) {
+                        TradeStatModels.Trade1Status.Changed -> TradeStatModels.Trade2State.calc(
+                            trade2.buy,
+                            trade1.buyOld,
+                            trade1.buyNew
+                        )
+                        TradeStatModels.Trade1Status.NotChanged -> trade2.buy
+                        TradeStatModels.Trade1Status.Init -> TradeStatModels.Trade2State.calcFull(trade1.buyNew)
                     }
 
                     TradeStatModels.Trade2(sell, buy)
