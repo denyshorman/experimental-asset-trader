@@ -6,6 +6,7 @@ import com.gitlab.dhorman.cryptotrader.core.TradeStat
 import com.gitlab.dhorman.cryptotrader.core.oneMinus
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
+import com.gitlab.dhorman.cryptotrader.trader.data.tradestat.*
 import io.vavr.Tuple2
 import io.vavr.collection.HashMap
 import io.vavr.collection.Map
@@ -117,11 +118,11 @@ class DataStreams(
                     .map { it as OrderBookTrade }
 
                 val initialTrades0 = initialTrades.map { allTrades ->
-                    var sellTrades = Queue.empty<TradeStatModels.SimpleTrade>()
-                    var buyTrades = Queue.empty<TradeStatModels.SimpleTrade>()
+                    var sellTrades = Queue.empty<SimpleTrade>()
+                    var buyTrades = Queue.empty<SimpleTrade>()
 
                     for (trade in allTrades) {
-                        val trade0 = TradeStatModels.SimpleTrade(
+                        val trade0 = SimpleTrade(
                             trade.price, trade.amount, trade.date.toInstant(
                                 ZoneOffset.UTC
                             )
@@ -139,81 +140,81 @@ class DataStreams(
                     if (buyTrades.length() > bufferLimit) buyTrades =
                         buyTrades.dropRight(buyTrades.length() - bufferLimit)
 
-                    TradeStatModels.Trade0(sellTrades, buyTrades)
+                    Trade0(sellTrades, buyTrades)
                 }
 
                 val trades1 = initialTrades0.map { allTrades ->
-                    TradeStatModels.Trade1(
+                    Trade1(
                         sellOld = allTrades.sell,
                         sellNew = allTrades.sell,
                         buyOld = allTrades.buy,
                         buyNew = allTrades.buy,
-                        sellStatus = TradeStatModels.Trade1Status.Init,
-                        buyStatus = TradeStatModels.Trade1Status.Init
+                        sellStatus = Trade1Status.Init,
+                        buyStatus = Trade1Status.Init
                     )
                 }.switchMap { initTrade1 ->
                     tradesStream.scan(
                         initTrade1
                     ) { trade1, bookTrade ->
                         val newTrade =
-                            TradeStatModels.SimpleTrade(bookTrade.price, bookTrade.amount, bookTrade.timestamp)
-                        val sellOld: Queue<TradeStatModels.SimpleTrade>
-                        val sellNew: Queue<TradeStatModels.SimpleTrade>
-                        val buyOld: Queue<TradeStatModels.SimpleTrade>
-                        val buyNew: Queue<TradeStatModels.SimpleTrade>
-                        val sellStatus: TradeStatModels.Trade1Status
-                        val buyStatus: TradeStatModels.Trade1Status
+                            SimpleTrade(bookTrade.price, bookTrade.amount, bookTrade.timestamp)
+                        val sellOld: Queue<SimpleTrade>
+                        val sellNew: Queue<SimpleTrade>
+                        val buyOld: Queue<SimpleTrade>
+                        val buyNew: Queue<SimpleTrade>
+                        val sellStatus: Trade1Status
+                        val buyStatus: Trade1Status
 
                         if (bookTrade.orderType == OrderType.Sell) {
                             sellOld = trade1.sellNew
-                            sellNew = TradeStatModels.Trade1.newTrades(newTrade, trade1.sellNew, bufferLimit)
+                            sellNew = Trade1.newTrades(newTrade, trade1.sellNew, bufferLimit)
                             buyOld = trade1.buyOld
                             buyNew = trade1.buyNew
-                            sellStatus = TradeStatModels.Trade1Status.Changed
-                            buyStatus = TradeStatModels.Trade1Status.NotChanged
+                            sellStatus = Trade1Status.Changed
+                            buyStatus = Trade1Status.NotChanged
                         } else {
                             buyOld = trade1.buyNew
-                            buyNew = TradeStatModels.Trade1.newTrades(newTrade, trade1.buyNew, bufferLimit)
+                            buyNew = Trade1.newTrades(newTrade, trade1.buyNew, bufferLimit)
                             sellOld = trade1.sellOld
                             sellNew = trade1.sellNew
-                            buyStatus = TradeStatModels.Trade1Status.Changed
-                            sellStatus = TradeStatModels.Trade1Status.NotChanged
+                            buyStatus = Trade1Status.Changed
+                            sellStatus = Trade1Status.NotChanged
                         }
 
-                        TradeStatModels.Trade1(sellOld, sellNew, buyOld, buyNew, sellStatus, buyStatus)
+                        Trade1(sellOld, sellNew, buyOld, buyNew, sellStatus, buyStatus)
                     }
                 }
 
                 val trades2 = trades1.scan(
-                    TradeStatModels.Trade2.DEFAULT
+                    Trade2.DEFAULT
                 ) { trade2, trade1 ->
                     val sell = when (trade1.sellStatus) {
-                        TradeStatModels.Trade1Status.Changed -> TradeStatModels.Trade2State.calc(
+                        Trade1Status.Changed -> Trade2State.calc(
                             trade2.sell,
                             trade1.sellOld,
                             trade1.sellNew
                         )
-                        TradeStatModels.Trade1Status.NotChanged -> trade2.sell
-                        TradeStatModels.Trade1Status.Init -> TradeStatModels.Trade2State.calcFull(trade1.sellNew)
+                        Trade1Status.NotChanged -> trade2.sell
+                        Trade1Status.Init -> Trade2State.calcFull(trade1.sellNew)
                     }
 
                     val buy = when (trade1.buyStatus) {
-                        TradeStatModels.Trade1Status.Changed -> TradeStatModels.Trade2State.calc(
+                        Trade1Status.Changed -> Trade2State.calc(
                             trade2.buy,
                             trade1.buyOld,
                             trade1.buyNew
                         )
-                        TradeStatModels.Trade1Status.NotChanged -> trade2.buy
-                        TradeStatModels.Trade1Status.Init -> TradeStatModels.Trade2State.calcFull(trade1.buyNew)
+                        Trade1Status.NotChanged -> trade2.buy
+                        Trade1Status.Init -> Trade2State.calcFull(trade1.buyNew)
                     }
 
-                    TradeStatModels.Trade2(sell, buy)
+                    Trade2(sell, buy)
                 }.skip(1)
 
                 val statStream = trades2.map { state ->
                     TradeStat(
-                        sell = TradeStatModels.Trade2State.map(state.sell),
-                        buy = TradeStatModels.Trade2State.map(state.buy)
+                        sell = Trade2State.map(state.sell),
+                        buy = Trade2State.map(state.buy)
                     )
                 }.replay(1).refCount()
 

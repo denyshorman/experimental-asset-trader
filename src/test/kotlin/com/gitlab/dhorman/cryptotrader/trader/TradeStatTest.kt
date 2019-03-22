@@ -2,6 +2,8 @@ package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.TradeStatOrder
 import com.gitlab.dhorman.cryptotrader.core.cut8
+import com.gitlab.dhorman.cryptotrader.trader.data.tradestat.SimpleTrade
+import com.gitlab.dhorman.cryptotrader.trader.data.tradestat.Trade2State
 import io.vavr.collection.Queue
 import io.vavr.collection.Array
 import org.junit.jupiter.api.Test
@@ -14,7 +16,7 @@ import java.util.*
 class TradeStatTest {
     private val random = Random()
 
-    private fun calcTrueStat(lastTrades: Queue<TradeStatModels.SimpleTrade>): TradeStatOrder {
+    private fun calcTrueStat(lastTrades: Queue<SimpleTrade>): TradeStatOrder {
 
         val waitMsSample = if (lastTrades.length() == 1) {
             Array.of(lastTrades.head().timestamp.toEpochMilli())
@@ -68,7 +70,7 @@ class TradeStatTest {
         )
     }
 
-    private fun assert(stat: TradeStatOrder, res: TradeStatModels.Trade2State, checkMinMax: Boolean = true) {
+    private fun assert(stat: TradeStatOrder, res: Trade2State, checkMinMax: Boolean = true) {
         assert(stat.ttwAvgMs == res.ttwAverageMs.toLong())
         assert(stat.ttwVariance == res.ttwVariance.toLong())
         assert(stat.ttwStdDev == res.ttwStdDev.toLong())
@@ -86,17 +88,17 @@ class TradeStatTest {
         val randomTime = Math.abs(random.nextLong()) % 500 + 1
 
         val sample = Queue.of(
-            TradeStatModels.SimpleTrade(
+            SimpleTrade(
                 3.toBigDecimal(),
                 (Math.abs(random.nextLong()) % 500 + 1).toBigDecimal(),
                 Instant.ofEpochMilli(randomTime)
             ),
-            TradeStatModels.SimpleTrade(
+            SimpleTrade(
                 2.toBigDecimal(),
                 (Math.abs(random.nextLong()) % 500 + 1).toBigDecimal(),
                 Instant.ofEpochMilli(randomTime - 10)
             ),
-            TradeStatModels.SimpleTrade(
+            SimpleTrade(
                 1.toBigDecimal(),
                 (Math.abs(random.nextLong()) % 500 + 1).toBigDecimal(),
                 Instant.ofEpochMilli(randomTime - 34)
@@ -104,7 +106,7 @@ class TradeStatTest {
         )
 
         val expected: TradeStatOrder = calcTrueStat(sample)
-        val actual: TradeStatModels.Trade2State = TradeStatModels.Trade2State.calcFull(sample)
+        val actual: Trade2State = Trade2State.calcFull(sample)
 
         println(sample)
         println(actual)
@@ -115,13 +117,13 @@ class TradeStatTest {
     @Test
     fun `Trade2State calcFull should correctly calculate stat with specific trades`() {
         val sample = Queue.of(
-            TradeStatModels.SimpleTrade(3.toBigDecimal(), 429.toBigDecimal(), Instant.ofEpochMilli(461)),
-            TradeStatModels.SimpleTrade(2.toBigDecimal(), 402.toBigDecimal(), Instant.ofEpochMilli(451)),
-            TradeStatModels.SimpleTrade(1.toBigDecimal(), 308.toBigDecimal(), Instant.ofEpochMilli(427))
+            SimpleTrade(3.toBigDecimal(), 429.toBigDecimal(), Instant.ofEpochMilli(461)),
+            SimpleTrade(2.toBigDecimal(), 402.toBigDecimal(), Instant.ofEpochMilli(451)),
+            SimpleTrade(1.toBigDecimal(), 308.toBigDecimal(), Instant.ofEpochMilli(427))
         )
 
         val expected: TradeStatOrder = calcTrueStat(sample)
-        val actual: TradeStatModels.Trade2State = TradeStatModels.Trade2State.calcFull(sample)
+        val actual: Trade2State = Trade2State.calcFull(sample)
 
         println(sample)
         println(actual)
@@ -134,32 +136,32 @@ class TradeStatTest {
         val randomTime = Math.abs(random.nextLong()) % 500 + 1
 
         val sample0 = Queue.of(
-            TradeStatModels.SimpleTrade(
+            SimpleTrade(
                 3.toBigDecimal(),
                 (Math.abs(random.nextLong()) % 500 + 1).toBigDecimal(),
                 Instant.ofEpochMilli(randomTime - 5)
             ),
-            TradeStatModels.SimpleTrade(
+            SimpleTrade(
                 2.toBigDecimal(),
                 (Math.abs(random.nextLong()) % 500 + 1).toBigDecimal(),
                 Instant.ofEpochMilli(randomTime - 8)
             ),
-            TradeStatModels.SimpleTrade(
+            SimpleTrade(
                 1.toBigDecimal(),
                 (Math.abs(random.nextLong()) % 500 + 1).toBigDecimal(),
                 Instant.ofEpochMilli(randomTime - 15)
             )
         )
         val sample1 = Queue.of(
-            TradeStatModels.SimpleTrade(4.toBigDecimal(), 121.toBigDecimal(), Instant.ofEpochMilli(randomTime)),
+            SimpleTrade(4.toBigDecimal(), 121.toBigDecimal(), Instant.ofEpochMilli(randomTime)),
             sample0[0],
             sample0[1],
             sample0[2]
         )
 
-        val initState: TradeStatModels.Trade2State = TradeStatModels.Trade2State.calcFull(sample0)
+        val initState: Trade2State = Trade2State.calcFull(sample0)
         val expected: TradeStatOrder = calcTrueStat(sample1)
-        val actual = TradeStatModels.Trade2State.calc(initState, sample0, sample1)
+        val actual = Trade2State.calc(initState, sample0, sample1)
 
         println(expected)
         println(actual)
@@ -170,20 +172,20 @@ class TradeStatTest {
     @Test
     fun `Trade2State calc should correctly calculate stat with specific trades`() {
         val sample0 = Queue.of(
-            TradeStatModels.SimpleTrade(3.toBigDecimal(), 429.toBigDecimal(), Instant.ofEpochMilli(11)),
-            TradeStatModels.SimpleTrade(2.toBigDecimal(), 402.toBigDecimal(), Instant.ofEpochMilli(8)),
-            TradeStatModels.SimpleTrade(1.toBigDecimal(), 308.toBigDecimal(), Instant.ofEpochMilli(1))
+            SimpleTrade(3.toBigDecimal(), 429.toBigDecimal(), Instant.ofEpochMilli(11)),
+            SimpleTrade(2.toBigDecimal(), 402.toBigDecimal(), Instant.ofEpochMilli(8)),
+            SimpleTrade(1.toBigDecimal(), 308.toBigDecimal(), Instant.ofEpochMilli(1))
         )
         val sample1 = Queue.of(
-            TradeStatModels.SimpleTrade(3.toBigDecimal(), 121.toBigDecimal(), Instant.ofEpochMilli(18)),
+            SimpleTrade(3.toBigDecimal(), 121.toBigDecimal(), Instant.ofEpochMilli(18)),
             sample0[0],
             sample0[1],
             sample0[2]
         )
 
-        val initState: TradeStatModels.Trade2State = TradeStatModels.Trade2State.calcFull(sample0)
+        val initState: Trade2State = Trade2State.calcFull(sample0)
         val expected: TradeStatOrder = calcTrueStat(sample1)
-        val actual = TradeStatModels.Trade2State.calc(initState, sample0, sample1)
+        val actual = Trade2State.calc(initState, sample0, sample1)
 
         println(expected)
         println(actual)
@@ -194,28 +196,28 @@ class TradeStatTest {
     @Test
     fun `Trade2State calc should correctly calculate stat with specific trades 2`() {
         val sample0 = Queue.of(
-            TradeStatModels.SimpleTrade(3.toBigDecimal(), 3.toBigDecimal(), Instant.ofEpochMilli(11)),
-            TradeStatModels.SimpleTrade(2.toBigDecimal(), 1.toBigDecimal(), Instant.ofEpochMilli(8)),
-            TradeStatModels.SimpleTrade(1.toBigDecimal(), 2.toBigDecimal(), Instant.ofEpochMilli(1))
+            SimpleTrade(3.toBigDecimal(), 3.toBigDecimal(), Instant.ofEpochMilli(11)),
+            SimpleTrade(2.toBigDecimal(), 1.toBigDecimal(), Instant.ofEpochMilli(8)),
+            SimpleTrade(1.toBigDecimal(), 2.toBigDecimal(), Instant.ofEpochMilli(1))
         )
 
         val sample1 = Queue.of(
-            TradeStatModels.SimpleTrade(4.toBigDecimal(), 4.toBigDecimal(), Instant.ofEpochMilli(18)),
+            SimpleTrade(4.toBigDecimal(), 4.toBigDecimal(), Instant.ofEpochMilli(18)),
             sample0[0],
             sample0[1],
             sample0[2]
         )
 
         val sample2 = Queue.of(
-            TradeStatModels.SimpleTrade(5.toBigDecimal(), 5.toBigDecimal(), Instant.ofEpochMilli(38)),
+            SimpleTrade(5.toBigDecimal(), 5.toBigDecimal(), Instant.ofEpochMilli(38)),
             sample1[0],
             sample1[1],
             sample1[2]
         )
 
-        val state0 = TradeStatModels.Trade2State.calcFull(sample0)
-        val state1 = TradeStatModels.Trade2State.calc(state0, sample0, sample1)
-        val actual = TradeStatModels.Trade2State.calc(state1, sample1, sample2)
+        val state0 = Trade2State.calcFull(sample0)
+        val state1 = Trade2State.calc(state0, sample0, sample1)
+        val actual = Trade2State.calc(state1, sample1, sample2)
         val expected = calcTrueStat(sample2)
 
         println(expected)
@@ -227,16 +229,16 @@ class TradeStatTest {
     @Test
     fun `Trade2State calc should correctly calculate stat with specific trades 3`() {
         var ts = 1L
-        var prevSample: Queue<TradeStatModels.SimpleTrade>?
-        var sample = Queue.empty<TradeStatModels.SimpleTrade>()
-        var state: TradeStatModels.Trade2State = TradeStatModels.Trade2State.calcFull(sample)
+        var prevSample: Queue<SimpleTrade>?
+        var sample = Queue.empty<SimpleTrade>()
+        var state: Trade2State = Trade2State.calcFull(sample)
         val maxSample = 15
 
         for (i in 1..100) {
             val price = (Math.abs(random.nextLong()) % 100 + 1).toBigDecimal()
             val amount = (Math.abs(random.nextLong()) % 500 + 1).toBigDecimal()
             ts += i
-            val trade = TradeStatModels.SimpleTrade(price, amount, Instant.ofEpochMilli(ts))
+            val trade = SimpleTrade(price, amount, Instant.ofEpochMilli(ts))
 
             prevSample = sample
 
@@ -246,7 +248,7 @@ class TradeStatTest {
                 sample.prepend(trade)
             }
 
-            state = TradeStatModels.Trade2State.calc(state, prevSample, sample)
+            state = Trade2State.calc(state, prevSample, sample)
         }
 
         val expected = calcTrueStat(sample)

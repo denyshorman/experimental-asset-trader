@@ -1,7 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.core
 
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
-import com.gitlab.dhorman.cryptotrader.trader.TradeStatModels
+import com.gitlab.dhorman.cryptotrader.trader.data.tradestat.Trade2State
 import io.vavr.collection.Queue
 import io.vavr.collection.TreeMap
 import io.vavr.kotlin.list
@@ -143,7 +143,7 @@ class OrdersTest {
         val makerFeeMultiplier = BigDecimal(0.999)
         val targetCurrency = "UAH"
         val toAmount = BigDecimal(260.5)
-        val stat = TradeStatModels.Trade2State.map(TradeStatModels.Trade2State.calcFull(Queue.empty()))
+        val stat = Trade2State.map(Trade2State.calcFull(Queue.empty()))
 
         val buyQuoteReverse = Orders.getDelayedOrderReverse(
             market,
@@ -192,7 +192,7 @@ class OrdersTest {
         val makerFeeMultiplier = BigDecimal(0.998)
         val targetCurrency = "USD"
         val toAmount = BigDecimal(125)
-        val stat = TradeStatModels.Trade2State.map(TradeStatModels.Trade2State.calcFull(Queue.empty()))
+        val stat = Trade2State.map(Trade2State.calcFull(Queue.empty()))
 
         val sellQuoteReverse = Orders.getDelayedOrderReverse(
             market,
@@ -250,7 +250,7 @@ class OrdersTest {
         )
 
         val makerFeeMultiplier = BigDecimal(0.999)
-        val stat = TradeStatModels.Trade2State.map(TradeStatModels.Trade2State.calcFull(Queue.empty()))
+        val stat = Trade2State.map(Trade2State.calcFull(Queue.empty()))
 
         val targetUsdcAmount = 87.toBigDecimal()
 
