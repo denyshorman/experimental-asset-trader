@@ -12,10 +12,7 @@ import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.collection.Set
 import io.vavr.collection.Traversable
-import io.vavr.kotlin.component1
-import io.vavr.kotlin.component2
-import io.vavr.kotlin.toVavrList
-import io.vavr.kotlin.toVavrStream
+import io.vavr.kotlin.*
 import reactor.core.publisher.Flux
 import java.math.BigDecimal
 import java.util.*
@@ -58,8 +55,8 @@ object PathsUtil {
                     val dependenciesStream = Flux.combineLatest(dependencies, 1) { it }
 
                     val exhaustivePath = dependenciesStream.map { booksStats ->
-                        map(targetPath, initialAmount, fee, path, booksStats)
-                    }
+                        map(targetPath, initialAmount, fee, path, booksStats).option()
+                    }.filter{it.isDefined}.map{it.get()}
 
                     exhaustivePath
                 }
@@ -76,7 +73,7 @@ object PathsUtil {
         fee: FeeMultiplier,
         path: List<Tuple2<PathOrderType, Market>>,
         booksStats: Array<Any>
-    ): ExhaustivePath {
+    ): ExhaustivePath? {
         val chain = LinkedList<InstantDelayedOrder>()
         var targetCurrency = targetPath._1
         var fromAmount = startAmount
@@ -97,7 +94,7 @@ object PathsUtil {
                     i += 1
                     mapDelayedOrder(market, targetCurrency, fromAmount, fee.maker, orderBook, stat)
                 }
-            }
+            } ?: return null
 
             // TODO: Improve
             fromAmount = when (order) {
@@ -117,8 +114,8 @@ object PathsUtil {
         fromAmount: Amount,
         takerFee: BigDecimal,
         orderBook: OrderBookAbstract
-    ): InstantOrder {
-        return Orders.getInstantOrder(market, targetCurrency, fromAmount, takerFee, orderBook)!!
+    ): InstantOrder? {
+        return Orders.getInstantOrder(market, targetCurrency, fromAmount, takerFee, orderBook)
     }
 
     private fun mapDelayedOrder(
@@ -128,9 +125,9 @@ object PathsUtil {
         makerFee: BigDecimal,
         orderBook: OrderBookAbstract,
         stat: TradeStat
-    ): DelayedOrder {
+    ): DelayedOrder? {
         val stat0 = statOrder(market, targetCurrency, stat)
-        return Orders.getDelayedOrder(market, targetCurrency, fromAmount, makerFee, orderBook, stat0)!!
+        return Orders.getDelayedOrder(market, targetCurrency, fromAmount, makerFee, orderBook, stat0)
     }
 
     private fun statOrder(market: Market, targetCurrency: Currency, stat: TradeStat): TradeStatOrder {
