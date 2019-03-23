@@ -1,10 +1,12 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniex.model
 
+import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonFormat
 import com.fasterxml.jackson.annotation.JsonValue
 import com.fasterxml.jackson.databind.JsonDeserializer
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize
+import com.gitlab.dhorman.cryptotrader.config.MsgId
 import com.gitlab.dhorman.cryptotrader.service.poloniex.codec.*
 import io.vavr.collection.Map
 import java.math.BigDecimal
@@ -141,5 +143,11 @@ enum class FundingType(@get:JsonValue val id: Int) {
     ExchangeWallet(0),
     BorrowedFunds(1),
     MarginFunds(2),
-    LendingFunds(3)
+    LendingFunds(3);
+
+    companion object {
+        @JsonCreator
+        @JvmStatic
+        fun valueById(id: Byte) = MsgId.values().find { it.id == id }
+    }
 }

@@ -8,11 +8,7 @@ import java.util.Comparator
 
 object ExhaustivePathOrdering : Comparator<ExhaustivePath> {
     override fun compare(x: ExhaustivePath, y: ExhaustivePath): Int {
-        return if (x.id == y.id) {
-            0
-        } else {
-            x.simpleMultiplier.compareTo(y.simpleMultiplier)
-        }
+        return x.id.compareTo(y.id)
     }
 }
 

@@ -1,5 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.config
 
+import com.fasterxml.jackson.annotation.JsonCreator
+import com.fasterxml.jackson.annotation.JsonValue
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.trader.Trader
 import io.vertx.core.Vertx
@@ -122,12 +124,24 @@ data class ReqMsg(val type: MsgType, val id: MsgId)
 
 data class RespMsg<T>(val id: MsgId, val data: T)
 
-enum class MsgType(val id: Byte) {
+enum class MsgType(@get:JsonValue val id: Byte) {
     Subscribe(0),
-    Unsubscribe(1)
+    Unsubscribe(1);
+
+    companion object {
+        @JsonCreator
+        @JvmStatic
+        fun valueById(id: Byte) = MsgId.values().find { it.id == id }
+    }
 }
 
-enum class MsgId(val id: Byte) {
+enum class MsgId(@get:JsonValue val id: Byte) {
     Ticker(0),
-    Paths(2)
+    Paths(2);
+
+    companion object {
+        @JsonCreator
+        @JvmStatic
+        fun valueById(id: Byte) = values().find { it.id == id }
+    }
 }

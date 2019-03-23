@@ -1,5 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.core
 
+import com.fasterxml.jackson.annotation.JsonSubTypes
+import com.fasterxml.jackson.annotation.JsonTypeInfo
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
@@ -180,6 +182,14 @@ object Orders {
 }
 
 
+@JsonTypeInfo(
+    use = JsonTypeInfo.Id.NAME,
+    include = JsonTypeInfo.As.WRAPPER_OBJECT
+)
+@JsonSubTypes(
+    JsonSubTypes.Type(value = InstantOrder::class, name = "InstantOrder"),
+    JsonSubTypes.Type(value = DelayedOrder::class, name = "DelayedOrder")
+)
 sealed class InstantDelayedOrder
 
 data class InstantOrder(
