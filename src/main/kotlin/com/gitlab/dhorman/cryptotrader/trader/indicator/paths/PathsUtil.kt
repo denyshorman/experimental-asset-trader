@@ -14,6 +14,7 @@ import io.vavr.collection.Set
 import io.vavr.collection.Traversable
 import io.vavr.kotlin.*
 import reactor.core.publisher.Flux
+import reactor.core.scheduler.Schedulers
 import java.math.BigDecimal
 import java.util.*
 
@@ -54,9 +55,12 @@ object PathsUtil {
 
                     val dependenciesStream = Flux.combineLatest(dependencies, 1) { it }
 
-                    val exhaustivePath = dependenciesStream.map { booksStats ->
-                        map(targetPath, initialAmount, fee, path, booksStats).option()
-                    }.filter{it.isDefined}.map{it.get()}
+                    val exhaustivePath = dependenciesStream
+                        .onBackpressureLatest()
+                        .publishOn(Schedulers.parallel(), 1)
+                        .map { booksStats -> map(targetPath, initialAmount, fee, path, booksStats).option() }
+                        .filter { it.isDefined }
+                        .map { it.get() }
 
                     exhaustivePath
                 }

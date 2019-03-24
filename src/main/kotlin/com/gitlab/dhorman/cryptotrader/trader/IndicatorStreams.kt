@@ -13,7 +13,8 @@ import io.vavr.collection.TreeSet
 import mu.KotlinLogging
 import reactor.core.publisher.Flux
 import reactor.core.publisher.ReplayProcessor
-import java.util.function.Function
+import reactor.core.scheduler.Schedulers
+import java.util.function.Function.identity
 
 class IndicatorStreams(data: DataStreams) {
     private val logger = KotlinLogging.logger {}
@@ -29,7 +30,11 @@ class IndicatorStreams(data: DataStreams) {
         data.tradesStat,
         data.fee,
         pathsSettings,
-        Function<Array<Any>, Flux<TreeSet<ExhaustivePath>>> { data0 ->
+        identity()
+    )
+        .onBackpressureLatest()
+        .publishOn(Schedulers.parallel(), 1)
+        .map { data0 ->
             @Suppress("UNCHECKED_CAST")
             val marketInfoStringMap = (data0[0] as MarketData)._2
 
@@ -56,7 +61,7 @@ class IndicatorStreams(data: DataStreams) {
             )
 
             pathsPermutationsDelta.scan(TreeSet.empty(ExhaustivePathOrdering)) { state, delta -> state.add(delta) }
-        })
+        }
         .switchMap { it }
         .share()
 }

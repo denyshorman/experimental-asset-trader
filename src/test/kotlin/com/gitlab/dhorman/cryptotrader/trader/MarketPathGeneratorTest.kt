@@ -169,7 +169,7 @@ class MarketPathGeneratorTest {
     fun `MarketPathGenerator should generate all permutations with orders`() {
         val paths = marketPathGenerator.generateAllPermutationsWithOrders(list("USDC", "USDT"))
         val flattenPaths = paths.flatMap { p -> p._2 }.toList().sortBy { it.size() }
-        for (path in flattenPaths) println(path)
+        // Files.write(Paths.get("./test.txt"), flattenPaths.map { it.toString() })
         println("Total: ${flattenPaths.size()}")
     }
 

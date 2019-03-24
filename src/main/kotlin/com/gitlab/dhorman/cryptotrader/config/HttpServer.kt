@@ -15,6 +15,7 @@ import mu.KotlinLogging
 
 import reactor.core.Disposable
 import reactor.core.publisher.Flux
+import reactor.core.scheduler.Schedulers
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 
@@ -48,7 +49,11 @@ class HttpServer(
             .cache(1)
             .sampleFirst(Duration.ofSeconds(30))
             .onBackpressureLatest()
-            .flatMapSequential({ Flux.fromIterable(it).buffer(500) }, 1, 1)
+            .flatMapSequential({
+                Flux.fromIterable(it)
+                    .buffer(500)
+                    .subscribeOn(Schedulers.parallel())
+            }, 1, 1)
             .map { RespMsg(MsgId.Paths, it) }
             .map { Json.encode(it) }
             .share()
