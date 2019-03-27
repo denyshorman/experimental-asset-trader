@@ -10,10 +10,16 @@ import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsUtil
 import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.collection.TreeSet
+import io.vavr.kotlin.component1
+import io.vavr.kotlin.component2
+import io.vavr.kotlin.toVavrMap
+import io.vavr.kotlin.tuple
 import mu.KotlinLogging
 import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
 import reactor.core.publisher.ReplayProcessor
 import reactor.core.scheduler.Schedulers
+import java.time.Duration
 import java.util.function.Function.identity
 
 class IndicatorStreams(data: DataStreams) {
@@ -33,35 +39,68 @@ class IndicatorStreams(data: DataStreams) {
         identity()
     )
         .onBackpressureLatest()
-        .publishOn(Schedulers.parallel(), 1)
+        .publishOn(Schedulers.elastic(), 1)
         .map { data0 ->
             @Suppress("UNCHECKED_CAST")
             val marketInfoStringMap = (data0[0] as MarketData)._2
-
-            @Suppress("UNCHECKED_CAST")
-            val orderBooks = data0[1] as OrderBookDataMap
-
-            @Suppress("UNCHECKED_CAST")
-            val stats = data0[2] as Map<MarketId, Flux<TradeStat>>
 
             val fee = data0[3] as FeeMultiplier
             val settings = data0[4] as PathsSettings
 
             val pathsPermutations = PathsUtil.generateSimplePaths(marketInfoStringMap.keySet(), settings.currencies)
 
+            val uniqueMarkets = PathsUtil.uniqueMarkets(pathsPermutations).map { marketInfoStringMap[it].get() }
+
+            @Suppress("UNCHECKED_CAST")
+            val orderBooks = (data0[1] as OrderBookDataMap)
+                .filter { marketId, _ -> uniqueMarkets.contains(marketId) }
+
+            @Suppress("UNCHECKED_CAST")
+            val stats = (data0[2] as Map<MarketId, Flux<TradeStat>>)
+                .filter { marketId, _ -> uniqueMarkets.contains(marketId) }
+
             if (logger.isDebugEnabled) logger.debug("Paths generated: ${pathsPermutations.iterator().map { it._2.size() }.sum()}")
 
-            val pathsPermutationsDelta = PathsUtil.wrapPathsPermutationsToStream(
-                pathsPermutations,
-                orderBooks,
-                stats,
-                marketInfoStringMap,
-                settings.initialAmount,
-                fee
-            )
+            Flux.interval(Duration.ofSeconds(15))
+                .startWith(0)
+                .onBackpressureDrop()
+                .limitRate(1)
+                .switchMap({
+                    val books0 = orderBooks.map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
+                    val books1 = Flux.fromIterable(books0)
+                        .flatMap(identity(), books0.length(), 1)
+                        .collectMap({ it._1 }, { it._2 })
+                        .map { it.toVavrMap() }
 
-            pathsPermutationsDelta.scan(TreeSet.empty(ExhaustivePathOrdering)) { state, delta -> state.add(delta) }
+                    val stats0 = stats.map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
+                    val stats1 = Flux.fromIterable(stats0)
+                        .flatMap(identity(), stats0.length(), 1)
+                        .collectMap({ it._1 }, { it._2 })
+                        .map { it.toVavrMap() }
+
+                    Mono.zip(books1, stats1) { b, s -> tuple(b, s) }
+                }, 1)
+                .publishOn(Schedulers.elastic(), 1)
+                .scan(TreeSet.empty(ExhaustivePathOrdering)) { _, bookStatDelta ->
+                    val (orderBooks0, stats0) = bookStatDelta
+                    var sortedPaths = TreeSet.empty(ExhaustivePathOrdering)
+                    val exhaustivePaths = PathsUtil.map(
+                        pathsPermutations,
+                        orderBooks0,
+                        stats0,
+                        marketInfoStringMap,
+                        settings.initialAmount,
+                        fee
+                    )
+                    for (exhaustivePath in exhaustivePaths) {
+                        if (exhaustivePath != null) {
+                            sortedPaths = sortedPaths.add(exhaustivePath)
+                        }
+                    }
+                    sortedPaths
+                }
+                .skip(1)
         }
-        .switchMap { it }
+        .switchMap(identity(), Int.MAX_VALUE)
         .share()
 }

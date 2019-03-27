@@ -52,7 +52,7 @@ class HttpServer(
             .flatMapSequential({
                 Flux.fromIterable(it)
                     .buffer(500)
-                    .subscribeOn(Schedulers.parallel())
+                    .subscribeOn(Schedulers.elastic())
             }, 1, 1)
             .map { RespMsg(MsgId.Paths, it) }
             .map { Json.encode(it) }

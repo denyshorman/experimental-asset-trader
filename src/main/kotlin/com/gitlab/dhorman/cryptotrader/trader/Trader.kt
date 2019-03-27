@@ -30,17 +30,11 @@ class Trader(private val poloniexApi: PoloniexApi) {
     fun start(): Flux<Unit> {
         logger.info("Start trading")
 
-        poloniexApi.orderBookStream(254).subscribe({
-            logger.info(it.toString())
-        }, {
-            logger.error(it.toString(), it)
-        })
-
-        /*indicators.paths.subscribe({
-            logger.info(it.length().toString())
+        indicators.paths.subscribe({
+            //logger.info(it.length().toString())
         }, {
             logger.error(it.message, it)
-        })*/
+        })
 
         /*data.tradesStat.switchMap({ map ->
             val allTradeStats: Seq<Flux<TradeStat>> = map.values()

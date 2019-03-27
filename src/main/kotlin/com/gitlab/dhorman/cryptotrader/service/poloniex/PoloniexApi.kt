@@ -35,6 +35,7 @@ import reactor.core.publisher.Mono
 import reactor.core.publisher.toFlux
 import java.math.BigDecimal
 import java.time.Duration
+import java.util.function.Function.identity
 import io.vertx.reactivex.core.Vertx as VertxRx
 
 private const val PoloniexPrivatePublicHttpApiUrl = "poloniex.com"
@@ -59,7 +60,7 @@ class PoloniexApi(
             .setMaxWebsocketFrameSize(65536 * 4)
             .setMaxWebsocketMessageSize(65536 * 16)
             .setUserAgentEnabled(false)
-            .setKeepAlive(true)
+            .setKeepAlive(false)
             .setSsl(true)
 
         if (System.getenv("HTTP_CERT_TRUST_ALL") != null) {
@@ -136,7 +137,7 @@ class PoloniexApi(
         val jsonReader = Json.mapper.readerFor(PushNotification::class.java)
 
         websocket
-            .switchMap({ it.toFlowable().toFlux() }, 1)
+            .switchMap({ it.toFlowable().toFlux() }, Int.MAX_VALUE)
             .map { jsonReader.readValue<PushNotification>(it.bytes) }
             .share()
     }
@@ -165,7 +166,7 @@ class PoloniexApi(
                 privateApi = true
             ), FluxSink.OverflowStrategy.BUFFER
         )
-            .flatMapIterable { it } // TODO: Can cause unsubscribe when overflow
+            .flatMapIterable(identity(), Int.MAX_VALUE)
             .share()
     }
 
@@ -174,8 +175,7 @@ class PoloniexApi(
             Flux.create(
                 create(marketId, jacksonTypeRef<List<OrderBookNotification>>()),
                 FluxSink.OverflowStrategy.BUFFER
-            )
-                .flatMapIterable({ it }, 8) // TODO: Can cause unsubscribe when overflow
+            ).flatMapIterable(identity(), Int.MAX_VALUE)
 
         return notifications.scan(
             Tuple2<PriceAggregatedBook, OrderBookNotification>(

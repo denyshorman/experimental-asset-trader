@@ -17,6 +17,7 @@ import io.vavr.kotlin.tuple
 import mu.KotlinLogging
 import reactor.core.publisher.Flux
 import java.math.BigDecimal
+import java.time.Duration
 import java.time.ZoneOffset
 import java.util.function.BiFunction
 
@@ -216,7 +217,7 @@ class DataStreams(
                         sell = Trade2State.map(state.sell),
                         buy = Trade2State.map(state.buy)
                     )
-                }.replay(1).refCount()
+                }.cache(1, Duration.ofMinutes(2))
 
                 Tuple2(marketId, statStream)
             }
@@ -353,7 +354,7 @@ class DataStreams(
 
                 val newBookStream = bookStream.map { (book, update) ->
                     OrderBookData(marketInfo._1.get(marketId).get(), marketId, book, update)
-                }
+                }.cache(1, Duration.ofMinutes(2))
 
                 Tuple2(marketId, newBookStream)
             }

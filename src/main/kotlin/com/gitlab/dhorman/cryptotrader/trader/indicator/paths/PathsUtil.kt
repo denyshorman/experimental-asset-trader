@@ -6,15 +6,16 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import com.gitlab.dhorman.cryptotrader.trader.MarketStringMap
-import com.gitlab.dhorman.cryptotrader.trader.OrderBookDataMap
+import com.gitlab.dhorman.cryptotrader.trader.OrderBookData
 import io.vavr.Tuple2
+import io.vavr.collection.*
 import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.collection.Set
-import io.vavr.collection.Traversable
-import io.vavr.kotlin.*
-import reactor.core.publisher.Flux
-import reactor.core.scheduler.Schedulers
+import io.vavr.kotlin.component1
+import io.vavr.kotlin.component2
+import io.vavr.kotlin.toVavrList
+import io.vavr.kotlin.toVavrStream
 import java.math.BigDecimal
 import java.util.*
 
@@ -26,49 +27,49 @@ object PathsUtil {
         return MarketPathGenerator(markets).generateAllPermutationsWithOrders(currencies)
     }
 
-    fun wrapPathsPermutationsToStream(
+    fun uniqueMarkets(pathsPermutations: Map<Tuple2<Currency, Currency>, Set<List<Tuple2<PathOrderType, Market>>>>): MutableSet<Market> {
+        val marketSet = mutableSetOf<Market>()
+
+        for ((_, paths) in pathsPermutations) {
+            for (path in paths) {
+                for ((_, market) in path) {
+                    marketSet.add(market)
+                }
+            }
+        }
+
+        return marketSet
+    }
+
+    fun map(
         pathsPermutations: Map<Tuple2<Currency, Currency>, Set<List<Tuple2<PathOrderType, Market>>>>,
-        orderBooks: OrderBookDataMap,
-        stats: Map<MarketId, Flux<TradeStat>>,
+        orderBooks: Map<MarketId, OrderBookData>,
+        stats: Map<MarketId, TradeStat>,
         marketInfoStringMap: MarketStringMap,
         initialAmount: Amount,
         fee: FeeMultiplier
-    ): Flux<ExhaustivePath> {
-        val pathsIterable =
-            pathsPermutations.toVavrStream().flatMap { (targetPath, paths) ->
-                paths.toVavrStream().map { path ->
-                    val dependencies = LinkedList<Flux<Any>>()
+    ): Stream<ExhaustivePath?> {
+        return pathsPermutations.toVavrStream().flatMap { (targetPath, paths) ->
+            paths.toVavrStream().map { path ->
+                val booksStats = LinkedList<Any>()
 
-                    for ((tpe, market) in path) {
-                        val marketId = marketInfoStringMap.get(market).get()
-                        val orderBook = orderBooks.get(marketId).get().map { it.book as Any }.onBackpressureLatest()
-                        dependencies += orderBook
+                for ((tpe, market) in path) {
+                    val marketId = marketInfoStringMap.get(market).get()
+                    val orderBook = orderBooks[marketId].get().book
+                    booksStats += orderBook
 
-                        when (tpe) {
-                            PathOrderType.Delayed -> run {
-                                val stat = stats.get(marketId).get().map { it as Any }.onBackpressureLatest()
-                                dependencies += stat
-                            }
-                            PathOrderType.Instant -> run { /*ignore*/ }
+                    when (tpe) {
+                        PathOrderType.Delayed -> run {
+                            val stat = stats[marketId].get()
+                            booksStats += stat
                         }
+                        PathOrderType.Instant -> run { /*ignore*/ }
                     }
-
-                    val dependenciesStream = Flux.combineLatest(dependencies, 1) { it }
-
-                    val exhaustivePath = dependenciesStream
-                        .onBackpressureLatest()
-                        .publishOn(Schedulers.parallel(), 1)
-                        .map { booksStats -> map(targetPath, initialAmount, fee, path, booksStats).option() }
-                        .filter { it.isDefined }
-                        .map { it.get() }
-
-                    exhaustivePath
                 }
-            }
 
-        return Flux.empty<Flux<ExhaustivePath>>()
-            .startWith(pathsIterable)
-            .flatMap({ it.onBackpressureLatest() }, pathsIterable.size(), 1)
+                map(targetPath, initialAmount, fee, path, booksStats)
+            }
+        }
     }
 
     fun map(
@@ -76,7 +77,7 @@ object PathsUtil {
         startAmount: Amount,
         fee: FeeMultiplier,
         path: List<Tuple2<PathOrderType, Market>>,
-        booksStats: Array<Any>
+        booksStats: LinkedList<Any>
     ): ExhaustivePath? {
         val chain = LinkedList<InstantDelayedOrder>()
         var targetCurrency = targetPath._1
