@@ -14,5 +14,6 @@ object ExhaustivePathOrdering : Comparator<ExhaustivePath> {
 
 data class PathsSettings(
     val initialAmount: Amount,
-    val currencies: List<Currency>
+    val currencies: List<Currency>,
+    val recalculatePeriodSec: Long = 15
 )

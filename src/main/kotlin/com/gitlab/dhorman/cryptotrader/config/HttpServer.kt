@@ -2,8 +2,15 @@ package com.gitlab.dhorman.cryptotrader.config
 
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonValue
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.node.NullNode
+import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.trader.Trader
+import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
+import io.vavr.collection.List
 import io.vertx.core.Vertx
 import io.vertx.core.http.ServerWebSocket
 import io.vertx.core.json.Json
@@ -12,7 +19,6 @@ import io.vertx.ext.web.handler.ErrorHandler
 import io.vertx.ext.web.handler.LoggerHandler
 import io.vertx.ext.web.handler.ResponseContentTypeHandler
 import mu.KotlinLogging
-
 import reactor.core.Disposable
 import reactor.core.publisher.Flux
 import reactor.core.scheduler.Schedulers
@@ -21,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 class HttpServer(
     vertx: Vertx,
-    trader: Trader
+    private val trader: Trader
 ) {
     private val server = vertx.createHttpServer()
     private val router = Router.router(vertx)
@@ -42,19 +48,6 @@ class HttpServer(
         MsgId.Ticker to trader.data.tickers
             .sample(Duration.ofSeconds(1))
             .map { RespMsg(MsgId.Ticker, it) }
-            .map { Json.encode(it) }
-            .share(),
-
-        MsgId.Paths to trader.indicators.paths
-            .cache(1)
-            .sampleFirst(Duration.ofSeconds(30))
-            .onBackpressureLatest()
-            .flatMapSequential({
-                Flux.fromIterable(it)
-                    .buffer(500)
-                    .subscribeOn(Schedulers.elastic())
-            }, 1, 1)
-            .map { RespMsg(MsgId.Paths, it) }
             .map { Json.encode(it) }
             .share()
     )
@@ -84,13 +77,31 @@ class HttpServer(
                                     map[MsgId.Ticker] = disposable
                                 }
                                 MsgId.Paths -> {
-                                    val disposable = streams.getValue(MsgId.Paths).subscribe({ json ->
-                                        ws.writeTextMessage(json)
-                                    }, { e ->
-                                        logger.error(e.message, e)
-                                    })
+                                    if (req.params != null && req.params != NullNode.instance) {
+                                        val params = Json.mapper.convertValue<PathParams>(
+                                            req.params,
+                                            jacksonTypeRef<PathParams>()
+                                        )
+                                        val settings = PathsSettings(params.initAmount, params.currencies)
 
-                                    map[MsgId.Paths] = disposable
+                                        val disposable = trader.indicators.getPaths(settings)
+                                            .sampleFirst(Duration.ofSeconds(30))
+                                            .onBackpressureLatest()
+                                            .flatMapSequential({
+                                                Flux.fromIterable(it)
+                                                    .buffer(250)
+                                                    .subscribeOn(Schedulers.elastic())
+                                            }, 1, 1)
+                                            .map { RespMsg(MsgId.Paths, it) }
+                                            .map { Json.encode(it) }
+                                            .subscribe({ json ->
+                                                ws.writeTextMessage(json)
+                                            }, { e ->
+                                                logger.error(e.message, e)
+                                            })
+
+                                        map[MsgId.Paths] = disposable
+                                    }
                                 }
                             }
                         }
@@ -125,7 +136,7 @@ class HttpServer(
     }
 }
 
-data class ReqMsg(val type: MsgType, val id: MsgId)
+data class ReqMsg(val type: MsgType, val id: MsgId, val params: JsonNode?)
 
 data class RespMsg<T>(val id: MsgId, val data: T)
 
@@ -150,3 +161,8 @@ enum class MsgId(@get:JsonValue val id: Byte) {
         fun valueById(id: Byte) = values().find { it.id == id }
     }
 }
+
+data class PathParams(
+    val initAmount: Amount,
+    val currencies: List<Currency>
+)

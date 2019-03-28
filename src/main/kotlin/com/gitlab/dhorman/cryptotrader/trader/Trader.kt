@@ -30,35 +30,6 @@ class Trader(private val poloniexApi: PoloniexApi) {
     fun start(): Flux<Unit> {
         logger.info("Start trading")
 
-        indicators.paths.subscribe({
-            //logger.info(it.length().toString())
-        }, {
-            logger.error(it.message, it)
-        })
-
-        /*data.tradesStat.switchMap({ map ->
-            val allTradeStats: Seq<Flux<TradeStat>> = map.values()
-
-            val i = AtomicLong(0)
-
-            val stat: Flux<Tuple2<Long, TradeStat>> = Flux.empty<Flux<TradeStat>>()
-                .startWith(allTradeStats)
-                .flatMap({ stat: Flux<TradeStat> ->
-                    val id = i.getAndIncrement()
-                    stat.map { s -> Tuple2(id, s) }.onBackpressureLatest()
-                }, allTradeStats.size(), 1)
-
-            stat
-        }, 1)
-            .scan(TreeMap.empty<Long, TradeStat>()) { state: TreeMap<Long, TradeStat>, delta: Tuple2<Long, TradeStat> ->
-                state.put(delta._1, delta._2)
-            }
-            .subscribe({ stat ->
-                logger.info("Trades fetched: ${stat.size()}")
-            }, {
-                logger.error(it.message, it)
-            })*/
-
         return Flux.just(Unit)
     }
 
