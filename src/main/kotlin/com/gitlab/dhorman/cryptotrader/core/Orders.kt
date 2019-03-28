@@ -108,13 +108,19 @@ object Orders {
             if (orderBook.bids.length() == 0) return null
 
             basePrice = orderBook.bids.head()._1.cut8add1
+
+            if (orderBook.asks.length() > 0 && basePrice.compareTo(orderBook.asks.head()._1) == 0) return null
+
             quoteAmount = fromAmount.setScale(12, RoundingMode.HALF_EVEN) / basePrice
             toAmount = quoteAmount * makerFeeMultiplier
             orderMultiplier = makerFeeMultiplier.setScale(12, RoundingMode.HALF_EVEN) / basePrice
         } else {
             if (orderBook.asks.length() == 0) return null
 
-            basePrice = orderBook.asks.head()._1.cut8add1
+            basePrice = orderBook.asks.head()._1.cut8minus1
+
+            if (orderBook.bids.length() > 0 && basePrice.compareTo(orderBook.bids.head()._1) == 0) return null
+
             quoteAmount = fromAmount
             toAmount = quoteAmount * basePrice * makerFeeMultiplier
             orderMultiplier = makerFeeMultiplier * basePrice
@@ -154,13 +160,19 @@ object Orders {
             if (orderBook.bids.length() == 0) return null
 
             basePrice = orderBook.bids.head()._1.cut8add1
+
+            if (orderBook.asks.length() > 0 && basePrice.compareTo(orderBook.asks.head()._1) == 0) return null
+
             quoteAmount = toAmount.setScale(12, RoundingMode.HALF_EVEN) / makerFeeMultiplier
             fromAmount = quoteAmount * basePrice
             orderMultiplier = makerFeeMultiplier.setScale(12, RoundingMode.HALF_EVEN) / basePrice
         } else {
             if (orderBook.asks.length() == 0) return null
 
-            basePrice = orderBook.asks.head()._1.cut8add1
+            basePrice = orderBook.asks.head()._1.cut8minus1
+
+            if (orderBook.bids.length() > 0 && basePrice.compareTo(orderBook.bids.head()._1) == 0) return null
+
             quoteAmount = toAmount.setScale(12, RoundingMode.HALF_EVEN) / (basePrice * makerFeeMultiplier)
             fromAmount = quoteAmount
             orderMultiplier = makerFeeMultiplier * basePrice
