@@ -217,7 +217,9 @@ class DataStreams(
                         sell = Trade2State.map(state.sell),
                         buy = Trade2State.map(state.buy)
                     )
-                }.cache(1, Duration.ofMinutes(2))
+                }
+                    .replay(1)
+                    .refCount(1, Duration.ofMinutes(2))
 
                 Tuple2(marketId, statStream)
             }
@@ -354,7 +356,9 @@ class DataStreams(
 
                 val newBookStream = bookStream.map { (book, update) ->
                     OrderBookData(marketInfo._1.get(marketId).get(), marketId, book, update)
-                }.cache(1, Duration.ofMinutes(2))
+                }
+                    .replay(1)
+                    .refCount(1, Duration.ofMinutes(2))
 
                 Tuple2(marketId, newBookStream)
             }

@@ -1,8 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.gitlab.dhorman.cryptotrader.core.ExhaustivePath
-import com.gitlab.dhorman.cryptotrader.core.FeeMultiplier
-import com.gitlab.dhorman.cryptotrader.core.TradeStat
+import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.ExhaustivePathOrdering
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
@@ -54,10 +52,12 @@ class IndicatorStreams(data: DataStreams) {
             @Suppress("UNCHECKED_CAST")
             val orderBooks = (data0[1] as OrderBookDataMap)
                 .filter { marketId, _ -> uniqueMarkets.contains(marketId) }
+                .map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
 
             @Suppress("UNCHECKED_CAST")
             val stats = (data0[2] as Map<MarketId, Flux<TradeStat>>)
                 .filter { marketId, _ -> uniqueMarkets.contains(marketId) }
+                .map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
 
             if (logger.isDebugEnabled) logger.debug("Paths generated: ${pathsPermutations.iterator().map { it._2.size() }.sum()}")
 
@@ -66,20 +66,20 @@ class IndicatorStreams(data: DataStreams) {
                 .onBackpressureDrop()
                 .limitRate(1)
                 .switchMap({
-                    val books0 = orderBooks.map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
-                    val books1 = Flux.fromIterable(books0)
-                        .flatMap(identity(), books0.length(), 1)
+                    val booksMap = Flux.fromIterable(orderBooks)
+                        .flatMap(identity(), orderBooks.length(), 1)
                         .collectMap({ it._1 }, { it._2 })
                         .map { it.toVavrMap() }
 
-                    val stats0 = stats.map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
-                    val stats1 = Flux.fromIterable(stats0)
-                        .flatMap(identity(), stats0.length(), 1)
+
+                    val statsMap = Flux.fromIterable(stats)
+                        .flatMap(identity(), stats.length(), 1)
                         .collectMap({ it._1 }, { it._2 })
                         .map { it.toVavrMap() }
 
-                    Mono.zip(books1, stats1) { b, s -> tuple(b, s) }
+                    Mono.zip(booksMap, statsMap) { b, s -> tuple(b, s) }
                 }, 1)
+                .onBackpressureLatest()
                 .publishOn(Schedulers.elastic(), 1)
                 .scan(TreeSet.empty(ExhaustivePathOrdering)) { _, bookStatDelta ->
                     val (orderBooks0, stats0) = bookStatDelta
