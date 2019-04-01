@@ -13,6 +13,7 @@ import io.vavr.collection.Set
 import io.vavr.kotlin.*
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.Instant
 
 class MarketPathGenerator(availableMarkets: Traversable<Market>) {
 
@@ -234,11 +235,45 @@ data class ExhaustivePath(
         }
     }
 
+    val simpleRisk: Int by lazy {
+        var bit = 0
+        var orderType = 0
+        chain.reverseIterator().forEach { order ->
+            when (order) {
+                is InstantOrder -> run {}
+                is DelayedOrder -> orderType = orderType or (1 shl bit)
+            }
+            bit++
+        }
+
+        sr[chain.length() - 1][orderType]
+    }
+
+    val lastTran: Long by lazy {
+        val now = Instant.now()
+        val oldTranTime = chain.iterator().map {
+            when (it) {
+                is InstantOrder -> now
+                is DelayedOrder -> it.stat.lastTranTs
+            }
+        }.min().get()
+
+        now.toEpochMilli() - oldTranTime.toEpochMilli()
+    }
+
     override fun hashCode(): Int = id.hashCode()
 
     override fun equals(other: Any?): Boolean = when (other) {
         is ExhaustivePath -> id == other.id
         else -> false
+    }
+
+    companion object {
+        private val sr1 = arrayOf(0, 0)
+        private val sr2 = arrayOf(0, 100, 0, 200)
+        private val sr3 = arrayOf(0, 100, 110, 200, 0, 210, 210, 300)
+        private val sr4 = arrayOf(0, 100, 110, 200, 120, 210, 210, 300, 0, 240, 240, 310, 220, 310, 310, 400)
+        private val sr = arrayOf(sr1, sr2, sr3, sr4)
     }
 }
 

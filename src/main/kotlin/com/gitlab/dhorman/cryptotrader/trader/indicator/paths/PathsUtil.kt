@@ -137,8 +137,8 @@ object PathsUtil {
 
     private fun statOrder(market: Market, targetCurrency: Currency, stat: TradeStat): TradeStatOrder {
         return when (market.orderType(targetCurrency)!!) {
-            OrderType.Buy -> stat.buy
-            OrderType.Sell -> stat.sell
+            OrderType.Buy -> stat.sell
+            OrderType.Sell -> stat.buy
         }
     }
 }
