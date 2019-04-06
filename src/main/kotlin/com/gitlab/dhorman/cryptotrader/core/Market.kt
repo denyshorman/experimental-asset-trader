@@ -52,6 +52,13 @@ data class Market(val baseCurrency: Currency, val quoteCurrency: Currency) {
         }
     }
 
+    fun targetCurrency(orderType: OrderType): Currency {
+        return when (orderType) {
+            OrderType.Sell -> baseCurrency
+            OrderType.Buy -> quoteCurrency
+        }
+    }
+
     fun contains(currency: Currency): Boolean {
         return currency == baseCurrency || currency == quoteCurrency
     }

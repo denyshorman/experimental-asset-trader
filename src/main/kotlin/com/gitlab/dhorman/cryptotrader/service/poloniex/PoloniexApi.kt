@@ -7,6 +7,8 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.ApiCallLimitException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.IncorrectNonceException
+import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.RateMustBeLessThanException
+import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.TotalMustBeAtLeastException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.util.HmacSha512Digest
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
@@ -248,7 +250,7 @@ class PoloniexApi(
     /**
      * Returns all of your available balances
      */
-    fun balances(): Mono<Map<Currency, BigDecimal>> {
+    fun availableBalances(): Mono<Map<Currency, BigDecimal>> {
         return callPrivateApi("returnBalances", jacksonTypeRef())
     }
 
@@ -271,10 +273,17 @@ class PoloniexApi(
         )
     }
 
-    fun allOpenOrders(): Mono<Map<Market, List<OpenOrder>>> {
+    fun allOpenOrders(): Mono<Map<Long, OpenOrderWithMarket>> {
         val command = "returnOpenOrders"
         val params = hashMap("currencyPair" to "all")
-        return callPrivateApi(command, jacksonTypeRef(), params)
+        return callPrivateApi(command, jacksonTypeRef<Map<Market, List<OpenOrder>>>(), params)
+            .map { openOrdersMap ->
+                openOrdersMap
+                    .flatMap<OpenOrderWithMarket> { marketOrders ->
+                        marketOrders._2.map { order -> OpenOrderWithMarket.from(order, marketOrders._1) }
+                    }
+                    .toMap({ it.orderId }, { it })
+            }
     }
 
     fun tradeHistory(market: Market?): Mono<Map<Market, List<TradeHistoryPrivate>>> {
@@ -302,11 +311,11 @@ class PoloniexApi(
      *            A post-only order will only be placed if no portion of it fills immediately; this guarantees you will never pay the taker fee on any part of the order that fills.
      * @return If successful, the method will return the order number.
      */
-    fun buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<Buy> {
+    fun buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
         return buySell("buy", market, price, amount, tpe)
     }
 
-    fun sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<Buy> {
+    fun sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
         return buySell("sell", market, price, amount, tpe)
     }
 
@@ -321,7 +330,7 @@ class PoloniexApi(
         price: Price,
         amount: Amount,
         tpe: BuyOrderType?
-    ): Mono<Buy> {
+    ): Mono<BuySell> {
         val params = hashMap(
             "currencyPair" to market.toString(),
             "rate" to price.toString(),
@@ -344,14 +353,14 @@ class PoloniexApi(
      * @return
      */
     fun moveOrder(
-        orderNumber: Long,
+        orderId: Long,
         price: Price,
         amount: Amount?,
         orderType: BuyOrderType?
     ): Mono<MoveOrderResult> {
         val command = "moveOrder"
         val params = hashMap(
-            "orderNumber" to orderNumber.toString(),
+            "orderNumber" to orderId.toString(),
             "rate" to price.toString()
         )
         val optParams = hashMap(
@@ -379,7 +388,7 @@ class PoloniexApi(
         return callPrivateApi(command, jacksonTypeRef())
     }
 
-    fun tradableBalances(): Mono<Map<Market, Map<Currency, Amount>>> {
+    fun marginTradableBalances(): Mono<Map<Market, Map<Currency, Amount>>> {
         val command = "returnTradableBalances"
         return callPrivateApi(command, jacksonTypeRef())
     }
@@ -511,7 +520,21 @@ class PoloniexApi(
                 val (provided, required) = match.destructured
                 throw IncorrectNonceException(provided.toLong(), required.toLong(), errorMsg)
             } else {
-                throw Exception(errorMsg)
+                match = ErrorMsgPattern.TotalMustBeAtLeast.matchEntire(errorMsg)
+
+                if (match != null) {
+                    val (amount) = match.destructured
+                    throw TotalMustBeAtLeastException(BigDecimal(amount), errorMsg)
+                } else {
+                    match = ErrorMsgPattern.RateMustBeLessThan.matchEntire(errorMsg)
+
+                    if (match != null) {
+                        val (maxRate) = match.destructured
+                        throw RateMustBeLessThanException(BigDecimal(maxRate), errorMsg)
+                    } else {
+                        throw Exception(errorMsg)
+                    }
+                }
             }
         }
     }
@@ -576,6 +599,8 @@ class PoloniexApi(
         object ErrorMsgPattern {
             val IncorrectNonceMsg = """Nonce must be greater than (\d+)\. You provided (\d+)\.""".toRegex()
             val ApiCallLimit = """Please do not make more than (\d+) API calls per second\.""".toRegex()
+            val TotalMustBeAtLeast = """Total must be at least (\d+(\.\d+)?)\.""".toRegex()
+            val RateMustBeLessThan = """Rate must be less than (\d+(\.\d+)?)\.""".toRegex()
         }
     }
 }

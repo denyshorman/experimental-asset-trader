@@ -11,6 +11,7 @@ import io.vavr.Tuple2
 import io.vavr.collection.HashMap
 import io.vavr.collection.Map
 import io.vavr.collection.Queue
+import io.vavr.collection.Set
 import io.vavr.kotlin.component1
 import io.vavr.kotlin.component2
 import io.vavr.kotlin.tuple
@@ -19,7 +20,6 @@ import reactor.core.publisher.Flux
 import java.math.BigDecimal
 import java.time.Duration
 import java.time.ZoneOffset
-import java.util.function.BiFunction
 
 typealias MarketIntMap = Map<MarketId, Market>
 typealias MarketStringMap = Map<Market, MarketId>
@@ -32,6 +32,12 @@ data class OrderBookData(
     val notification: OrderBookNotification
 )
 typealias OrderBookDataMap = Map<MarketId, Flux<OrderBookData>>
+
+data class BookOrder(
+    val market: Market,
+    val price: Price,
+    val orderType: OrderType
+)
 
 class DataStreams(
     private val raw: RawStreams,
@@ -50,8 +56,9 @@ class DataStreams(
         raw.balances.switchMap { balanceInfo ->
             currencies.switchMap { curr ->
                 raw.accountNotifications
-                    .filter { it is BalanceUpdate }
-                    .map { it as BalanceUpdate }
+                    .handle<BalanceUpdate> { notification, sink ->
+                        if (notification is BalanceUpdate) sink.next(notification)
+                    }
                     .scan(
                         balanceInfo
                     ) { allBalances, balanceUpdate ->
@@ -113,10 +120,11 @@ class DataStreams(
                     } // TODO: Specify backoff
 
                 val tradesStream = orderBooks.map { it.get(marketId).get() }
-                    .switchMap { it }
-                    .map { it.notification }
-                    .filter { it is OrderBookTrade }
-                    .map { it as OrderBookTrade }
+                    .switchMap { it } // TODO: Review backpressure
+                    .handle<OrderBookTrade> { orderBookData, sink ->
+                        val trade = orderBookData.notification as? OrderBookTrade
+                        if (trade != null) sink.next(trade)
+                    }
 
                 val initialTrades0 = initialTrades.map { allTrades ->
                     var sellTrades = Queue.empty<SimpleTrade>()
@@ -226,32 +234,10 @@ class DataStreams(
         }.cache(1)
     }
 
-    val openOrders: Flux<Map<Long, Trader.Companion.OpenOrder>> = run {
-        val initialOrdersStream = raw.openOrders.map { marketOrdersMap ->
-            marketOrdersMap.flatMap { (market, ordersSet) ->
-                ordersSet.map { Trader.Companion.OpenOrder(it.orderNumber, it.type, market, it.price, it.amount) }
-            }.map { order ->
-                Tuple2(order.id, order)
-            }.toMap { it }
-        }
-
-        val limitOrderCreatedStream = poloniexApi.accountNotificationStream
-            .filter { it is LimitOrderCreated }
-            .map { it as LimitOrderCreated }
-
-        val orderUpdateStream = poloniexApi.accountNotificationStream
-            .filter { it is OrderUpdate }
-            .map { it as OrderUpdate }
-
-        val orderUpdates = Flux.merge<AccountNotification>(limitOrderCreatedStream, orderUpdateStream)
-
-        Flux.combineLatest<Map<Long, Trader.Companion.OpenOrder>, MarketData, Flux<Map<Long, Trader.Companion.OpenOrder>>>(
-            initialOrdersStream,
-            markets,
-            BiFunction { initOrders: Map<Long, Trader.Companion.OpenOrder>, marketsInfo: MarketData ->
-                orderUpdates.scan(
-                    initOrders
-                ) { orders: Map<Long, Trader.Companion.OpenOrder>, update: AccountNotification ->
+    val openOrders: Flux<Map<Long, OpenOrderWithMarket>> = run {
+        raw.openOrders.switchMap({ initOpenOrders ->
+            markets.switchMap({ marketsInfo ->
+                poloniexApi.accountNotificationStream.scan(initOpenOrders) { orders, update ->
                     when (update) {
                         is LimitOrderCreated -> run {
                             logger.info("Account info: $update")
@@ -259,15 +245,19 @@ class DataStreams(
                             val marketId = marketsInfo._1.get(update.marketId)
 
                             if (marketId.isDefined) {
-                                val newOrder = Trader.Companion.OpenOrder(
+                                val newOrder = OpenOrderWithMarket(
                                     update.orderNumber,
                                     update.orderType,
-                                    marketId.get(),
                                     update.rate,
-                                    update.amount
+                                    update.amount,
+                                    update.amount,
+                                    update.rate * update.amount, // TODO: Error
+                                    update.date,
+                                    false,
+                                    marketId.get()
                                 )
 
-                                orders.put(newOrder.id, newOrder)
+                                orders.put(newOrder.orderId, newOrder)
                             } else {
                                 logger.warn("Market id not found in local cache. Fetching markets from API...")
                                 trigger.ticker.onNext(Unit)
@@ -284,15 +274,19 @@ class DataStreams(
 
                                 if (order.isDefined) {
                                     val oldOrder = order.get()
-                                    val newOrder = Trader.Companion.OpenOrder(
-                                        oldOrder.id,
-                                        oldOrder.tpe,
-                                        oldOrder.market,
-                                        oldOrder.rate,
-                                        update.newAmount
+                                    val newOrder = OpenOrderWithMarket(
+                                        oldOrder.orderId,
+                                        oldOrder.type,
+                                        oldOrder.price,
+                                        oldOrder.startingAmount,
+                                        update.newAmount,
+                                        oldOrder.total, // TODO: Error
+                                        oldOrder.date, // TODO: Error
+                                        oldOrder.margin,
+                                        oldOrder.market
                                     )
 
-                                    orders.put(oldOrder.id, newOrder)
+                                    orders.put(oldOrder.orderId, newOrder)
                                 } else {
                                     logger.warn("Order not found in local cache. Fetch orders from the server.")
                                     trigger.openOrders.onNext(Unit)
@@ -300,13 +294,25 @@ class DataStreams(
                                 }
                             }
                         }
-                        else -> run {
-                            logger.warn("Received not recognized order update event: $update")
-                            orders
-                        }
+                        else -> orders
                     }
                 }
-            }).concatMap { it }.cache(1)
+            }, Int.MAX_VALUE)
+        }, Int.MAX_VALUE)
+            .cache(1)
+    }
+
+    // TODO: Optimize
+    val orderBookOrders: Flux<Set<BookOrder>> = run {
+        openOrders.map { openOrdersMap ->
+            openOrdersMap.map { openOrder ->
+                BookOrder(
+                    openOrder._2.market,
+                    openOrder._2.price,
+                    openOrder._2.type
+                )
+            }.toSet()
+        }.cache(1)
     }
 
     val tickers: Flux<Map<Market, Ticker>> = run {

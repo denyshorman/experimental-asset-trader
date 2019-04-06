@@ -92,7 +92,7 @@ class PoloniexApiSpec {
     fun `PoloniexApi returnBalances should return some value`() {
         val p = Promise.make<Unit>()
 
-        poloniexApi.balances()
+        poloniexApi.availableBalances()
             .doOnTerminate {
                 p.success(Unit)
             }

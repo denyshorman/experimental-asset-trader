@@ -39,7 +39,7 @@ data class CompleteBalance(
 )
 
 data class OpenOrder(
-    val orderNumber: Long,
+    @JsonProperty("orderNumber") val orderId: Long,
     val type: OrderType,
     @JsonProperty("rate") val price: Price,
     val startingAmount: Amount,
@@ -48,6 +48,34 @@ data class OpenOrder(
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") val date: LocalDateTime,
     val margin: Boolean
 )
+
+data class OpenOrderWithMarket(
+    val orderId: Long,
+    val type: OrderType,
+    val price: Price,
+    val startingAmount: Amount,
+    val amount: Amount,
+    val total: BigDecimal,
+    val date: LocalDateTime,
+    val margin: Boolean,
+    val market: Market
+) {
+    companion object {
+        fun from(openOrder: OpenOrder, market: Market): OpenOrderWithMarket {
+            return OpenOrderWithMarket(
+                openOrder.orderId,
+                openOrder.type,
+                openOrder.price,
+                openOrder.startingAmount,
+                openOrder.amount,
+                openOrder.total,
+                openOrder.date,
+                openOrder.margin,
+                market
+            )
+        }
+    }
+}
 
 data class TradeHistory(
     @JsonProperty("globalTradeID") val globalTradeId: Long,
@@ -112,8 +140,8 @@ data class AvailableAccountBalance(
     val lending: Map<Currency, Amount>
 )
 
-data class Buy(
-    val orderNumber: Long,
+data class BuySell(
+    @JsonProperty("orderNumber") val orderId: Long,
     val resultingTrades: Array<BuyResultingTrade>
 )
 
@@ -146,9 +174,7 @@ data class CancelOrder(
 
 data class MoveOrderResult(
     val success: Boolean,
-    val orderNumber: Long,
-    val amount: Amount,
-    val message: String,
+    @JsonProperty("orderNumber") val orderId: Long,
     val resultingTrades: Map<Market, Array<BuyResultingTrade>>
 )
 

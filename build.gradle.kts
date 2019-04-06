@@ -5,7 +5,7 @@ version = "1.0.0-SNAPSHOT"
 
 val kotlinVersion = "1.3.21"
 val kotlinCoroutinesVersion = "1.1.1"
-val vertxVersion = "3.6.3"
+val vertxVersion = "3.7.0"
 val reactorAddonsVersion = "3.2.2.RELEASE"
 val jacksonVersion = "2.9.8"
 
@@ -35,7 +35,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive:$kotlinCoroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:$kotlinCoroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2:$kotlinCoroutinesVersion")
-    implementation("io.projectreactor:reactor-core:3.2.5.RELEASE")
+    implementation("io.projectreactor:reactor-core:3.2.8.RELEASE")
     implementation("io.projectreactor.addons:reactor-adapter:$reactorAddonsVersion")
     implementation("io.projectreactor.addons:reactor-extra:$reactorAddonsVersion")
     implementation("io.projectreactor.addons:reactor-logback:$reactorAddonsVersion")

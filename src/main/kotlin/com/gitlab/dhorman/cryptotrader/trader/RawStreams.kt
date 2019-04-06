@@ -32,7 +32,7 @@ class RawStreams(
     }
 
     val balances = run {
-        val callApiStream = poloniexApi.balances().flux().doOnNext { balances ->
+        val callApiStream = poloniexApi.availableBalances().flux().doOnNext { balances ->
             logger.info("All available balances fetched")
             if(logger.isDebugEnabled) logger.debug(balances.toString())
         }
