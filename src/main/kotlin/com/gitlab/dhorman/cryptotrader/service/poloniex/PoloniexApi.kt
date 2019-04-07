@@ -5,10 +5,7 @@ import com.fasterxml.jackson.databind.node.NullNode
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.core.Market
-import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.ApiCallLimitException
-import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.IncorrectNonceException
-import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.RateMustBeLessThanException
-import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.TotalMustBeAtLeastException
+import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.util.HmacSha512Digest
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
@@ -337,7 +334,37 @@ class PoloniexApi(
             "amount" to amount.toString()
         )
         val additionalParams = tpe?.let { hashMap(it.toString() to "1") } ?: HashMap.empty()
-        return callPrivateApi(command, jacksonTypeRef(), params.merge(additionalParams))
+
+        return callPrivateApi(command, jacksonTypeRef<BuySell>(), params.merge(additionalParams))
+            .onErrorMap { handleBuySellErrors(it) }
+    }
+
+    private fun handleBuySellErrors(e: Throwable): Throwable {
+        if (e.message == null) return e
+        val msg = e.message!!
+
+        var match: MatchResult? = OrdersCountExceededPattern.matchEntire(msg)
+
+        if (match != null) {
+            val (maxOrdersCount) = match.destructured
+            return MaxOrdersExcidedException(maxOrdersCount.toInt(), msg)
+        }
+
+        match = RateMustBeLessThanPattern.matchEntire(msg)
+
+        if (match != null) {
+            val (maxRate) = match.destructured
+            return RateMustBeLessThanException(BigDecimal(maxRate), msg)
+        }
+
+        match = TotalMustBeAtLeastPattern.matchEntire(msg)
+
+        if (match != null) {
+            val (amount) = match.destructured
+            return TotalMustBeAtLeastException(BigDecimal(amount), msg)
+        }
+
+        return e
     }
 
     fun cancelOrder(orderId: Long): Mono<CancelOrder> {
@@ -372,7 +399,8 @@ class PoloniexApi(
             .map { v -> tuple(v._1.get().toString(), v._2.get().toString()) }
             .toMap { it }
 
-        return callPrivateApi(command, jacksonTypeRef(), params.merge(optParams))
+        return callPrivateApi(command, jacksonTypeRef<MoveOrderResult>(), params.merge(optParams))
+            .onErrorMap { handleBuySellErrors(it) }
     }
 
     /**
@@ -508,35 +536,21 @@ class PoloniexApi(
     }
 
     private fun handleKnownError(errorMsg: String): Nothing {
-        var match = ErrorMsgPattern.ApiCallLimit.matchEntire(errorMsg)
+        var match = ApiCallLimitPattern.matchEntire(errorMsg)
 
         if (match != null) {
             val (count) = match.destructured
             throw ApiCallLimitException(count.toInt(), errorMsg)
-        } else {
-            match = ErrorMsgPattern.IncorrectNonceMsg.matchEntire(errorMsg)
-
-            if (match != null) {
-                val (provided, required) = match.destructured
-                throw IncorrectNonceException(provided.toLong(), required.toLong(), errorMsg)
-            } else {
-                match = ErrorMsgPattern.TotalMustBeAtLeast.matchEntire(errorMsg)
-
-                if (match != null) {
-                    val (amount) = match.destructured
-                    throw TotalMustBeAtLeastException(BigDecimal(amount), errorMsg)
-                } else {
-                    match = ErrorMsgPattern.RateMustBeLessThan.matchEntire(errorMsg)
-
-                    if (match != null) {
-                        val (maxRate) = match.destructured
-                        throw RateMustBeLessThanException(BigDecimal(maxRate), errorMsg)
-                    } else {
-                        throw Exception(errorMsg)
-                    }
-                }
-            }
         }
+
+        match = IncorrectNonceMsgPattern.matchEntire(errorMsg)
+
+        if (match != null) {
+            val (provided, required) = match.destructured
+            throw IncorrectNonceException(provided.toLong(), required.toLong(), errorMsg)
+        }
+
+        throw Exception(errorMsg)
     }
 
     private fun <T : Any> create(
@@ -592,15 +606,6 @@ class PoloniexApi(
                     logger.trace(err.message, err)
                 }
             })
-        }
-    }
-
-    private companion object Model {
-        object ErrorMsgPattern {
-            val IncorrectNonceMsg = """Nonce must be greater than (\d+)\. You provided (\d+)\.""".toRegex()
-            val ApiCallLimit = """Please do not make more than (\d+) API calls per second\.""".toRegex()
-            val TotalMustBeAtLeast = """Total must be at least (\d+(\.\d+)?)\.""".toRegex()
-            val RateMustBeLessThan = """Rate must be less than (\d+(\.\d+)?)\.""".toRegex()
         }
     }
 }

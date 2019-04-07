@@ -14,6 +14,7 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
 import java.math.BigDecimal
+import java.time.Duration
 import java.util.function.Function.identity
 
 class Trader(private val poloniexApi: PoloniexApi) {
@@ -95,7 +96,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
             .scan(BigDecimal.ZERO) { state, delta -> state + delta }
             .skip(1)
             .replay(1)
-            .refCount()
+            .refCount(1, Duration.ofNanos(1)) // TODO: Workaround for CancellationException
 
         val placeOrder = Mono.zip(
             orderBook.take(1).single(),
@@ -169,7 +170,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
                 val unfilledAmountValue = values._2
                 unfilledAmountValue.compareTo(BigDecimal.ZERO) != 0
             }
-            .scan(placeOrder) { state, values ->
+            .scan(placeOrder.cache()) { state, values ->
                 state.flatMap { stateValue ->
                     val (prevOrderId, delayedOrderPrice) = stateValue
                     val (book, unfilledAmountValue, bookOrders) = values
@@ -237,7 +238,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
                     } else {
                         Mono.just(stateValue)
                     }
-                }
+                }.cache()
             }
             .onBackpressureBuffer(Int.MAX_VALUE)
             .flatMapSequential(identity(), 1, 1)
@@ -246,7 +247,7 @@ class Trader(private val poloniexApi: PoloniexApi) {
         latestOrderIdsStream = moveOrder
             .map { it._1 }
             .replay(latestOrderIdsCount)
-            .refCount()
+            .refCount(1, Duration.ofNanos(1)) // TODO: Workaround for CancellationException
 
         return raw.accountNotifications
             .filterWhen(tradeMatchesOrderId)
