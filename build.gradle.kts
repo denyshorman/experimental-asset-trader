@@ -6,6 +6,7 @@ version = "1.0.0-SNAPSHOT"
 val kotlinVersion = "1.3.21"
 val kotlinCoroutinesVersion = "1.1.1"
 val vertxVersion = "3.7.0"
+val reactorVersion = "3.2.8.RELEASE"
 val reactorAddonsVersion = "3.2.2.RELEASE"
 val jacksonVersion = "2.9.8"
 
@@ -35,7 +36,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive:$kotlinCoroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:$kotlinCoroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2:$kotlinCoroutinesVersion")
-    implementation("io.projectreactor:reactor-core:3.2.8.RELEASE")
+    implementation("io.projectreactor:reactor-core:$reactorVersion")
     implementation("io.projectreactor.addons:reactor-adapter:$reactorAddonsVersion")
     implementation("io.projectreactor.addons:reactor-extra:$reactorAddonsVersion")
     implementation("io.projectreactor.addons:reactor-logback:$reactorAddonsVersion")
@@ -49,7 +50,12 @@ dependencies {
     implementation("com.fasterxml.jackson.module:jackson-module-parameter-names:$jacksonVersion")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:$jacksonVersion")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:$jacksonVersion")
+
     testImplementation("org.junit.jupiter:junit-jupiter:5.4.0")
+    testImplementation("org.mockito:mockito-core:2.26.0")
+    testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.1.0")
+    testImplementation("io.vertx:vertx-junit5:$vertxVersion")
+    testImplementation("io.projectreactor:reactor-test:$reactorVersion")
 }
 
 tasks.withType<KotlinCompile>().all {
