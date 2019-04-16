@@ -3,16 +3,16 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 group = "com.gitlab.dhorman"
 version = "1.0.0-SNAPSHOT"
 
-val kotlinVersion = "1.3.21"
-val kotlinCoroutinesVersion = "1.1.1"
+val kotlinVersion = "1.3.30"
+val kotlinCoroutinesVersion = "1.2.0"
 val vertxVersion = "3.7.0"
 val reactorVersion = "3.2.8.RELEASE"
 val reactorAddonsVersion = "3.2.2.RELEASE"
 val jacksonVersion = "2.9.8"
 
 plugins {
-    kotlin("jvm") version "1.3.21"
-    id("kotlinx-serialization") version "1.3.21"
+    kotlin("jvm") version "1.3.30"
+    id("kotlinx-serialization") version "1.3.30"
 }
 
 repositories {
@@ -59,5 +59,12 @@ dependencies {
 }
 
 tasks.withType<KotlinCompile>().all {
-    kotlinOptions.jvmTarget = "1.8"
+    with(kotlinOptions) {
+        jvmTarget = "1.8"
+
+        freeCompilerArgs = freeCompilerArgs + listOf(
+            "-Xuse-experimental=kotlinx.coroutines.ExperimentalCoroutinesApi",
+            "-Xuse-experimental=kotlinx.coroutines.ObsoleteCoroutinesApi"
+        )
+    }
 }

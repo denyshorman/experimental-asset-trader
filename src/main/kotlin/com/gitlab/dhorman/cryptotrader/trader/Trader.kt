@@ -4,18 +4,21 @@ import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import io.vavr.Tuple2
-import io.vavr.collection.Set
-import io.vavr.kotlin.component1
-import io.vavr.kotlin.component2
-import io.vavr.kotlin.component3
+import io.vavr.collection.Queue
 import io.vavr.kotlin.tuple
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ConflatedBroadcastChannel
+import kotlinx.coroutines.channels.ProducerScope
+import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.reactive.awaitFirst
+import kotlinx.coroutines.reactive.awaitSingle
+import kotlinx.coroutines.reactive.consumeEach
+import kotlinx.coroutines.reactor.flux
 import mu.KotlinLogging
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
-import reactor.core.scheduler.Schedulers
 import java.math.BigDecimal
-import java.time.Duration
-import java.util.function.Function.identity
 
 class Trader(private val poloniexApi: PoloniexApi) {
     private val logger = KotlinLogging.logger {}
@@ -62,210 +65,280 @@ class Trader(private val poloniexApi: PoloniexApi) {
         orderBook: Flux<OrderBookAbstract>,
         threshold: Flux<BigDecimal>,
         minThreshold: BigDecimal
-    ): Flux<TradeNotification> {
-        val latestOrderIdsCount = 16
-        var latestOrderIdsStream: Flux<Long> = Flux.empty()
-        fun latestOrderIds(): Flux<Long> = latestOrderIdsStream
+    ): Flux<TradeNotification> = GlobalScope.flux {
+        val tradesChannel: ProducerScope<TradeNotification> = this
+        val amountDelta = Channel<Amount>(Channel.UNLIMITED)
+        val unfilledAmount = ConflatedBroadcastChannel<Amount>()
+        val latestOrderIdsChannel = ConflatedBroadcastChannel<Queue<Long>>()
 
-        val amountStream = amount.publish().refCount(2)
+        // Input money monitoring
+        val amountJob = launch {
+            if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Start amount consumption...")
 
-        val thresholdStream = threshold
-            .filter { it < minThreshold }
-            .take(1)
-            .map { throw ThresholdException }
-            .share()
+            try {
+                amount.consumeEach { amount ->
+                    if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Amount received: $amount")
+                    amountDelta.send(amount)
+                }
 
-        val tradeMatchesOrderId = { trade: AccountNotification ->
-            if (trade is TradeNotification) {
-                latestOrderIds().take(latestOrderIdsCount.toLong()).any { it == trade.orderId }
-            } else {
-                Mono.just(false)
+                if (logger.isDebugEnabled) logger.debug("[$market, $orderType] All amounts received")
+            } catch (e: Throwable) {
+                logger.error("Amount supplier completed with error for [$market, $orderType]", e)
             }
         }
 
-        val unfilledAmount = Flux.merge(
-            Int.MAX_VALUE,
-            amountStream,
-            raw.accountNotifications
-                .filterWhen(tradeMatchesOrderId)
-                .map {
-                    val trade = it as TradeNotification
-                    -trade.amount
-                }
-        )
-            .scan(BigDecimal.ZERO) { state, delta -> state + delta }
-            .skip(1)
-            .replay(1)
-            .refCount(1, Duration.ofNanos(1)) // TODO: Workaround for CancellationException
+        // Trades monitoring
+        launch {
+            if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Starting trades consumption...")
 
-        val placeOrder = Mono.zip(
-            orderBook.take(1).single(),
-            data.orderBookOrders.take(1).single(),
-            unfilledAmount.take(1).single()
-        )
-            .takeUntilOther(thresholdStream)
-            .flatMap { values ->
-                val book = values.t1
-                val bookOrders = values.t2
-                val amountValue = values.t3
+            raw.accountNotifications.consumeEach { trade ->
+                if (trade !is TradeNotification) return@consumeEach
 
-                val price = when (orderType) {
-                    OrderType.Buy -> run {
-                        val bid = book.bids.headOption().map { it._1 }.orNull ?: return@run null
+                if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Trade received: $trade")
 
-                        val anotherWorkerOnTheSameMarket = bookOrders.contains(BookOrder(market, bid, orderType))
+                val orderIds = latestOrderIdsChannel.valueOrNull ?: return@consumeEach
 
-                        if (anotherWorkerOnTheSameMarket) {
-                            bid
-                        } else {
-                            val newPrice = bid.cut8add1
-                            val ask = book.asks.headOption().map { it._1 }.orNull
-                            if (ask != null && ask.compareTo(newPrice) == 0) bid else newPrice
-                        }
-                    }
-                    OrderType.Sell -> run {
-                        val ask = book.asks.headOption().map { it._1 }.orNull ?: return@run null
+                for (orderId in orderIds.reverseIterator()) {
+                    if (orderId != trade.orderId) continue
 
-                        val anotherWorkerOnTheSameMarket = bookOrders.contains(BookOrder(market, ask, orderType))
+                    if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Trade matched. Sending trade to the client..")
 
-                        if (anotherWorkerOnTheSameMarket) {
-                            ask
-                        } else {
-                            val newPrice = ask.cut8minus1
-                            val bid = book.bids.headOption().map { it._1 }.orNull
-                            if (bid != null && bid.compareTo(newPrice) == 0) ask else newPrice
-                        }
-                    }
-                } ?: return@flatMap Mono.error<Tuple2<Long, Price>>(OrderBookEmptyException(orderType))
+                    tradesChannel.send(trade)
+                    amountDelta.send(-trade.amount)
 
-                val placeOrderResult = when (orderType) {
-                    OrderType.Buy -> poloniexApi.buy(market, price, amountValue, BuyOrderType.PostOnly)
-                    OrderType.Sell -> poloniexApi.sell(market, price, amountValue, BuyOrderType.PostOnly)
-                }
-
-                placeOrderResult.map { result ->
-                    tuple(result.orderId, price)
+                    break
                 }
             }
-
-        val moveOrder = Flux.combineLatest(
-            mutableListOf(
-                orderBook,
-                unfilledAmount,
-                data.orderBookOrders
-            ), Int.MAX_VALUE
-        ) { values ->
-            val book = values[0] as OrderBookAbstract
-            val amountValue = values[1] as Amount
-
-            @Suppress("UNCHECKED_CAST")
-            val bookOrders = values[2] as Set<BookOrder>
-
-            tuple(book, amountValue, bookOrders)
         }
-            .onBackpressureLatest()
-            .publishOn(Schedulers.parallel(), 1)
-            .takeUntilOther(thresholdStream)
-            .takeWhile { values ->
-                val unfilledAmountValue = values._2
-                unfilledAmountValue.compareTo(BigDecimal.ZERO) != 0
+
+        // Threshold monitoring
+        launch {
+            if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Starting threshold job...")
+
+            threshold.filter { it < minThreshold }.consumeEach {
+                throw ThresholdException
             }
-            .scan(placeOrder.cache()) { state, values ->
-                state.flatMap { stateValue ->
-                    val (prevOrderId, delayedOrderPrice) = stateValue
-                    val (book, unfilledAmountValue, bookOrders) = values
+        }
 
-                    val newPrice: Price? = when (orderType) {
-                        OrderType.Buy -> run {
-                            val bid = book.bids.headOption().map { it._1 }.orNull
-                                ?: return@flatMap Mono.error<Tuple2<Long, Price>>(OrderBookEmptyException(orderType))
+        // Place - Move order loop
+        launch {
+            var amount0 = BigDecimal.ZERO
+            var orderJob: Job? = null
 
-                            if (bid > delayedOrderPrice) {
-                                val anotherWorkerOnTheSameMarket =
-                                    bookOrders.contains(BookOrder(market, bid, orderType))
+            amountDelta.consumeEach {
+                amount0 += it
+                unfilledAmount.send(amount0)
 
-                                if (anotherWorkerOnTheSameMarket) {
-                                    bid
-                                } else {
-                                    var price = bid.cut8add1
-                                    val ask = book.asks.headOption().map { it._1 }.orNull
-                                    if (ask != null && ask.compareTo(price) == 0) price = bid
-                                    price
-                                }
-                            } else {
-                                null
-                            }
-                        }
-                        OrderType.Sell -> run {
-                            val ask = book.asks.headOption().map { it._1 }.orNull
-                                ?: return@flatMap Mono.error<Tuple2<Long, Price>>(OrderBookEmptyException(orderType))
+                if (amount0.compareTo(BigDecimal.ZERO) == 0) {
+                    if (orderJob != null) {
+                        orderJob!!.cancelAndJoin()
+                        orderJob = null
+                    }
+                } else {
+                    if (orderJob == null) {
+                        orderJob = launch {
+                            val maxOrdersCount = 16
+                            var latestOrderIds = Queue.empty<Long>()
+                            var amountValue = unfilledAmount.value
 
-                            if (ask < delayedOrderPrice) {
-                                val anotherWorkerOnTheSameMarket =
-                                    bookOrders.contains(BookOrder(market, ask, orderType))
+                            if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Placing new order with amount $amountValue...")
 
-                                if (anotherWorkerOnTheSameMarket) {
-                                    ask
-                                } else {
-                                    var price = ask.cut8minus1
-                                    val bid = book.bids.headOption().map { it._1 }.orNull
-                                    if (bid != null && bid.compareTo(price) == 0) price = ask
-                                    price
-                                }
-                            } else {
-                                null
+                            val placeOrderResult = placeOrder(market, orderBook, orderType, amountValue)
+
+                            var lastOrderId = placeOrderResult._1
+                            var prevPrice = placeOrderResult._2
+
+                            latestOrderIds = latestOrderIds.append(lastOrderId)
+                            if (latestOrderIds.size() > maxOrdersCount) latestOrderIds = latestOrderIds.drop(1)
+                            latestOrderIdsChannel.send(latestOrderIds)
+
+                            if (logger.isDebugEnabled) logger.debug("[$market, $orderType] New order placed: $lastOrderId, $prevPrice")
+
+                            orderBook.onBackpressureLatest().consumeEach orderBookLabel@{ book ->
+                                if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Trying to move order $lastOrderId...")
+
+                                amountValue = unfilledAmount.value
+                                val moveOrderResult =
+                                    moveOrder(market, book, orderType, lastOrderId, prevPrice, amountValue)
+                                        ?: return@orderBookLabel
+
+                                if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Order $lastOrderId moved to ${moveOrderResult._1} with price ${moveOrderResult._2}")
+
+                                lastOrderId = moveOrderResult._1
+                                prevPrice = moveOrderResult._2
+
+                                latestOrderIds = latestOrderIds.append(lastOrderId)
+                                if (latestOrderIds.size() > maxOrdersCount) latestOrderIds = latestOrderIds.drop(1)
+                                latestOrderIdsChannel.send(latestOrderIds)
                             }
                         }
                     }
+                }
+            }
+        }
 
-                    if (newPrice != null) {
-                        poloniexApi.moveOrder(
-                            prevOrderId,
-                            newPrice,
-                            unfilledAmountValue,
-                            BuyOrderType.PostOnly
-                        )
-                            .filterWhen { moveOrderResult ->
-                                if (moveOrderResult.success) {
-                                    Flux.just(true)
-                                } else {
-                                    Flux.error(Exception(/*moveOrderResult.message*/""))
-                                }
-                            }
-                            .map { moveOrderResult ->
-                                tuple(moveOrderResult.orderId, newPrice)
-                            }
+        // Completion monitoring
+        launch {
+            if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Start monitoring for all trades completion...")
+
+            amountJob.join()
+
+            unfilledAmount.consumeEach {
+                if (it.compareTo(BigDecimal.ZERO) == 0) {
+                    if (logger.isDebugEnabled) logger.debug("[$market, $orderType] Amount = 0 => all trades received. Closing...")
+                    tradesChannel.close()
+                    return@launch
+                }
+            }
+        }
+    }
+
+    private suspend fun moveOrder(
+        market: Market,
+        book: OrderBookAbstract,
+        orderType: OrderType,
+        lastOrderId: Long,
+        prevPrice: Price,
+        amountValue: BigDecimal?
+    ): Tuple2<Long, Price>? {
+        val newPrice = when (orderType) {
+            OrderType.Buy -> run {
+                val bid = book.bids.headOption().map { it._1 }.orNull
+                    ?: throw OrderBookEmptyException(orderType)
+
+                if (bid > prevPrice) {
+                    val anotherWorkerOnTheSameMarket = data.orderBookOrders.awaitFirst()
+                        .contains(BookOrder(market, bid, orderType))
+
+                    if (anotherWorkerOnTheSameMarket) {
+                        bid
                     } else {
-                        Mono.just(stateValue)
+                        var price = bid.cut8add1
+                        val ask = book.asks.headOption().map { it._1 }.orNull
+                        if (ask != null && ask.compareTo(price) == 0) price = bid
+                        price
                     }
-                }.cache()
+                } else {
+                    val bid2 = book.bids.drop(1).headOption().map { it._1 }.orNull
+
+                    if (bid2 == null) {
+                        null
+                    } else {
+                        val newPrice = bid2.cut8add1
+
+                        if (newPrice.compareTo(prevPrice) == 0) {
+                            null
+                        } else {
+                            val anotherWorkerOnTheSameMarket = data.orderBookOrders.awaitFirst()
+                                .contains(BookOrder(market, bid2, orderType))
+
+                            if (anotherWorkerOnTheSameMarket) {
+                                bid2
+                            } else {
+                                newPrice
+                            }
+                        }
+                    }
+                }
             }
-            .onBackpressureBuffer(Int.MAX_VALUE)
-            .flatMapSequential(identity(), 1, 1)
-            .distinctUntilChanged { it._1 }
+            OrderType.Sell -> run {
+                val ask = book.asks.headOption().map { it._1 }.orNull ?: throw OrderBookEmptyException(orderType)
 
-        latestOrderIdsStream = moveOrder
-            .map { it._1 }
-            .replay(latestOrderIdsCount)
-            .refCount(1, Duration.ofNanos(1)) // TODO: Workaround for CancellationException
+                if (ask < prevPrice) {
+                    val anotherWorkerOnTheSameMarket = data.orderBookOrders.awaitFirst()
+                        .contains(BookOrder(market, ask, orderType))
 
-        return raw.accountNotifications
-            .filterWhen(tradeMatchesOrderId)
-            .map { it as TradeNotification }
-            .takeUntilOther(
-                amountStream.ignoreElements().then(
-                    unfilledAmount
-                        .filter { it.compareTo(BigDecimal.ZERO) == 0 }
-                        .take(1)
-                        .single()
-                )
-            )
-            .takeUntilOther(
-                latestOrderIds()
-                    .takeUntilOther(unfilledAmount.filter { it.compareTo(BigDecimal.ZERO) == 0 }.take(1))
-                    .repeatWhen { unfilledAmount.onBackpressureLatest().filter { it > BigDecimal.ZERO } }
-                    .ignoreElements()
-            )
+                    if (anotherWorkerOnTheSameMarket) {
+                        ask
+                    } else {
+                        var price = ask.cut8minus1
+                        val bid = book.bids.headOption().map { it._1 }.orNull
+                        if (bid != null && bid.compareTo(price) == 0) price = ask
+                        price
+                    }
+                } else {
+                    val ask2 = book.asks.drop(1).headOption().map { it._1 }.orNull
+
+                    if (ask2 == null) {
+                        null
+                    } else {
+                        val newPrice = ask2.cut8minus1
+
+                        if (newPrice.compareTo(prevPrice) == 0) {
+                            null
+                        } else {
+                            val anotherWorkerOnTheSameMarket = data.orderBookOrders.awaitFirst()
+                                .contains(BookOrder(market, ask2, orderType))
+
+                            if (anotherWorkerOnTheSameMarket) {
+                                ask2
+                            } else {
+                                newPrice
+                            }
+                        }
+                    }
+                }
+            }
+        } ?: return null
+
+        val moveOrderResult = poloniexApi.moveOrder(
+            lastOrderId,
+            newPrice,
+            amountValue,
+            BuyOrderType.PostOnly
+        ).awaitSingle()
+
+        if (moveOrderResult.success) {
+            return tuple(moveOrderResult.orderId, newPrice)
+        } else {
+            throw Exception("Can't move order because move returned false")
+        }
+    }
+
+    private suspend fun placeOrder(
+        market: Market,
+        orderBook: Flux<OrderBookAbstract>,
+        orderType: OrderType,
+        amountValue: BigDecimal
+    ): Tuple2<Long, Price> {
+        val book = orderBook.awaitFirst()
+        val bookOrders = data.orderBookOrders.awaitFirst()
+
+        val price = when (orderType) {
+            OrderType.Buy -> run {
+                val bid = book.bids.headOption().map { it._1 }.orNull ?: return@run null
+
+                val anotherWorkerOnTheSameMarket = bookOrders.contains(BookOrder(market, bid, orderType))
+
+                if (anotherWorkerOnTheSameMarket) {
+                    bid
+                } else {
+                    val newPrice = bid.cut8add1
+                    val ask = book.asks.headOption().map { it._1 }.orNull
+                    if (ask != null && ask.compareTo(newPrice) == 0) bid else newPrice
+                }
+            }
+            OrderType.Sell -> run {
+                val ask = book.asks.headOption().map { it._1 }.orNull ?: return@run null
+
+                val anotherWorkerOnTheSameMarket = bookOrders.contains(BookOrder(market, ask, orderType))
+
+                if (anotherWorkerOnTheSameMarket) {
+                    ask
+                } else {
+                    val newPrice = ask.cut8minus1
+                    val bid = book.bids.headOption().map { it._1 }.orNull
+                    if (bid != null && bid.compareTo(newPrice) == 0) ask else newPrice
+                }
+            }
+        } ?: throw OrderBookEmptyException(orderType)
+
+        val result = when (orderType) {
+            OrderType.Buy -> poloniexApi.buy(market, price, amountValue, BuyOrderType.PostOnly)
+            OrderType.Sell -> poloniexApi.sell(market, price, amountValue, BuyOrderType.PostOnly)
+        }.awaitSingle()
+
+        return tuple(result.orderId, price)
     }
 
     class OrderBookEmptyException(orderType: OrderType) :

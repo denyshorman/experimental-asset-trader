@@ -28,10 +28,7 @@ import io.vertx.reactivex.ext.web.client.HttpResponse
 import io.vertx.reactivex.ext.web.client.WebClient
 import mu.KotlinLogging
 import reactor.adapter.rxjava.toMono
-import reactor.core.publisher.Flux
-import reactor.core.publisher.FluxSink
-import reactor.core.publisher.Mono
-import reactor.core.publisher.toFlux
+import reactor.core.publisher.*
 import java.math.BigDecimal
 import java.time.Duration
 import java.util.function.Function.identity
@@ -43,7 +40,7 @@ private const val PoloniexWebSocketApiUrl = "api2.poloniex.com"
 /**
  * Documentation https://poloniex.com/support/api
  */
-class PoloniexApi(
+open class PoloniexApi(
     vertx: Vertx,
     private val poloniexApiKey: String,
     poloniexApiSecret: String
@@ -144,12 +141,12 @@ class PoloniexApi(
     /**
      * Subscribe to ticker updates for all currency pairs.
      */
-    val tickerStream: Flux<Ticker> = run {
+    open val tickerStream: Flux<Ticker> = run {
         Flux.create(create(DefaultChannel.TickerData.id, jacksonTypeRef<Ticker>()), FluxSink.OverflowStrategy.LATEST)
             .share()
     }
 
-    val dayExchangeVolumeStream: Flux<DayExchangeVolume> = run {
+    open val dayExchangeVolumeStream: Flux<DayExchangeVolume> = run {
         Flux.create(
             create(DefaultChannel.DayExchangeVolume.id, jacksonTypeRef<DayExchangeVolume>()),
             FluxSink.OverflowStrategy.LATEST
@@ -157,7 +154,7 @@ class PoloniexApi(
             .share()
     }
 
-    val accountNotificationStream: Flux<AccountNotification> = run {
+    open val accountNotificationStream: Flux<AccountNotification> = run {
         Flux.create(
             create(
                 DefaultChannel.AccountNotifications.id,
@@ -169,7 +166,7 @@ class PoloniexApi(
             .share()
     }
 
-    fun orderBookStream(marketId: MarketId): Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>> {
+    open fun orderBookStream(marketId: MarketId): Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>> {
         val notifications: Flux<OrderBookNotification> =
             Flux.create(
                 create(marketId, jacksonTypeRef<List<OrderBookNotification>>()),
@@ -210,7 +207,7 @@ class PoloniexApi(
         }.skip(1).replay(1).refCount()
     }
 
-    fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>>> {
+    open fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>>> {
         return marketIds.map { marketId -> tuple(marketId, orderBookStream(marketId)) }.toMap { it }
     }
 
@@ -218,12 +215,12 @@ class PoloniexApi(
      *
      * @return Returns the ticker for all markets.
      */
-    fun ticker(): Mono<Map<Market, Ticker0>> {
+    open fun ticker(): Mono<Map<Market, Ticker0>> {
         val command = "returnTicker"
         return callPublicApi(command, jacksonTypeRef())
     }
 
-    fun tradeHistoryPublic(market: Market, fromDate: Long? = null, toDate: Long? = null): Mono<Array<TradeHistory>> {
+    open fun tradeHistoryPublic(market: Market, fromDate: Long? = null, toDate: Long? = null): Mono<Array<TradeHistory>> {
         val command = "returnTradeHistory"
 
         val params = hashMap(
@@ -239,7 +236,7 @@ class PoloniexApi(
         return callPublicApi(command, jacksonTypeRef(), params)
     }
 
-    fun currencies(): Mono<Map<Currency, CurrencyDetails>> {
+    open fun currencies(): Mono<Map<Currency, CurrencyDetails>> {
         val command = "returnCurrencies"
         return callPublicApi(command, jacksonTypeRef())
     }
@@ -247,14 +244,14 @@ class PoloniexApi(
     /**
      * Returns all of your available balances
      */
-    fun availableBalances(): Mono<Map<Currency, BigDecimal>> {
+    open fun availableBalances(): Mono<Map<Currency, BigDecimal>> {
         return callPrivateApi("returnBalances", jacksonTypeRef())
     }
 
     /**
      * Returns all of your balances, including available balance, balance on orders, and the estimated BTC value of your balance.
      */
-    fun completeBalances(): Mono<Map<Currency, CompleteBalance>> {
+    open fun completeBalances(): Mono<Map<Currency, CompleteBalance>> {
         return callPrivateApi("returnCompleteBalances", jacksonTypeRef())
     }
 
@@ -262,7 +259,7 @@ class PoloniexApi(
     /**
      * Returns your open orders for a given market, specified by the currencyPair.
      */
-    fun openOrders(market: Market): Mono<List<OpenOrder>> {
+    open fun openOrders(market: Market): Mono<List<OpenOrder>> {
         return callPrivateApi(
             "returnOpenOrders",
             jacksonTypeRef(),
@@ -270,7 +267,7 @@ class PoloniexApi(
         )
     }
 
-    fun allOpenOrders(): Mono<Map<Long, OpenOrderWithMarket>> {
+    open fun allOpenOrders(): Mono<Map<Long, OpenOrderWithMarket>> {
         val command = "returnOpenOrders"
         val params = hashMap("currencyPair" to "all")
         return callPrivateApi(command, jacksonTypeRef<Map<Market, List<OpenOrder>>>(), params)
@@ -283,7 +280,7 @@ class PoloniexApi(
             }
     }
 
-    fun tradeHistory(market: Market?): Mono<Map<Market, List<TradeHistoryPrivate>>> {
+    open fun tradeHistory(market: Market?): Mono<Map<Market, List<TradeHistoryPrivate>>> {
         val command = "returnTradeHistory"
         val params = hashMap("currencyPair" to (market?.toString() ?: "all"))
         return if (market == null) {
@@ -293,7 +290,7 @@ class PoloniexApi(
         }
     }
 
-    fun orderTrades(orderNumber: BigDecimal): Mono<List<OrderTrade>> {
+    open fun orderTrades(orderNumber: BigDecimal): Mono<List<OrderTrade>> {
         val command = "returnOrderTrades"
         val params = hashMap("orderNumber" to orderNumber.toString())
         return callPrivateApi(command, jacksonTypeRef(), params)
@@ -308,11 +305,11 @@ class PoloniexApi(
      *            A post-only order will only be placed if no portion of it fills immediately; this guarantees you will never pay the taker fee on any part of the order that fills.
      * @return If successful, the method will return the order number.
      */
-    fun buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
+    open fun buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
         return buySell("buy", market, price, amount, tpe)
     }
 
-    fun sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
+    open fun sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
         return buySell("sell", market, price, amount, tpe)
     }
 
@@ -367,7 +364,7 @@ class PoloniexApi(
         return e
     }
 
-    fun cancelOrder(orderId: Long): Mono<CancelOrder> {
+    open fun cancelOrder(orderId: Long): Mono<CancelOrder> {
         val command = "cancelOrder"
         val params = hashMap("orderNumber" to orderId.toString())
         return callPrivateApi(command, jacksonTypeRef(), params)
@@ -379,7 +376,7 @@ class PoloniexApi(
      * @param orderType "postOnly" or "immediateOrCancel" may be specified for exchange orders, but will have no effect on margin orders.
      * @return
      */
-    fun moveOrder(
+    open fun moveOrder(
         orderId: Long,
         price: Price,
         amount: Amount?,
@@ -406,17 +403,17 @@ class PoloniexApi(
     /**
      * If you are enrolled in the maker-taker fee schedule, returns your current trading fees and trailing 30-day volume in BTC. This information is updated once every 24 hours.
      */
-    fun feeInfo(): Mono<FeeInfo> {
+    open fun feeInfo(): Mono<FeeInfo> {
         val command = "returnFeeInfo"
         return callPrivateApi(command, jacksonTypeRef())
     }
 
-    fun availableAccountBalances(): Mono<AvailableAccountBalance> {
+    open fun availableAccountBalances(): Mono<AvailableAccountBalance> {
         val command = "returnAvailableAccountBalances"
         return callPrivateApi(command, jacksonTypeRef())
     }
 
-    fun marginTradableBalances(): Mono<Map<Market, Map<Currency, Amount>>> {
+    open fun marginTradableBalances(): Mono<Map<Market, Map<Currency, Amount>>> {
         val command = "returnTradableBalances"
         return callPrivateApi(command, jacksonTypeRef())
     }
