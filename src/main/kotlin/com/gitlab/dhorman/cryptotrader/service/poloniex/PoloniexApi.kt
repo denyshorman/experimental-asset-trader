@@ -280,6 +280,10 @@ open class PoloniexApi(
             }
     }
 
+    open fun orderStatus(orderId: Long): Mono<OrderStatus> {
+        TODO()
+    }
+
     open fun tradeHistory(market: Market?): Mono<Map<Market, List<TradeHistoryPrivate>>> {
         val command = "returnTradeHistory"
         val params = hashMap("currencyPair" to (market?.toString() ?: "all"))
@@ -361,6 +365,14 @@ open class PoloniexApi(
             return TotalMustBeAtLeastException(BigDecimal(amount), msg)
         }
 
+        if (InvalidOrderNumberPattern == msg) {
+            return InvalidOrderNumberException
+        }
+
+        if (TransactionFailedPattern == msg) {
+            return TransactionFailedException
+        }
+
         return e
     }
 
@@ -381,7 +393,7 @@ open class PoloniexApi(
         price: Price,
         amount: Amount?,
         orderType: BuyOrderType?
-    ): Mono<MoveOrderResult> {
+    ): Mono<MoveOrderResult2> {
         val command = "moveOrder"
         val params = hashMap(
             "orderNumber" to orderId.toString(),
@@ -398,6 +410,18 @@ open class PoloniexApi(
 
         return callPrivateApi(command, jacksonTypeRef<MoveOrderResult>(), params.merge(optParams))
             .onErrorMap { handleBuySellErrors(it) }
+            .map {
+                if (it.success) {
+                    MoveOrderResult2(
+                        it.orderId!!,
+                        it.resultingTrades!!,
+                        it.fee,
+                        it.currencyPair
+                    )
+                } else {
+                    throw handleBuySellErrors(Exception(it.errorMsg))
+                }
+            }
     }
 
     /**

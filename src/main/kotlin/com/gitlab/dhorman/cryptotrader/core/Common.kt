@@ -19,7 +19,7 @@ data class OrderBook(
 data class FeeMultiplier(val maker: BigDecimal, val taker: BigDecimal) {
     companion object {
         fun from(makerFeePercent: BigDecimal, takerFeePercent: BigDecimal): FeeMultiplier {
-            return FeeMultiplier(BigDecimal(1) - makerFeePercent, BigDecimal(1) - takerFeePercent)
+            return FeeMultiplier(BigDecimal.ONE - makerFeePercent, BigDecimal.ONE - takerFeePercent)
         }
     }
 }

@@ -142,7 +142,9 @@ data class AvailableAccountBalance(
 
 data class BuySell(
     @JsonProperty("orderNumber") val orderId: Long,
-    val resultingTrades: Array<BuyResultingTrade>
+    val resultingTrades: Array<BuyResultingTrade>,
+    val fee: BigDecimal,
+    @JsonProperty("currencyPair") val market: Market
 )
 
 data class BuyResultingTrade(
@@ -174,8 +176,18 @@ data class CancelOrder(
 
 data class MoveOrderResult(
     val success: Boolean,
+    @JsonProperty("error") val errorMsg: String?,
+    @JsonProperty("orderNumber") val orderId: Long?,
+    val resultingTrades: Map<Market, Array<BuyResultingTrade>>?,
+    val fee: BigDecimal,
+    val currencyPair: Boolean
+)
+
+data class MoveOrderResult2(
     @JsonProperty("orderNumber") val orderId: Long,
-    val resultingTrades: Map<Market, Array<BuyResultingTrade>>
+    val resultingTrades: Map<Market, Array<BuyResultingTrade>>,
+    val fee: BigDecimal,
+    val currencyPair: Boolean
 )
 
 data class FeeInfo(
@@ -190,3 +202,18 @@ enum class AccountType(@get:JsonValue val id: String) {
     Margin("margin")
 }
 
+data class OrderStatus (
+    val status: OrderStatusType,
+    @JsonProperty("rate") val price: Price,
+    val amount: Amount,
+    @JsonProperty("currencyPair") val market: Market,
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") val date: LocalDateTime,
+    val total: BigDecimal,
+    val type: OrderType,
+    val startingAmount: Amount
+)
+
+enum class OrderStatusType(@get:JsonValue val id: String) {
+    Open("Open"),
+    PartiallyFilled("Partially filled")
+}

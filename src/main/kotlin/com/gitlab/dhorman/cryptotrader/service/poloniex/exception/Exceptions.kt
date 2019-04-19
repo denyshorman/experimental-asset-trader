@@ -29,3 +29,6 @@ class MaxOrdersExcidedException(
     val maxOrders: Int,
     originalMsg: String
 ) : PoloniexException(originalMsg)
+
+object InvalidOrderNumberException : PoloniexException(InvalidOrderNumberPattern)
+object TransactionFailedException : PoloniexException(TransactionFailedPattern)
