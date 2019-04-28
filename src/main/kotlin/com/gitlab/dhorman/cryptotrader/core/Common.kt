@@ -16,13 +16,7 @@ data class OrderBook(
     override val bids: SubOrderBook = TreeMap.empty(compareByDescending { it })
 ) : OrderBookAbstract(asks, bids)
 
-data class FeeMultiplier(val maker: BigDecimal, val taker: BigDecimal) {
-    companion object {
-        fun from(makerFeePercent: BigDecimal, takerFeePercent: BigDecimal): FeeMultiplier {
-            return FeeMultiplier(BigDecimal.ONE - makerFeePercent, BigDecimal.ONE - takerFeePercent)
-        }
-    }
-}
+data class FeeMultiplier(val maker: BigDecimal, val taker: BigDecimal)
 
 data class TradeStat(
     val sell: TradeStatOrder,
@@ -40,4 +34,15 @@ data class TradeStatOrder(
     val stdDevAmount: BigDecimal,
     val firstTranTs: Instant,
     val lastTranTs: Instant
+)
+
+enum class OrderSpeed {
+    Instant,
+    Delayed
+}
+
+data class BareTrade(
+    val quoteAmount: BigDecimal,
+    val price: BigDecimal,
+    val feeMultiplier: BigDecimal
 )

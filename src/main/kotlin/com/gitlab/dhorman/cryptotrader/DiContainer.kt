@@ -11,7 +11,7 @@ import com.fasterxml.jackson.module.paramnames.ParameterNamesModule
 import com.gitlab.dhorman.cryptotrader.config.HttpServer
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
-import com.gitlab.dhorman.cryptotrader.trader.Trader
+import com.gitlab.dhorman.cryptotrader.trader.PoloniexTrader
 import com.gitlab.dhorman.cryptotrader.util.Secrets
 import io.vavr.jackson.datatype.VavrModule
 import io.vertx.core.Vertx
@@ -86,7 +86,7 @@ val diContainer = Kodein {
         )
     }
 
-    bind<Trader>() with singleton {
-        Trader(instance())
+    bind<PoloniexTrader>() with singleton {
+        PoloniexTrader(instance())
     }
 }

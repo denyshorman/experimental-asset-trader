@@ -14,7 +14,18 @@ typealias Price = BigDecimal
 typealias Amount = BigDecimal
 typealias SubOrderBook = SortedMap<Price, Amount>
 
-enum class CurrencyType { Base, Quote }
+enum class CurrencyType {
+    Base,
+    Quote;
+
+    fun inverse(): CurrencyType {
+        return if (this == Base) {
+            Quote
+        } else {
+            Base
+        }
+    }
+}
 
 @JsonSerialize(using = OrderTypeJsonCodec.Encoder::class)
 @JsonDeserialize(using = OrderTypeJsonCodec.Decoder::class)

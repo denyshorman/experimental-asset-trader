@@ -142,10 +142,12 @@ data class AvailableAccountBalance(
 
 data class BuySell(
     @JsonProperty("orderNumber") val orderId: Long,
-    val resultingTrades: Array<BuyResultingTrade>,
+    @JsonProperty("resultingTrades") val trades: Array<BuyResultingTrade>,
     val fee: BigDecimal,
     @JsonProperty("currencyPair") val market: Market
-)
+) {
+    val feeMultiplier get(): BigDecimal = BigDecimal.ONE - fee
+}
 
 data class BuyResultingTrade(
     @JsonProperty("tradeID") val tradeId: Long,
@@ -164,7 +166,7 @@ enum class BuyOrderType(@get:JsonValue val id: String) {
     ImmediateOrCancel("immediateOrCancel"),
 
     // https://support.bitfinex.com/hc/en-us/articles/115003507365-Post-Only-Limit-Order-Option
-    // The post-only limit order option ensures the limit order will be added to the order book and not match with a pre-existing order. If your order would cause a match with a pre-existing order, your post-only limit order will be canceled. This ensures that you will pay the maker fee and not the taker fee. Visit the fees page for more information.
+    // The post-only limit order option ensures the limit order will be added to the order book and not match with a pre-existing order. If your order would cause a match with a pre-existing order, your post-only limit order will be canceled. This ensures that you will pay the maker fee and not the taker fee.
     PostOnly("postOnly")
 }
 

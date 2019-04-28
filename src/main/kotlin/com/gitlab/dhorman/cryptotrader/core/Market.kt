@@ -45,8 +45,8 @@ data class Market(val baseCurrency: Currency, val quoteCurrency: Currency) {
         }
     }
 
-    fun orderType(currencyType: CurrencyType): OrderType {
-        return when (currencyType) {
+    fun orderType(targetCurrencyType: CurrencyType): OrderType {
+        return when (targetCurrencyType) {
             CurrencyType.Base -> OrderType.Sell
             CurrencyType.Quote -> OrderType.Buy
         }

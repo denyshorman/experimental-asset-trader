@@ -8,7 +8,7 @@ import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
-import com.gitlab.dhorman.cryptotrader.trader.Trader
+import com.gitlab.dhorman.cryptotrader.trader.PoloniexTrader
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import io.vavr.collection.List
 import io.vertx.core.Vertx
@@ -18,6 +18,7 @@ import io.vertx.ext.web.Router
 import io.vertx.ext.web.handler.ErrorHandler
 import io.vertx.ext.web.handler.LoggerHandler
 import io.vertx.ext.web.handler.ResponseContentTypeHandler
+import io.vertx.kotlin.core.http.listenAwait
 import mu.KotlinLogging
 import reactor.core.Disposable
 import reactor.core.publisher.Flux
@@ -27,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 class HttpServer(
     vertx: Vertx,
-    private val trader: Trader
+    private val poloniexTrader: PoloniexTrader
 ) {
     private val server = vertx.createHttpServer()
     private val router = Router.router(vertx)
@@ -45,7 +46,7 @@ class HttpServer(
     }
 
     private val streams = mapOf(
-        MsgId.Ticker to trader.data.tickers
+        MsgId.Ticker to poloniexTrader.data.tickers
             .sample(Duration.ofSeconds(1))
             .map { RespMsg(MsgId.Ticker, it) }
             .map { Json.encode(it) }
@@ -84,7 +85,7 @@ class HttpServer(
                                         )
                                         val settings = PathsSettings(params.initAmount, params.currencies)
 
-                                        val disposable = trader.indicators.getPaths(settings)
+                                        val disposable = poloniexTrader.indicators.getPaths(settings)
                                             .sampleFirst(Duration.ofSeconds(30))
                                             .onBackpressureLatest()
                                             .flatMapSequential({
@@ -129,10 +130,10 @@ class HttpServer(
         }
     }
 
-    fun start() {
+    suspend fun start() {
         server.requestHandler(router)
             .websocketHandler(this::webSocketHandler)
-            .listen(8080, "0.0.0.0")
+            .listenAwait(8080, "0.0.0.0")
     }
 }
 

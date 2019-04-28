@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 group = "com.gitlab.dhorman"
 version = "1.0.0-SNAPSHOT"
 
-val kotlinVersion = "1.3.30"
+val kotlinVersion = "1.3.31"
 val kotlinCoroutinesVersion = "1.2.0"
 val vertxVersion = "3.7.0"
 val reactorVersion = "3.2.8.RELEASE"
@@ -11,8 +11,8 @@ val reactorAddonsVersion = "3.2.2.RELEASE"
 val jacksonVersion = "2.9.8"
 
 plugins {
-    kotlin("jvm") version "1.3.30"
-    id("kotlinx-serialization") version "1.3.30"
+    kotlin("jvm") version "1.3.31"
+    id("kotlinx-serialization") version "1.3.31"
 }
 
 repositories {

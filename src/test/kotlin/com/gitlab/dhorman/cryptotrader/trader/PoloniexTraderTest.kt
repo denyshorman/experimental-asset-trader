@@ -1,28 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.gitlab.dhorman.cryptotrader.core.Market
-import com.gitlab.dhorman.cryptotrader.core.OrderBookAbstract
-import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
-import io.vavr.collection.Array
-import io.vavr.collection.HashMap
-import io.vavr.collection.Map
-import io.vavr.collection.TreeMap
-import io.vavr.kotlin.hashMap
-import io.vavr.kotlin.tuple
-import io.vertx.core.Vertx
-import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.Test
-import reactor.core.publisher.EmitterProcessor
-import reactor.core.publisher.Flux
-import reactor.core.publisher.Mono
-import reactor.core.publisher.ReplayProcessor
-import reactor.test.StepVerifier
-import java.math.BigDecimal
-import java.time.LocalDateTime
-
-class TraderTest {
-    @Test
+class PoloniexTraderTest {
+    /*@Test
     fun `Test delayed order with put, and trade`() {
         runBlocking {
             val market = Market("USDT", "UAH")
@@ -120,7 +99,7 @@ class TraderTest {
                     get() = accountNotification
             }
 
-            val trader = Trader(poloniexApi)
+            val trader = PoloniexTrader(poloniexApi)
 
             orderBook.onNext(
                 PriceAggregatedBook(
@@ -219,8 +198,8 @@ class TraderTest {
                 price: Price,
                 amount: Amount?,
                 orderType: BuyOrderType?
-            ): Mono<MoveOrderResult> {
-                return Mono.just(MoveOrderResult(true, 3, HashMap.empty())).doOnSuccess {
+            ): Mono<MoveOrderResult2> {
+                return Mono.just(MoveOrderResult2(true, 3, HashMap.empty())).doOnSuccess {
                     accountNotification.onNext(OrderUpdate(1, BigDecimal.ZERO))
 
                     accountNotification.onNext(
@@ -276,7 +255,7 @@ class TraderTest {
             override val accountNotificationStream: Flux<AccountNotification>
                 get() = accountNotification
         }
-        val trader = Trader(poloniexApi)
+        val trader = PoloniexTrader(poloniexApi)
 
         orderBook.onNext(
             PriceAggregatedBook(
@@ -312,5 +291,5 @@ class TraderTest {
             )
             .expectComplete()
             .verify()
-    }
+    }*/
 }

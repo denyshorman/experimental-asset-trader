@@ -2,6 +2,7 @@ package com.gitlab.dhorman.cryptotrader.core
 
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
+import com.gitlab.dhorman.cryptotrader.service.poloniex.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
@@ -33,23 +34,23 @@ object Orders {
             if (orderBook.asks.length() == 0) return null
 
             for ((basePrice, quoteAmount) in orderBook.asks) {
-                val availableAmount = quoteAmount * basePrice
+                val availableFromAmount = buyBaseAmount(quoteAmount, basePrice)
 
-                if (unusedFromCurrencyAmount <= availableAmount) {
-                    targetCurrencyAmount += unusedFromCurrencyAmount.setScale(12, RoundingMode.HALF_EVEN) / basePrice
-                    val tradeAmount = unusedFromCurrencyAmount.setScale(12, RoundingMode.HALF_EVEN) / basePrice
-                    trades = trades.prepend(InstantOrder.Companion.Trade(basePrice, tradeAmount))
+                if (unusedFromCurrencyAmount <= availableFromAmount) {
+                    val tradeQuoteAmount = calcQuoteAmount(unusedFromCurrencyAmount, basePrice)
+                    targetCurrencyAmount += buyQuoteAmount(tradeQuoteAmount, takerFeeMultiplier)
+                    trades = trades.prepend(InstantOrder.Companion.Trade(basePrice, tradeQuoteAmount))
                     unusedFromCurrencyAmount = BigDecimal.ZERO
                     break
                 } else {
-                    unusedFromCurrencyAmount -= availableAmount
-                    targetCurrencyAmount += availableAmount.setScale(12, RoundingMode.HALF_EVEN) / basePrice
+                    unusedFromCurrencyAmount -= availableFromAmount
+                    targetCurrencyAmount += buyQuoteAmount(quoteAmount, takerFeeMultiplier)
                     trades = trades.prepend(InstantOrder.Companion.Trade(basePrice, quoteAmount))
                 }
             }
 
             val price = orderBook.asks.head()._1
-            orderMultiplierSimple = (BigDecimal.ONE.setScale(12, RoundingMode.HALF_EVEN) / price) * takerFeeMultiplier
+            orderMultiplierSimple = BigDecimal.ONE.divide(price, 12, RoundingMode.DOWN) * takerFeeMultiplier
         } else {
             if (orderBook.bids.length() == 0) return null
 
@@ -60,8 +61,8 @@ object Orders {
                     unusedFromCurrencyAmount = BigDecimal.ZERO
                     break
                 } else {
-                    unusedFromCurrencyAmount -= quoteAmount
-                    targetCurrencyAmount += quoteAmount * basePrice
+                    unusedFromCurrencyAmount -= sellQuoteAmount(quoteAmount)
+                    targetCurrencyAmount += sellBaseAmount(quoteAmount, basePrice, takerFeeMultiplier)
                     trades = trades.prepend(InstantOrder.Companion.Trade(basePrice, quoteAmount))
                 }
             }
@@ -70,8 +71,7 @@ object Orders {
             orderMultiplierSimple = price * takerFeeMultiplier
         }
 
-        targetCurrencyAmount *= takerFeeMultiplier
-        orderMultiplierAmount = targetCurrencyAmount.setScale(12, RoundingMode.HALF_EVEN) / initCurrencyAmount
+        orderMultiplierAmount = targetCurrencyAmount.divide(initCurrencyAmount, 12, RoundingMode.DOWN)
 
         return InstantOrder(
             market,
@@ -111,9 +111,9 @@ object Orders {
 
             if (orderBook.asks.length() > 0 && basePrice.compareTo(orderBook.asks.head()._1) == 0) return null
 
-            quoteAmount = fromAmount.setScale(12, RoundingMode.HALF_EVEN) / basePrice
-            toAmount = quoteAmount * makerFeeMultiplier
-            orderMultiplier = makerFeeMultiplier.setScale(12, RoundingMode.HALF_EVEN) / basePrice
+            quoteAmount = calcQuoteAmount(fromAmount, basePrice)
+            toAmount = buyQuoteAmount(quoteAmount, makerFeeMultiplier)
+            orderMultiplier = makerFeeMultiplier.divide(basePrice, 12, RoundingMode.DOWN)
         } else {
             if (orderBook.asks.length() == 0) return null
 
@@ -122,7 +122,7 @@ object Orders {
             if (orderBook.bids.length() > 0 && basePrice.compareTo(orderBook.bids.head()._1) == 0) return null
 
             quoteAmount = fromAmount
-            toAmount = quoteAmount * basePrice * makerFeeMultiplier
+            toAmount = sellBaseAmount(quoteAmount, basePrice, makerFeeMultiplier)
             orderMultiplier = makerFeeMultiplier * basePrice
         }
 
@@ -140,6 +140,7 @@ object Orders {
         )
     }
 
+    // TODO: fix rounding
     fun getDelayedOrderReverse(
         market: Market,
         targetCurrency: Currency,
@@ -218,6 +219,7 @@ data class InstantOrder(
     val trades: List<InstantOrder.Companion.Trade>
 ) : InstantDelayedOrder() {
     companion object {
+        // TODO: Replace with BareTrade
         data class Trade(
             val price: Price,
             val amount: Amount

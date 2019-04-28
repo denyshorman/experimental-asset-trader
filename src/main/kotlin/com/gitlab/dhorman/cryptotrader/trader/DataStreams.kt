@@ -1,9 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.gitlab.dhorman.cryptotrader.core.FeeMultiplier
-import com.gitlab.dhorman.cryptotrader.core.Market
-import com.gitlab.dhorman.cryptotrader.core.TradeStat
-import com.gitlab.dhorman.cryptotrader.core.oneMinus
+import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.data.tradestat.*
@@ -15,6 +12,7 @@ import io.vavr.collection.Set
 import io.vavr.kotlin.component1
 import io.vavr.kotlin.component2
 import io.vavr.kotlin.tuple
+import kotlinx.coroutines.reactive.awaitFirst
 import mu.KotlinLogging
 import reactor.core.publisher.Flux
 import java.math.BigDecimal
@@ -377,5 +375,18 @@ class DataStreams(
         }.flux().doOnNext { fee ->
             logger.info("Fee fetched: $fee")
         }.cache(1)
+    }
+
+    suspend fun getMarketId(market: Market): MarketId? {
+        return markets.awaitFirst()._2[market].orNull
+    }
+
+    suspend fun getMarket(marketId: MarketId): Market? {
+        return markets.awaitFirst()._1[marketId].orNull
+    }
+
+    suspend fun getOrderBookFlowBy(market: Market): Flux<OrderBookAbstract> {
+        val marketId = getMarketId(market) ?: throw Exception("Market not found")
+        return (orderBooks.awaitFirst()[marketId].orNull  ?: throw Exception("Order book for $marketId not found")).map{it.book as OrderBookAbstract}
     }
 }
