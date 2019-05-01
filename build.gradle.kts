@@ -4,7 +4,7 @@ group = "com.gitlab.dhorman"
 version = "1.0.0-SNAPSHOT"
 
 val kotlinVersion = "1.3.31"
-val kotlinCoroutinesVersion = "1.2.0"
+val kotlinCoroutinesVersion = "1.2.1"
 val vertxVersion = "3.7.0"
 val reactorVersion = "3.2.8.RELEASE"
 val reactorAddonsVersion = "3.2.2.RELEASE"
