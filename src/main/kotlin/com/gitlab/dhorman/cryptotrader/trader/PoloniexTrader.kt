@@ -51,7 +51,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
     private val unfilledMarkets = HashMap<Currency, Array<TranIntentMarket>>()
     private val unfilledMarketsMutex = Mutex()
 
-    private suspend fun addUnfilledMarkets(
+    private suspend fun saveUnfilledMarketInfo(
         initCurrency: Currency,
         initCurrencyAmount: Amount,
         currentCurrency: Currency,
@@ -62,7 +62,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
         }
     }
 
-    private suspend fun getAndRemoveUnfilledMarkets(
+    private suspend fun fetchAndRemoveUnfilledMarkets(
         initFromCurrency: Currency,
         fromCurrency: Currency
     ): List<Tuple2<Amount, Amount>>? {
@@ -188,12 +188,12 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
             val orderBookFlow = data.getOrderBookFlowBy(currentMarket.market)
             val feeFlow = data.fee
             val newMarketIdx = marketIdx + 1
-            val unfilledMarkets = getAndRemoveUnfilledMarkets(markets[0].fromCurrency, currentMarket.fromCurrency)
+            val unfilledMarkets = fetchAndRemoveUnfilledMarkets(markets[0].fromCurrency, currentMarket.fromCurrency)
             val modifiedMarkets = mergeMarkets(markets, unfilledMarkets)
 
             when (currentMarket.orderSpeed) {
                 OrderSpeed.Instant -> run {
-                    val trades = buySellInstantly(
+                    val trades = tradeInstantly(
                         currentMarket.market,
                         currentMarket.fromCurrency,
                         currentMarket.fromAmount,
@@ -201,17 +201,17 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                         feeFlow
                     )
 
-                    val (currentUpdatedMarkets, committedMarkets) = splitWithNewTrades(
+                    val (unfilledTradeMarkets, committedMarkets) = splitMarkets(
                         modifiedMarkets,
                         marketIdx,
                         trades
                     )
 
-                    addUnfilledMarkets(
-                        currentUpdatedMarkets[0].fromCurrency,
-                        currentUpdatedMarkets[0].fromAmount(currentUpdatedMarkets, 0),
-                        currentUpdatedMarkets[marketIdx].fromCurrency,
-                        currentUpdatedMarkets[marketIdx].fromAmount(currentUpdatedMarkets, marketIdx)
+                    saveUnfilledMarketInfo(
+                        unfilledTradeMarkets[0].fromCurrency,
+                        unfilledTradeMarkets[0].fromAmount(unfilledTradeMarkets, 0),
+                        unfilledTradeMarkets[marketIdx].fromCurrency,
+                        unfilledTradeMarkets[marketIdx].fromAmount(unfilledTradeMarkets, marketIdx)
                     )
 
                     if (newMarketIdx != modifiedMarkets.length()) {
@@ -220,16 +220,17 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                             newMarketIdx,
                             TranIntentScope
                         )
+
                         newIntent.start()
                     }
                 }
                 OrderSpeed.Delayed -> run {
                     var updatedMarkets = modifiedMarkets
-                    val marketsChannel = ConflatedBroadcastChannel(updatedMarkets)
-                    val profitMonitoringJob = startProfitMonitoring(marketsChannel)
+                    val updatedMarketsChannel = ConflatedBroadcastChannel(updatedMarkets)
+                    val profitMonitoringJob = startProfitMonitoring(updatedMarketsChannel)
                     profitMonitoringJob.start()
 
-                    buySellDelayed(
+                    tradeDelayed(
                         currentMarket.orderType,
                         currentMarket.market,
                         currentMarket.fromAmount,
@@ -238,10 +239,10 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                         .buffer(Duration.ofSeconds(10))
                         .map { Array.ofAll(it) }
                         .collect { trades ->
-                            val marketSplit = splitWithNewTrades(updatedMarkets, marketIdx, trades)
+                            val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
 
                             updatedMarkets = marketSplit._1
-                            marketsChannel.send(updatedMarkets)
+                            updatedMarketsChannel.send(updatedMarkets)
 
                             if (newMarketIdx == modifiedMarkets.length()) return@collect
 
@@ -383,7 +384,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
             return if (i == markets.length()) null else i
         }
 
-        private suspend fun buySellInstantly(
+        private suspend fun tradeInstantly(
             market: Market,
             fromCurrency: Currency,
             fromCurrencyAmount: Amount,
@@ -435,7 +436,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
             return Array.ofAll(trades)
         }
 
-        private fun buySellDelayed(
+        private fun tradeDelayed(
             orderType: OrderType,
             market: Market,
             fromCurrencyAmount: Amount,
@@ -771,7 +772,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
             return markets.dropRight(markets.length() - marketIdx).appendAll(bestPath)
         }
 
-        private fun splitWithNewTrades(
+        private fun splitMarkets(
             markets: Array<TranIntentMarket>,
             currentMarketIdx: Int,
             trades: Array<BareTrade>
