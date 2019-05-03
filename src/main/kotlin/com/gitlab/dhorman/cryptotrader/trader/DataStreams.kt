@@ -249,7 +249,7 @@ class DataStreams(
                                     update.rate,
                                     update.amount,
                                     update.amount,
-                                    update.rate * update.amount, // TODO: Error
+                                    update.rate * update.amount, // TODO: Incorrect arguments supplied
                                     update.date,
                                     false,
                                     marketId.get()
@@ -278,8 +278,8 @@ class DataStreams(
                                         oldOrder.price,
                                         oldOrder.startingAmount,
                                         update.newAmount,
-                                        oldOrder.total, // TODO: Error
-                                        oldOrder.date, // TODO: Error
+                                        oldOrder.total, // TODO: Incorrect value supplied
+                                        oldOrder.date, // TODO: Incorrect value supplied
                                         oldOrder.margin,
                                         oldOrder.market
                                     )
@@ -300,7 +300,7 @@ class DataStreams(
             .cache(1)
     }
 
-    // TODO: Optimize
+    // TODO: Optimize calculation
     val orderBookOrders: Flux<Set<BookOrder>> = run {
         openOrders.map { openOrdersMap ->
             openOrdersMap.map { openOrder ->

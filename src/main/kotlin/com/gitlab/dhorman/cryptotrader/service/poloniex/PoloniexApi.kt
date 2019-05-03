@@ -281,7 +281,7 @@ open class PoloniexApi(
     }
 
     open fun orderStatus(orderId: Long): Mono<OrderStatus> {
-        TODO()
+        TODO("Implement orderStatus")
     }
 
     open fun tradeHistory(market: Market?): Mono<Map<Market, List<TradeHistoryPrivate>>> {

@@ -83,10 +83,7 @@ data class ExhaustivePath(
                 else -> run {}
             }
 
-            targetCurrency = when (order) {
-                is DelayedOrder -> order.market.other(targetCurrency)!!
-                is InstantOrder -> order.market.other(targetCurrency)!!
-            }
+            targetCurrency = order.market.other(targetCurrency)!!
         }
 
         recommendedStartAmount ?: when (val head = chain.head()) {

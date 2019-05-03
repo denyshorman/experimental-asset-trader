@@ -50,7 +50,7 @@ object Orders {
             }
 
             val price = orderBook.asks.head()._1
-            orderMultiplierSimple = BigDecimal.ONE.divide(price, 12, RoundingMode.DOWN) * takerFeeMultiplier
+            orderMultiplierSimple = BigDecimal.ONE.divide(price, 12, RoundingMode.DOWN) * takerFeeMultiplier // TODO: Review rounding
         } else {
             if (orderBook.bids.length() == 0) return null
 
@@ -68,10 +68,10 @@ object Orders {
             }
 
             val price = orderBook.bids.head()._1
-            orderMultiplierSimple = price * takerFeeMultiplier
+            orderMultiplierSimple = price * takerFeeMultiplier // TODO: Review rounding
         }
 
-        orderMultiplierAmount = targetCurrencyAmount.divide(initCurrencyAmount, 12, RoundingMode.DOWN)
+        orderMultiplierAmount = targetCurrencyAmount.divide(initCurrencyAmount, 12, RoundingMode.DOWN) // TODO: Review rounding
 
         return InstantOrder(
             market,
@@ -113,7 +113,7 @@ object Orders {
 
             quoteAmount = calcQuoteAmount(fromAmount, basePrice)
             toAmount = buyQuoteAmount(quoteAmount, makerFeeMultiplier)
-            orderMultiplier = makerFeeMultiplier.divide(basePrice, 12, RoundingMode.DOWN)
+            orderMultiplier = makerFeeMultiplier.divide(basePrice, 12, RoundingMode.DOWN) // TODO: Review rounding
         } else {
             if (orderBook.asks.length() == 0) return null
 
@@ -123,7 +123,7 @@ object Orders {
 
             quoteAmount = fromAmount
             toAmount = sellBaseAmount(quoteAmount, basePrice, makerFeeMultiplier)
-            orderMultiplier = makerFeeMultiplier * basePrice
+            orderMultiplier = makerFeeMultiplier * basePrice  // TODO: Review rounding
         }
 
         return DelayedOrder(
@@ -203,21 +203,28 @@ object Orders {
     JsonSubTypes.Type(value = InstantOrder::class, name = "InstantOrder"),
     JsonSubTypes.Type(value = DelayedOrder::class, name = "DelayedOrder")
 )
-sealed class InstantDelayedOrder
+sealed class InstantDelayedOrder(
+    open val market: Market,
+    open val fromCurrency: Currency,
+    open val targetCurrency: Currency,
+    open val fromAmount: Amount,
+    open val toAmount: Amount,
+    open val orderType: OrderType
+)
 
 data class InstantOrder(
-    val market: Market,
-    val fromCurrency: Currency,
-    val targetCurrency: Currency,
-    val fromAmount: Amount,
-    val toAmount: Amount,
-    val orderType: OrderType,
+    override val market: Market,
+    override val fromCurrency: Currency,
+    override val targetCurrency: Currency,
+    override val fromAmount: Amount,
+    override val toAmount: Amount,
+    override val orderType: OrderType,
     val orderMultiplierSimple: BigDecimal,
     val orderMultiplierAmount: BigDecimal,
     val unusedFromCurrencyAmount: Amount,
     val feeMultiplier: BigDecimal,
-    val trades: List<InstantOrder.Companion.Trade>
-) : InstantDelayedOrder() {
+    val trades: List<InstantOrder.Companion.Trade> // TODO: Change to BareTrade
+) : InstantDelayedOrder(market, fromCurrency, targetCurrency, fromAmount, toAmount, orderType) {
     companion object {
         // TODO: Replace with BareTrade
         data class Trade(
@@ -228,14 +235,14 @@ data class InstantOrder(
 }
 
 data class DelayedOrder(
-    val market: Market,
-    val fromCurrency: Currency,
-    val targetCurrency: Currency,
-    val fromAmount: Amount,
+    override val market: Market,
+    override val fromCurrency: Currency,
+    override val targetCurrency: Currency,
+    override val fromAmount: Amount,
     val basePrice: Price,
     val quoteAmount: Amount,
-    val toAmount: Amount,
-    val orderType: OrderType,
+    override val toAmount: Amount,
+    override val orderType: OrderType,
     val orderMultiplier: BigDecimal,
     val stat: TradeStatOrder
-) : InstantDelayedOrder()
+) : InstantDelayedOrder(market, fromCurrency, targetCurrency, fromAmount, toAmount, orderType)

@@ -1,21 +1,26 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.*
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.ExhaustivePathOrdering
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsUtil
 import io.vavr.collection.Map
+import io.vavr.collection.Traversable
 import io.vavr.collection.TreeSet
-import io.vavr.kotlin.component1
-import io.vavr.kotlin.component2
-import io.vavr.kotlin.toVavrMap
-import io.vavr.kotlin.tuple
+import io.vavr.kotlin.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.reactive.awaitFirst
+import kotlinx.coroutines.reactive.awaitSingle
+import kotlinx.coroutines.withContext
 import mu.KotlinLogging
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
 import java.time.Duration
+import java.util.*
 import java.util.function.Function.identity
 
 class IndicatorStreams(private val data: DataStreams) {
@@ -95,5 +100,62 @@ class IndicatorStreams(private val data: DataStreams) {
             }
             .switchMap(identity(), Int.MAX_VALUE)
             .share()
+    }
+
+    suspend fun getPaths(
+        fromCurrency: Currency,
+        fromCurrencyAmount: Amount,
+        toCurrencies: Traversable<Currency>,
+        pathFilter: (ExhaustivePath) -> Boolean,
+        pathComparator: Comparator<ExhaustivePath>
+    ): TreeSet<ExhaustivePath> {
+        val markets = data.markets.awaitFirst()._2
+        val fee = data.fee.awaitFirst()
+        val paths = withContext(Dispatchers.IO) {
+            MarketPathGenerator(markets.keySet())
+                .generateWithOrders(list(fromCurrency), toCurrencies)
+        }
+        val uniqueMarkets = PathsUtil.uniqueMarkets(paths).map { markets[it].get() }
+
+        val orderBooks = data.orderBooks.awaitFirst()
+            .filter { marketId, _ -> uniqueMarkets.contains(marketId) }
+            .map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
+
+        val stats = data.tradesStat.awaitFirst()
+            .filter { marketId, _ -> uniqueMarkets.contains(marketId) }
+            .map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
+
+        val booksMap = Flux.fromIterable(orderBooks)
+            .flatMap(identity(), orderBooks.length(), 1)
+            .collectMap({ it._1 }, { it._2 })
+            .map { it.toVavrMap() }
+            .awaitSingle()
+
+        val statsMap = Flux.fromIterable(stats)
+            .flatMap(identity(), stats.length(), 1)
+            .collectMap({ it._1 }, { it._2 })
+            .map { it.toVavrMap() }
+            .awaitSingle()
+
+        var availablePaths = TreeSet.empty(pathComparator)
+
+        withContext(Dispatchers.IO) {
+            val exhaustivePaths = PathsUtil.map(
+                paths,
+                booksMap,
+                statsMap,
+                markets,
+                fromCurrencyAmount,
+                fee
+            )
+
+            for (exhaustivePath in exhaustivePaths) {
+                if (exhaustivePath != null && pathFilter(exhaustivePath)) {
+                    availablePaths = availablePaths.add(exhaustivePath)
+                }
+            }
+        }
+
+        return availablePaths
     }
 }

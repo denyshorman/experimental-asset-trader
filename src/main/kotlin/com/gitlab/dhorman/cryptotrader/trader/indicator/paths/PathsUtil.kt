@@ -23,11 +23,11 @@ object PathsUtil {
     fun generateSimplePaths(
         markets: Traversable<Market>,
         currencies: Traversable<Currency>
-    ): Map<Tuple2<Currency, Currency>, Set<List<Tuple2<PathOrderType, Market>>>> {
+    ): Map<Tuple2<Currency, Currency>, Set<List<Tuple2<OrderSpeed, Market>>>> {
         return MarketPathGenerator(markets).generateAllPermutationsWithOrders(currencies)
     }
 
-    fun uniqueMarkets(pathsPermutations: Map<Tuple2<Currency, Currency>, Set<List<Tuple2<PathOrderType, Market>>>>): MutableSet<Market> {
+    fun uniqueMarkets(pathsPermutations: Map<Tuple2<Currency, Currency>, Set<List<Tuple2<OrderSpeed, Market>>>>): MutableSet<Market> {
         val marketSet = mutableSetOf<Market>()
 
         for ((_, paths) in pathsPermutations) {
@@ -42,7 +42,7 @@ object PathsUtil {
     }
 
     fun map(
-        pathsPermutations: Map<Tuple2<Currency, Currency>, Set<List<Tuple2<PathOrderType, Market>>>>,
+        pathsPermutations: Map<Tuple2<Currency, Currency>, Set<List<Tuple2<OrderSpeed, Market>>>>,
         orderBooks: Map<MarketId, OrderBookData>,
         stats: Map<MarketId, TradeStat>,
         marketInfoStringMap: MarketStringMap,
@@ -59,11 +59,11 @@ object PathsUtil {
                     booksStats += orderBook
 
                     when (tpe) {
-                        PathOrderType.Delayed -> run {
+                        OrderSpeed.Delayed -> run {
                             val stat = stats[marketId].get()
                             booksStats += stat
                         }
-                        PathOrderType.Instant -> run { /*ignore*/ }
+                        OrderSpeed.Instant -> run { /*ignore*/ }
                     }
                 }
 
@@ -76,7 +76,7 @@ object PathsUtil {
         targetPath: TargetPath,
         startAmount: Amount,
         fee: FeeMultiplier,
-        path: List<Tuple2<PathOrderType, Market>>,
+        path: List<Tuple2<OrderSpeed, Market>>,
         booksStats: LinkedList<Any>
     ): ExhaustivePath? {
         val chain = LinkedList<InstantDelayedOrder>()
@@ -91,26 +91,22 @@ object PathsUtil {
             i += 1
 
             val order = when (tpe) {
-                PathOrderType.Instant -> run {
+                OrderSpeed.Instant -> run {
                     mapInstantOrder(market, targetCurrency, fromAmount, fee.taker, orderBook)
                 }
-                PathOrderType.Delayed -> run {
+                OrderSpeed.Delayed -> run {
                     val stat = booksStats[i] as TradeStat
                     i += 1
                     mapDelayedOrder(market, targetCurrency, fromAmount, fee.maker, orderBook, stat)
                 }
             } ?: return null
 
-            // TODO: Improve
-            fromAmount = when (order) {
-                is InstantOrder -> order.toAmount
-                is DelayedOrder -> order.toAmount
-            }
+            fromAmount = order.toAmount
 
             chain += order
         }
 
-        return ExhaustivePath(targetPath, chain.toVavrList()) // TODO: Improve interface inconsistency
+        return ExhaustivePath(targetPath, chain.toVavrList()) // TODO: Fix interface inconsistency
     }
 
     private fun mapInstantOrder(

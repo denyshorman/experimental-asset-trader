@@ -7,13 +7,11 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidOrderNu
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.TransactionFailedException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
-import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import io.vavr.Tuple2
 import io.vavr.collection.Queue
 import io.vavr.collection.List
 import io.vavr.collection.Array
-import io.vavr.collection.TreeSet
 import io.vavr.collection.Vector
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
@@ -38,6 +36,15 @@ import java.time.Duration
 import java.util.*
 import kotlin.Comparator
 
+//TODO: Implement state persistence in database
+// - store all balances in db
+// - store all active and historical paths
+
+//TODO: Implement handling for cancel events
+
+//TODO: Add Poloniex events error handlers
+
+//TODO: Add logging
 class PoloniexTrader(private val poloniexApi: PoloniexApi) {
     private val logger = KotlinLogging.logger {}
 
@@ -46,6 +53,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
     val data = DataStreams(raw, trigger, poloniexApi)
     val indicators = IndicatorStreams(data)
 
+    @Volatile
     var primaryCurrencies: List<Currency> = list("USDT", "USDC")
 
     private val unfilledMarkets = HashMap<Currency, Array<TranIntentMarket>>()
@@ -58,7 +66,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
         currentCurrencyAmount: Amount
     ) {
         unfilledMarketsMutex.withLock {
-            TODO()
+            TODO("Implement saveUnfilledMarketInfo")
         }
     }
 
@@ -67,7 +75,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
         fromCurrency: Currency
     ): List<Tuple2<Amount, Amount>>? {
         unfilledMarketsMutex.withLock {
-            TODO()
+            TODO("Implement fetchAndRemoveUnfilledMarkets")
         }
     }
 
@@ -86,7 +94,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                 val (startCurrency, requestedAmount) = requestBalanceForTransaction() ?: return@collect
 
                 val bestPath = try {
-                    selectBestPath(startCurrency, requestedAmount) ?: return@collect
+                    selectBestPath(requestedAmount, startCurrency, requestedAmount, primaryCurrencies) ?: return@collect
                 } finally {
                     releaseBalance(startCurrency, requestedAmount)
                 }
@@ -98,18 +106,29 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
         }
     }
 
-    private suspend fun selectBestPath(startCurrency: Currency, amount: Amount): ExhaustivePath? {
-        val allPaths = withContext(Dispatchers.IO) {
-            indicators.getPaths(PathsSettings(amount, primaryCurrencies)).awaitFirst()
-        }
+    private suspend fun selectBestPath(
+        initAmount: Amount,
+        fromCurrency: Currency,
+        fromAmount: Amount,
+        endCurrencies: List<Currency>
+    ): ExhaustivePath? {
+        val allPaths = indicators.getPaths(fromCurrency, fromAmount, endCurrencies, fun(p): Boolean {
+            val targetMarket = p.chain.lastOrNull() ?: return false
+            return initAmount < targetMarket.toAmount
+        }, Comparator { p0, p1 ->
+            if (p0.id == p1.id) {
+                0
+            } else {
+                p0.id.compareTo(p1.id) // TODO: Define comparator for other metrics
+            }
+        })
 
-        return selectBestPathForTransaction(allPaths, amount, startCurrency)
+        return allPaths.headOption().orNull
     }
 
     private fun startPathTransaction(bestPath: ExhaustivePath, TranIntentScope: CoroutineScope): Job {
         val markets = prepareMarketsForIntent(bestPath)
-        val intent = TransactionIntent(markets, 0, TranIntentScope)
-        return intent.start()
+        return TransactionIntent(markets, 0, TranIntentScope).start()
     }
 
     private fun prepareMarketsForIntent(bestPath: ExhaustivePath): Array<TranIntentMarket> {
@@ -153,20 +172,13 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
         return Array.ofAll(markets)
     }
 
-    private fun selectBestPathForTransaction(
-        allPaths: TreeSet<ExhaustivePath>?,
-        requestedAmount: Amount,
-        startCurrency: Currency
-    ): ExhaustivePath? {
-        TODO("implement selectBestPathForTransaction")
-    }
-
     private suspend fun findNewPath(
+        initAmount: Amount,
         fromCurrency: Currency,
         fromAmount: Amount,
         endCurrencies: List<Currency>
     ): Array<TranIntentMarket>? {
-        val bestPath = selectBestPath(fromCurrency, fromAmount) ?: return null
+        val bestPath = selectBestPath(initAmount, fromCurrency, fromAmount, endCurrencies) ?: return null
         return prepareMarketsForIntent(bestPath)
     }
 
@@ -201,11 +213,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                         feeFlow
                     )
 
-                    val (unfilledTradeMarkets, committedMarkets) = splitMarkets(
-                        modifiedMarkets,
-                        marketIdx,
-                        trades
-                    )
+                    val (unfilledTradeMarkets, committedMarkets) = splitMarkets(modifiedMarkets, marketIdx, trades)
 
                     saveUnfilledMarketInfo(
                         unfilledTradeMarkets[0].fromCurrency,
@@ -215,13 +223,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                     )
 
                     if (newMarketIdx != modifiedMarkets.length()) {
-                        val newIntent = TransactionIntent(
-                            committedMarkets,
-                            newMarketIdx,
-                            TranIntentScope
-                        )
-
-                        newIntent.start()
+                        TransactionIntent(committedMarkets, newMarketIdx, TranIntentScope).start()
                     }
                 }
                 OrderSpeed.Delayed -> run {
@@ -230,12 +232,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                     val profitMonitoringJob = startProfitMonitoring(updatedMarketsChannel)
                     profitMonitoringJob.start()
 
-                    tradeDelayed(
-                        currentMarket.orderType,
-                        currentMarket.market,
-                        currentMarket.fromAmount,
-                        orderBookFlow
-                    )
+                    tradeDelayed(currentMarket.orderType, currentMarket.market, currentMarket.fromAmount, orderBookFlow)
                         .buffer(Duration.ofSeconds(10))
                         .map { Array.ofAll(it) }
                         .collect { trades ->
@@ -248,13 +245,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
 
                             val committedMarkets = marketSplit._2
 
-                            val newIntent = TransactionIntent(
-                                committedMarkets,
-                                newMarketIdx,
-                                TranIntentScope
-                            )
-
-                            newIntent.start()
+                            TransactionIntent(committedMarkets, newMarketIdx, TranIntentScope).start()
                         }
 
                     profitMonitoringJob.cancelAndJoin()
@@ -262,7 +253,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
             }
         }
 
-        private suspend fun mergeMarkets(
+        private fun mergeMarkets(
             currentMarkets: Array<TranIntentMarket>,
             unfilledMarkets: List<Tuple2<Amount, Amount>>?
         ): Array<TranIntentMarket> {
@@ -277,7 +268,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
             return newMarkets
         }
 
-        private suspend fun mergeMarkets(
+        private fun mergeMarkets(
             currentMarkets: Array<TranIntentMarket>,
             initCurrencyAmount: Amount,
             currentCurrencyAmount: Amount
@@ -412,7 +403,6 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                     firstSimulatedTrade.quoteAmount
                 }
 
-                // TODO: Handle all posible errors
                 // TODO: Investigate FillOrKill and ImmediateOrCancel
                 val transaction = if (orderType == OrderType.Buy) {
                     poloniexApi.buy(market, firstSimulatedTrade.price, expectQuoteAmount, BuyOrderType.FillOrKill)
@@ -623,6 +613,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                 } else {
                     // I am on first position
                     null // Ignore possible price gaps
+                    // TODO: Implement better algorithm to handle price gaps
                 }
             } ?: return null
 
@@ -739,26 +730,23 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
                     delay(10000)
                     val updatedMarkets = updatedMarketsChannel.value
 
-                    val fromAmount = updatedMarkets.first().fromAmount(updatedMarkets, 0)
+                    val initAmount = updatedMarkets.first().fromAmount(updatedMarkets, 0)
                     val targetAmount = updatedMarkets.last().targetAmount(updatedMarkets, updatedMarkets.length() - 1)
 
-                    if (fromAmount > targetAmount) {
+                    if (initAmount > targetAmount) {
                         parentJob?.cancelAndJoin()
-                        val fromCurrency =
-                            (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromCurrency
+                        val currMarket = updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted
+                        val fromCurrency = currMarket.fromCurrency
+                        val fromCurrencyAmount = currMarket.fromAmount
                         var bestPath: Array<TranIntentMarket>? = null
                         while (isActive) {
-                            bestPath = findNewPath(fromCurrency, fromAmount, primaryCurrencies)
+                            // TODO: Find new path have to use updatedMarkets background to correctly find the path
+                            bestPath = findNewPath(initAmount, fromCurrency, fromCurrencyAmount, primaryCurrencies)
                             if (bestPath != null) break;
                             delay(60000)
                         }
                         val changedMarkets = updateMarketsWithBestPath(updatedMarkets, marketIdx, bestPath!!)
-                        val newIntent = TransactionIntent(
-                            changedMarkets,
-                            marketIdx,
-                            TranIntentScope
-                        )
-                        newIntent.start()
+                        TransactionIntent(changedMarkets, marketIdx, TranIntentScope).start()
                     }
                 }
             }

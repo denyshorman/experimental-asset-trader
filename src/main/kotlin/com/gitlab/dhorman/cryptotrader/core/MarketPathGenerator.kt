@@ -41,11 +41,18 @@ class MarketPathGenerator(availableMarkets: Traversable<Market>) {
         )
     }
 
-    fun generateAllPermutationsWithOrders(currencies: Traversable<Currency>): Map<TargetPath, Set<List<Tuple2<PathOrderType, Market>>>> {
-        val permutations = currencies.flatMap { a ->
-            currencies.map { b ->
+    fun generateWithOrders(targetPath: TargetPath): Set<List<Tuple2<OrderSpeed, Market>>> {
+        return generate(targetPath).flatMap { generateAllPermutationsWithOrders(it) }
+    }
+
+    fun generateWithOrders(
+        fromCurrencies: Traversable<Currency>,
+        toCurrencies: Traversable<Currency>
+    ): Map<TargetPath, Set<List<Tuple2<OrderSpeed, Market>>>> {
+        val permutations = fromCurrencies.flatMap { a ->
+            toCurrencies.map { b ->
                 val target = tuple(a, b)
-                val paths = generate(target).flatMap { generateAllPermutationsWithOrders(it) }
+                val paths = generateWithOrders(target)
                 tuple(target, paths)
             }
         }
@@ -53,13 +60,25 @@ class MarketPathGenerator(availableMarkets: Traversable<Market>) {
         return permutations.toMap({ it._1 }, { it._2 })
     }
 
-    private fun generateAllPermutationsWithOrders(path: List<Market>): Seq<List<Tuple2<PathOrderType, Market>>> {
+    fun generateAllPermutationsWithOrders(currencies: Traversable<Currency>): Map<TargetPath, Set<List<Tuple2<OrderSpeed, Market>>>> {
+        val permutations = currencies.flatMap { a ->
+            currencies.map { b ->
+                val target = tuple(a, b)
+                val paths = generateWithOrders(target)
+                tuple(target, paths)
+            }
+        }
+
+        return permutations.toMap({ it._1 }, { it._2 })
+    }
+
+    private fun generateAllPermutationsWithOrders(path: List<Market>): Seq<List<Tuple2<OrderSpeed, Market>>> {
         return range(0, (1 shl path.length())).map { i ->
             path.zipWithIndex().map { (market, j) ->
                 if ((i and (1 shl j)) == 0) {
-                    tuple(PathOrderType.Delayed, market)
+                    tuple(OrderSpeed.Delayed, market)
                 } else {
-                    tuple(PathOrderType.Instant, market)
+                    tuple(OrderSpeed.Instant, market)
                 }
             }
         }
@@ -143,5 +162,3 @@ class MarketPathGenerator(availableMarkets: Traversable<Market>) {
 
 typealias TargetPath = Tuple2<Currency, Currency>
 typealias Path = List<Market>
-
-enum class PathOrderType { Instant, Delayed }
