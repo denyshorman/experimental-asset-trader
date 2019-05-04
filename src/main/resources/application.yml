@@ -1,0 +1,15 @@
+server:
+  port: ${PORT}
+  error:
+    whitelabel:
+      enabled: false
+
+spring:
+  main:
+    banner-mode: "off"
+  output:
+    ansi:
+      enabled: always
+  devtools:
+    livereload:
+      enabled: true

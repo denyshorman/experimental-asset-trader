@@ -1,17 +1,15 @@
 package com.gitlab.dhorman.cryptotrader.service
 
 import com.gitlab.dhorman.cryptotrader.core.Market
-import com.gitlab.dhorman.cryptotrader.diContainer
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import io.vavr.concurrent.Promise
 import mu.KotlinLogging
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.fail
-import org.kodein.di.erased.instance
 
 class PoloniexApiSpec {
     private val logger = KotlinLogging.logger {}
-    private val poloniexApi: PoloniexApi by diContainer.instance()
+    private lateinit var poloniexApi: PoloniexApi
 
     @Test
     fun `PoloniexApi ticker stream should return some amount of data and completes successfully`() {

@@ -1,12 +1,14 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniex
 
 import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.NullNode
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
+import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import com.gitlab.dhorman.cryptotrader.util.HmacSha512Digest
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import io.vavr.Tuple2
@@ -14,164 +16,102 @@ import io.vavr.collection.*
 import io.vavr.collection.Array
 import io.vavr.collection.List
 import io.vavr.collection.Map
-import io.vavr.control.Option
 import io.vavr.kotlin.*
-import io.vertx.core.Vertx
-import io.vertx.core.json.Json
-import io.vertx.core.net.ProxyOptions
-import io.vertx.core.net.ProxyType
-import io.vertx.ext.web.client.WebClientOptions
-import io.vertx.reactivex.core.MultiMap
-import io.vertx.reactivex.core.buffer.Buffer
-import io.vertx.reactivex.core.http.WebSocket
-import io.vertx.reactivex.ext.web.client.HttpResponse
-import io.vertx.reactivex.ext.web.client.WebClient
+import kotlinx.coroutines.*
+import kotlinx.coroutines.reactive.awaitFirstOrNull
+import kotlinx.coroutines.reactive.awaitSingle
+import kotlinx.coroutines.reactive.collect
+import kotlinx.coroutines.reactor.flux
+import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
-import reactor.adapter.rxjava.toMono
-import reactor.core.publisher.*
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.http.MediaType
+import org.springframework.stereotype.Service
+import org.springframework.web.reactive.function.BodyInserters
+import org.springframework.web.reactive.function.client.ClientResponse
+import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.reactive.socket.WebSocketSession
+import org.springframework.web.reactive.socket.client.WebSocketClient
+import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
+import reactor.core.publisher.SynchronousSink
 import java.math.BigDecimal
+import java.net.URI
 import java.time.Duration
 import java.util.function.Function.identity
-import io.vertx.reactivex.core.Vertx as VertxRx
 
-private const val PoloniexPrivatePublicHttpApiUrl = "poloniex.com"
-private const val PoloniexWebSocketApiUrl = "api2.poloniex.com"
+private const val PoloniexPrivatePublicHttpApiUrl = "https://poloniex.com"
+private const val PoloniexWebSocketApiUrl = "wss://api2.poloniex.com"
 
 /**
- * Documentation https://poloniex.com/support/api
+ * Documentation https://docs.poloniex.com
  */
-open class PoloniexApi(
-    vertx: Vertx,
-    private val poloniexApiKey: String,
-    poloniexApiSecret: String
+@Service
+class PoloniexApi(
+    @Qualifier("POLONIEX_API_KEY") private val poloniexApiKey: String,
+    @Qualifier("POLONIEX_API_SECRET") private val poloniexApiSecret: String,
+    private val webClient: WebClient,
+    private val webSocketClient: WebSocketClient,
+    private val objectMapper: ObjectMapper
 ) {
     private val logger = KotlinLogging.logger {}
     private val signer = HmacSha512Digest(poloniexApiSecret)
     private val reqLimiter = RequestLimiter(allowedRequests = 6, perInterval = Duration.ofSeconds(1))
 
-    private val vertxRx = VertxRx(vertx)
+    private val websocketAndMessages = run {
+        FlowScope.flux<Tuple2<WebSocketSession, Flux<PushNotification>>> {
+            val main = this
+            val jsonReader = objectMapper.readerFor(PushNotification::class.java)
 
-    private val httpOptions = run {
-        val options = WebClientOptions()
-            .setMaxWebsocketFrameSize(65536 * 4)
-            .setMaxWebsocketMessageSize(65536 * 16)
-            .setUserAgentEnabled(false)
-            .setKeepAlive(false)
-            .setSsl(true)
+            val connect = webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
+                FlowScope.mono {
+                    logger.info("Connection established with $PoloniexWebSocketApiUrl")
 
-        if (System.getenv("HTTP_CERT_TRUST_ALL") != null) {
-            options.isTrustAll = true
-        }
-
-        val httpProxy: Option<ProxyOptions> = Option.of(System.getenv("HTTP_PROXY_ENABLED")).map {
-            val proxyOptions = ProxyOptions()
-            val host = Option.of(System.getenv("HTTP_PROXY_HOST"))
-            val port = Option.of(System.getenv("HTTP_PROXY_PORT")).flatMap { Try { Integer.parseInt(it) }.toOption() }
-            val tpe = Option.of(System.getenv("HTTP_PROXY_TYPE")).map {
-                when (it) {
-                    "http" -> ProxyType.HTTP
-                    "socks5" -> ProxyType.SOCKS5
-                    else -> throw  Exception("Can't recognize HTTP_PROXY_TYPE option")
+                    val messages = session.receive()
+                        .handle { msg, sink: SynchronousSink<PushNotification> ->
+                            try {
+                                val pushNotification =
+                                    jsonReader.readValue<PushNotification>(msg.payload.asInputStream())
+                                sink.next(pushNotification)
+                            } catch (e: Exception) {
+                                logger.error("Can't parse websocket message", e)
+                            }
+                        }
+                        .share()
+                    main.send(tuple(session, messages))
+                    messages.timeout(Duration.ofSeconds(3)).then().awaitFirstOrNull()
                 }
             }
 
-            if (host.isDefined) proxyOptions.host = host.get()
-            if (port.isDefined) proxyOptions.port = port.get()
-            if (tpe.isDefined) proxyOptions.type = tpe.get()
-
-            proxyOptions
-        }
-
-        if (httpProxy.isDefined) {
-            options.proxyOptions = httpProxy.get()
-        }
-
-        options
-    }
-
-    private val httpClient = vertxRx.createHttpClient(httpOptions)
-    private val webclient = WebClient.create(vertxRx, httpOptions)
-
-    private val websocket = run {
-        Flux.create({ sink: FluxSink<WebSocket> ->
-            Mono.from(
-                httpClient.websocketStream(443, PoloniexWebSocketApiUrl, "/").toFlowable()
-            )
-                .single()
-                .subscribe({ socket: WebSocket ->
-                    logger.info("WebSocket connection established")
-
-                    socket.closeHandler {
-                        logger.info("WebSocket connection closed")
-                        sink.complete()
-                    }
-
-                    socket.endHandler {
-                        logger.info("WebSocket completed transmission")
-                        sink.complete()
-                    }
-
-                    socket.exceptionHandler { err ->
-                        logger.error("Exception occurred in WebSocket connection", err)
-                        sink.error(err)
-                    }
-
-                    sink.onDispose {
-                        socket.close()
-                    }
-
-                    sink.next(socket)
-                }, { err ->
-                    sink.error(err)
-                })
-        }, FluxSink.OverflowStrategy.LATEST)
-            .replay(1)
-            .refCount()
-    }
-
-    private val websocketMessages = run {
-        val jsonReader = Json.mapper.readerFor(PushNotification::class.java)
-
-        websocket
-            .switchMap({ it.toFlowable().toFlux() }, Int.MAX_VALUE)
-            .map { jsonReader.readValue<PushNotification>(it.bytes) }
-            .share()
+            connect.awaitFirstOrNull()
+        }.replay(1).refCount()
     }
 
     /**
      * Subscribe to ticker updates for all currency pairs.
      */
-    open val tickerStream: Flux<Ticker> = run {
-        Flux.create(create(DefaultChannel.TickerData.id, jacksonTypeRef<Ticker>()), FluxSink.OverflowStrategy.LATEST)
-            .share()
+    val tickerStream: Flux<Ticker> = run {
+        subscribeTo(DefaultChannel.TickerData.id, jacksonTypeRef<Ticker>()).share()
     }
 
-    open val dayExchangeVolumeStream: Flux<DayExchangeVolume> = run {
-        Flux.create(
-            create(DefaultChannel.DayExchangeVolume.id, jacksonTypeRef<DayExchangeVolume>()),
-            FluxSink.OverflowStrategy.LATEST
-        )
-            .share()
+    val dayExchangeVolumeStream: Flux<DayExchangeVolume> = run {
+        subscribeTo(DefaultChannel.DayExchangeVolume.id, jacksonTypeRef<DayExchangeVolume>()).share()
     }
 
-    open val accountNotificationStream: Flux<AccountNotification> = run {
-        Flux.create(
-            create(
-                DefaultChannel.AccountNotifications.id,
-                jacksonTypeRef<List<AccountNotification>>(),
-                privateApi = true
-            ), FluxSink.OverflowStrategy.BUFFER
+    val accountNotificationStream: Flux<AccountNotification> = run {
+        subscribeTo(
+            DefaultChannel.AccountNotifications.id,
+            jacksonTypeRef<List<AccountNotification>>(),
+            privateApi = true
         )
             .flatMapIterable(identity(), Int.MAX_VALUE)
             .share()
     }
 
-    open fun orderBookStream(marketId: MarketId): Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>> {
+    fun orderBookStream(marketId: MarketId): Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>> {
         val notifications: Flux<OrderBookNotification> =
-            Flux.create(
-                create(marketId, jacksonTypeRef<List<OrderBookNotification>>()),
-                FluxSink.OverflowStrategy.BUFFER
-            ).flatMapIterable(identity(), Int.MAX_VALUE)
+            subscribeTo(marketId, jacksonTypeRef<List<OrderBookNotification>>())
+                .flatMapIterable(identity(), Int.MAX_VALUE)
 
         return notifications.scan(
             Tuple2<PriceAggregatedBook, OrderBookNotification>(
@@ -207,7 +147,7 @@ open class PoloniexApi(
         }.skip(1).replay(1).refCount()
     }
 
-    open fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>>> {
+    fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>>> {
         return marketIds.map { marketId -> tuple(marketId, orderBookStream(marketId)) }.toMap { it }
     }
 
@@ -215,12 +155,12 @@ open class PoloniexApi(
      *
      * @return Returns the ticker for all markets.
      */
-    open fun ticker(): Mono<Map<Market, Ticker0>> {
+    fun ticker(): Mono<Map<Market, Ticker0>> {
         val command = "returnTicker"
         return callPublicApi(command, jacksonTypeRef())
     }
 
-    open fun tradeHistoryPublic(market: Market, fromDate: Long? = null, toDate: Long? = null): Mono<Array<TradeHistory>> {
+    fun tradeHistoryPublic(market: Market, fromDate: Long? = null, toDate: Long? = null): Mono<Array<TradeHistory>> {
         val command = "returnTradeHistory"
 
         val params = hashMap(
@@ -236,7 +176,7 @@ open class PoloniexApi(
         return callPublicApi(command, jacksonTypeRef(), params)
     }
 
-    open fun currencies(): Mono<Map<Currency, CurrencyDetails>> {
+    fun currencies(): Mono<Map<Currency, CurrencyDetails>> {
         val command = "returnCurrencies"
         return callPublicApi(command, jacksonTypeRef())
     }
@@ -244,14 +184,14 @@ open class PoloniexApi(
     /**
      * Returns all of your available balances
      */
-    open fun availableBalances(): Mono<Map<Currency, BigDecimal>> {
+    fun availableBalances(): Mono<Map<Currency, BigDecimal>> {
         return callPrivateApi("returnBalances", jacksonTypeRef())
     }
 
     /**
      * Returns all of your balances, including available balance, balance on orders, and the estimated BTC value of your balance.
      */
-    open fun completeBalances(): Mono<Map<Currency, CompleteBalance>> {
+    fun completeBalances(): Mono<Map<Currency, CompleteBalance>> {
         return callPrivateApi("returnCompleteBalances", jacksonTypeRef())
     }
 
@@ -259,7 +199,7 @@ open class PoloniexApi(
     /**
      * Returns your open orders for a given market, specified by the currencyPair.
      */
-    open fun openOrders(market: Market): Mono<List<OpenOrder>> {
+    fun openOrders(market: Market): Mono<List<OpenOrder>> {
         return callPrivateApi(
             "returnOpenOrders",
             jacksonTypeRef(),
@@ -267,7 +207,7 @@ open class PoloniexApi(
         )
     }
 
-    open fun allOpenOrders(): Mono<Map<Long, OpenOrderWithMarket>> {
+    fun allOpenOrders(): Mono<Map<Long, OpenOrderWithMarket>> {
         val command = "returnOpenOrders"
         val params = hashMap("currencyPair" to "all")
         return callPrivateApi(command, jacksonTypeRef<Map<Market, List<OpenOrder>>>(), params)
@@ -280,11 +220,11 @@ open class PoloniexApi(
             }
     }
 
-    open fun orderStatus(orderId: Long): Mono<OrderStatus> {
+    fun orderStatus(orderId: Long): Mono<OrderStatus> {
         TODO("Implement orderStatus")
     }
 
-    open fun tradeHistory(market: Market?): Mono<Map<Market, List<TradeHistoryPrivate>>> {
+    fun tradeHistory(market: Market?): Mono<Map<Market, List<TradeHistoryPrivate>>> {
         val command = "returnTradeHistory"
         val params = hashMap("currencyPair" to (market?.toString() ?: "all"))
         return if (market == null) {
@@ -294,7 +234,7 @@ open class PoloniexApi(
         }
     }
 
-    open fun orderTrades(orderNumber: BigDecimal): Mono<List<OrderTrade>> {
+    fun orderTrades(orderNumber: BigDecimal): Mono<List<OrderTrade>> {
         val command = "returnOrderTrades"
         val params = hashMap("orderNumber" to orderNumber.toString())
         return callPrivateApi(command, jacksonTypeRef(), params)
@@ -309,11 +249,11 @@ open class PoloniexApi(
      *            A post-only order will only be placed if no portion of it fills immediately; this guarantees you will never pay the taker fee on any part of the order that fills.
      * @return If successful, the method will return the order number.
      */
-    open fun buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
+    fun buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
         return buySell("buy", market, price, amount, tpe)
     }
 
-    open fun sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
+    fun sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
         return buySell("sell", market, price, amount, tpe)
     }
 
@@ -376,7 +316,7 @@ open class PoloniexApi(
         return e
     }
 
-    open fun cancelOrder(orderId: Long): Mono<CancelOrder> {
+    fun cancelOrder(orderId: Long): Mono<CancelOrder> {
         val command = "cancelOrder"
         val params = hashMap("orderNumber" to orderId.toString())
         return callPrivateApi(command, jacksonTypeRef(), params)
@@ -388,7 +328,7 @@ open class PoloniexApi(
      * @param orderType "postOnly" or "immediateOrCancel" may be specified for exchange orders, but will have no effect on margin orders.
      * @return
      */
-    open fun moveOrder(
+    fun moveOrder(
         orderId: Long,
         price: Price,
         amount: Amount?,
@@ -427,17 +367,17 @@ open class PoloniexApi(
     /**
      * If you are enrolled in the maker-taker fee schedule, returns your current trading fees and trailing 30-day volume in BTC. This information is updated once every 24 hours.
      */
-    open fun feeInfo(): Mono<FeeInfo> {
+    fun feeInfo(): Mono<FeeInfo> {
         val command = "returnFeeInfo"
         return callPrivateApi(command, jacksonTypeRef())
     }
 
-    open fun availableAccountBalances(): Mono<AvailableAccountBalance> {
+    fun availableAccountBalances(): Mono<AvailableAccountBalance> {
         val command = "returnAvailableAccountBalances"
         return callPrivateApi(command, jacksonTypeRef())
     }
 
-    open fun marginTradableBalances(): Mono<Map<Market, Map<Currency, Amount>>> {
+    fun marginTradableBalances(): Mono<Map<Market, Map<Currency, Amount>>> {
         val command = "returnTradableBalances"
         return callPrivateApi(command, jacksonTypeRef())
     }
@@ -446,91 +386,82 @@ open class PoloniexApi(
         command: String,
         type: TypeReference<T>,
         queryParams: Map<String, String> = HashMap.empty()
-    ): Mono<T> {
-        val qParams = hashMap("command" to command)
-            .merge(queryParams)
-            .iterator()
-            .map { (k, v) -> "$k=$v" }.mkString("&")
+    ): Mono<T> = FlowScope.mono {
+        convertBodyToJsonAndHandleKnownErrors(type) {
+            val qParams = hashMap("command" to command)
+                .merge(queryParams)
+                .iterator()
+                .map { (k, v) -> "$k=$v" }.mkString("&")
 
-        return webclient
-            .get(443, PoloniexPrivatePublicHttpApiUrl, "/public?$qParams")
-            .ssl(true)
-            .rxSend()
-            .toMono()
-            .transform { handleApiCallResp(it, type) }
+            webClient.get()
+                .uri("$PoloniexPrivatePublicHttpApiUrl/public?$qParams")
+                .exchange()
+                .awaitSingle()
+        }
     }
 
     private fun <T : Any> callPrivateApi(
         methodName: String,
         type: TypeReference<T>,
         postArgs: Map<String, String> = HashMap.empty()
-    ): Mono<T> {
-        return Mono.defer {
+    ): Mono<T> = FlowScope.mono {
+        convertBodyToJsonAndHandleKnownErrors(type) {
             val postParamsPrivate = hashMap(
                 "command" to methodName,
                 "nonce" to System.currentTimeMillis().toString()
             )
             val postParams = postParamsPrivate.merge(postArgs)
-            val sign = signer.sign(postParams.iterator().map { (k, v) -> "$k=$v" }.mkString("&"))
+            val body = postParams.iterator().map { (k, v) -> "$k=$v" }.mkString("&")
+            val sign = signer.sign(body)
 
-            val req = webclient
-                .post(443, PoloniexPrivatePublicHttpApiUrl, "/tradingApi")
-                .ssl(true)
-                .putHeader("Key", poloniexApiKey)
-                .putHeader("Sign", sign)
-
-            val paramsx = MultiMap.caseInsensitiveMultiMap()
-
-            with(paramsx) {
-                for (p in postParams) add(p._1, p._2)
-            }
-
-            req.rxSendForm(paramsx).toMono()
-        }.transform { handleApiCallResp(it, type) }
+            webClient.post()
+                .uri("$PoloniexPrivatePublicHttpApiUrl/tradingApi")
+                .header("Key", poloniexApiKey)
+                .header("Sign", sign)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(BodyInserters.fromPublisher(Mono.just(body), String::class.java))
+                .exchange()
+                .awaitSingle()
+        }
     }
 
+    private suspend fun <T : Any> convertBodyToJsonAndHandleKnownErrors(
+        type: TypeReference<T>,
+        block: suspend () -> ClientResponse
+    ): T {
+        var data: T?
 
-    private fun <T : Any> handleApiCallResp(resp: Mono<HttpResponse<Buffer>>, type: TypeReference<T>): Mono<T> {
-        return resp
-            .map { bodyToJson(it, type) }
-            .retryWhen { errors ->
-                errors.concatMap<Int> { error ->
-                    when (error) {
-                        is IncorrectNonceException -> Flux.just(1)
-                            .delaySubscription(
-                                Mono.defer {
-                                    Mono.delay(reqLimiter.get()).onErrorReturn(0)
-                                }
-                            )
-                        is ApiCallLimitException -> run {
-                            logger.warn(error.toString())
-                            Flux.just(1)
-                                .delaySubscription(
-                                    Mono.defer {
-                                        Mono.defer {
-                                            Mono.delay(reqLimiter.get())
-                                                .onErrorReturn(0)
-                                        }.delaySubscription(Duration.ofSeconds(1))
-                                    }
-                                )
-                        }
-                        else -> Flux.error(error)
-                    }
-                }
+        while (true) {
+            try {
+                delay(reqLimiter.get().toMillis()) // TODO: Investigate delay for public and private API calls
+                val resp = block()
+                data = bodyToJson(resp, type)
+                break
+            } catch (e: IncorrectNonceException) {
+                if (logger.isTraceEnabled) logger.trace(e.message)
+                continue
+            } catch (e: ApiCallLimitException) {
+                logger.warn(e.message)
+                continue
+            } catch (e: Exception) {
+                throw e
             }
-            .delaySubscription(Mono.defer { Mono.delay(reqLimiter.get()).onErrorReturn(0) })
+        }
+
+        return data!!
     }
 
-    private fun <T : Any> bodyToJson(resp: HttpResponse<Buffer>, type: TypeReference<T>): T {
+    private suspend fun <T : Any> bodyToJson(resp: ClientResponse, type: TypeReference<T>): T {
         val statusCode = resp.statusCode()
-        val respBytes = resp.body().bytes
+        val jsonString = resp.bodyToMono(String::class.java).awaitFirstOrNull()
+            ?: throw Exception("Response body is empty")
 
-        if (statusCode in 200..299) {
+        if (statusCode.is2xxSuccessful) {
             return try {
-                Json.mapper.readValue(respBytes, type)
+                objectMapper.readValue(jsonString, type)
             } catch (respException: Exception) {
                 try {
-                    val error = Json.mapper.readValue<Error>(respBytes)
+                    val error = objectMapper.readValue<Error>(jsonString)
 
                     if (error.msg != null) {
                         handleKnownError(error.msg)
@@ -543,7 +474,7 @@ open class PoloniexApi(
             }
         } else {
             try {
-                val error = Json.mapper.readValue<Error>(respBytes)
+                val error = objectMapper.readValue<Error>(jsonString)
 
                 if (error.msg != null) {
                     handleKnownError(error.msg)
@@ -574,59 +505,83 @@ open class PoloniexApi(
         throw Exception(errorMsg)
     }
 
-    private fun <T : Any> create(
+    private fun <T : Any> subscribeTo(
         channel: Int,
         respClass: TypeReference<T>,
         privateApi: Boolean = false
-    ): (FluxSink<T>) -> Unit = fun(sink: FluxSink<T>) {
-        // Subscribe to ticker stream
-        websocket.take(1).subscribe({ socket ->
-            val subscribeCommandJson = if (privateApi) {
-                val payload = "nonce=${System.currentTimeMillis()}"
-                val sign = signer.sign(payload)
-                val command = PrivateCommand(
-                    CommandType.Subscribe,
-                    channel,
-                    poloniexApiKey,
-                    payload,
-                    sign
-                )
-                Json.mapper.writeValueAsString(command)
-            } else {
-                val command = Command(CommandType.Subscribe, channel)
-                Json.mapper.writeValueAsString(command)
-            }
-            socket.writeTextMessage(subscribeCommandJson)
-            logger.info("Subscribe to $channel channel")
-        }, { err ->
-            sink.error(err)
-        })
+    ): Flux<T> = FlowScope.flux {
+        val main = this
 
-        // Receive data
-        val messagesSubscription = websocketMessages
-            .filter { it.channel == channel && it.data != null && it.data != NullNode.instance }
-            .map { Json.mapper.convertValue<T>(it.data!!, respClass) }
-            .subscribe({ event ->
-                sink.next(event)
-            }, { err ->
-                sink.error(err)
-            }, {
-                sink.complete()
-            })
+        while (isActive) {
+            try {
+                websocketAndMessages.collect { (session, messages) ->
+                    try {
+                        coroutineScope {
+                            val subscribeToChannel = launch(start = CoroutineStart.LAZY) {
+                                while (isActive) {
+                                    val subscribeMsgJson = if (privateApi) {
+                                        val payload = "nonce=${System.currentTimeMillis()}"
+                                        val sign = signer.sign(payload)
+                                        val command = PrivateCommand(
+                                            CommandType.Subscribe,
+                                            channel,
+                                            poloniexApiKey,
+                                            payload,
+                                            sign
+                                        )
+                                        objectMapper.writeValueAsString(command)
+                                    } else {
+                                        val command = Command(CommandType.Subscribe, channel)
+                                        objectMapper.writeValueAsString(command)
+                                    }
 
-        // Unsubscribe from stream
-        sink.onDispose {
-            websocket.take(1).subscribe({ socket ->
-                messagesSubscription.dispose()
-                val command = Command(CommandType.Unsubscribe, channel)
-                val json = Json.mapper.writeValueAsString(command)
-                socket.writeTextMessage(json)
-                logger.info("Unsubscribe from $channel channel")
-            }, { err ->
-                logger.trace {
-                    logger.trace(err.message, err)
+                                    try {
+                                        session.send(Mono.just(session.textMessage(subscribeMsgJson)))
+                                            .awaitFirstOrNull()
+                                    } catch (e: Exception) {
+                                        logger.warn("Can't send message over websocket channel: ${e.message}. Retry in 1 sec...")
+                                        delay(1000)
+                                        continue
+                                    }
+
+                                    if (logger.isDebugEnabled) logger.debug("Subscribe to $channel channel")
+                                    break
+                                }
+                            }
+
+                            launch {
+                                messages.doOnSubscribe { subscribeToChannel.start() }.collect { msg ->
+                                    if (msg.channel == channel && msg.data != null && msg.data != NullNode.instance) {
+                                        try {
+                                            val data = objectMapper.convertValue<T>(msg.data, respClass)
+                                            main.send(data)
+                                        } catch (e: Exception) {
+                                            logger.error("Can't parse websocket message", e)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } finally {
+                        withContext(NonCancellable) {
+                            val command = Command(CommandType.Unsubscribe, channel)
+                            val json = objectMapper.writeValueAsString(command)
+
+                            try {
+                                session.send(Mono.just(session.textMessage(json))).awaitFirstOrNull()
+                                if (logger.isDebugEnabled) logger.debug("Unsubscribe from $channel channel")
+                            } catch (e: Exception) {
+                                if (logger.isDebugEnabled) logger.debug("Can't unsubscribe from $channel channel: ${e.message}")
+                            }
+                        }
+                    }
                 }
-            })
+            } catch (e: Exception) {
+                // Timeout fail
+                // Internet connection error
+                // Other errors
+                logger.warn(e.message)
+            }
         }
     }
 }
