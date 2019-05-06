@@ -18,9 +18,11 @@ import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.reactive.collect
+import kotlinx.coroutines.reactor.asFlux
 import kotlinx.coroutines.reactor.flux
 import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
@@ -30,11 +32,10 @@ import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.BodyInserters
 import org.springframework.web.reactive.function.client.ClientResponse
 import org.springframework.web.reactive.function.client.WebClient
-import org.springframework.web.reactive.socket.WebSocketSession
 import org.springframework.web.reactive.socket.client.WebSocketClient
+import reactor.core.publisher.EmitterProcessor
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
-import reactor.core.publisher.SynchronousSink
 import java.math.BigDecimal
 import java.net.URI
 import java.time.Duration
@@ -58,33 +59,55 @@ class PoloniexApi(
     private val signer = HmacSha512Digest(poloniexApiSecret)
     private val reqLimiter = RequestLimiter(allowedRequests = 6, perInterval = Duration.ofSeconds(1))
 
-    private val websocketAndMessages = run {
-        FlowScope.flux<Tuple2<WebSocketSession, Flux<PushNotification>>> {
+    private val connectionInput = EmitterProcessor.create<PushNotification>()
+    private val connectionOutput = Channel<String>()
+
+    private val connect = run {
+        FlowScope.flux<Boolean> {
             val main = this
             val jsonReader = objectMapper.readerFor(PushNotification::class.java)
 
-            val connect = webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
-                FlowScope.mono {
-                    logger.info("Connection established with $PoloniexWebSocketApiUrl")
+            while (isActive) {
+                try {
+                    main.send(false)
 
-                    val messages = session.receive()
-                        .handle { msg, sink: SynchronousSink<PushNotification> ->
-                            try {
-                                val pushNotification =
-                                    jsonReader.readValue<PushNotification>(msg.payload.asInputStream())
-                                sink.next(pushNotification)
-                            } catch (e: Exception) {
-                                logger.error("Can't parse websocket message", e)
+                    webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
+                        FlowScope.mono {
+                            main.send(true)
+                            logger.info("Connection established with $PoloniexWebSocketApiUrl")
+
+                            val receive = async {
+                                session.receive().timeout(Duration.ofSeconds(2)).collect { msg ->
+                                    try {
+                                        val payload =
+                                            jsonReader.readValue<PushNotification>(msg.payload.asInputStream())
+                                        connectionInput.onNext(payload)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        logger.error("Can't parse websocket message", e)
+                                    }
+                                }
                             }
+
+                            val send = async {
+                                val output = connectionOutput.asFlux().map(session::textMessage)
+                                session.send(output).awaitFirstOrNull()
+                            }
+
+                            receive.await()
+                            send.await()
                         }
-                        .share()
-                    main.send(tuple(session, messages))
-                    messages.timeout(Duration.ofSeconds(3)).then().awaitFirstOrNull()
+                    }.awaitFirstOrNull()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    if (logger.isDebugEnabled) logger.warn(e.message, e)
+                    delay(1000)
+                    continue
                 }
             }
-
-            connect.awaitFirstOrNull()
-        }.replay(1).refCount()
+        }.distinctUntilChanged().replay(1).refCount()
     }
 
     /**
@@ -511,76 +534,93 @@ class PoloniexApi(
         privateApi: Boolean = false
     ): Flux<T> = FlowScope.flux {
         val main = this
+        var messagesConsumptionJob: Job? = null
 
-        while (isActive) {
-            try {
-                websocketAndMessages.collect { (session, messages) ->
+        fun startMessagesConsumption() = launch {
+            connectionInput.onBackpressureBuffer().collect { msg ->
+                if (msg.channel == channel && msg.data != null && msg.data != NullNode.instance) {
                     try {
-                        coroutineScope {
-                            val subscribeToChannel = launch(start = CoroutineStart.LAZY) {
-                                while (isActive) {
-                                    val subscribeMsgJson = if (privateApi) {
-                                        val payload = "nonce=${System.currentTimeMillis()}"
-                                        val sign = signer.sign(payload)
-                                        val command = PrivateCommand(
-                                            CommandType.Subscribe,
-                                            channel,
-                                            poloniexApiKey,
-                                            payload,
-                                            sign
-                                        )
-                                        objectMapper.writeValueAsString(command)
-                                    } else {
-                                        val command = Command(CommandType.Subscribe, channel)
-                                        objectMapper.writeValueAsString(command)
-                                    }
-
-                                    try {
-                                        session.send(Mono.just(session.textMessage(subscribeMsgJson)))
-                                            .awaitFirstOrNull()
-                                    } catch (e: Exception) {
-                                        logger.warn("Can't send message over websocket channel: ${e.message}. Retry in 1 sec...")
-                                        delay(1000)
-                                        continue
-                                    }
-
-                                    if (logger.isDebugEnabled) logger.debug("Subscribe to $channel channel")
-                                    break
-                                }
-                            }
-
-                            launch {
-                                messages.doOnSubscribe { subscribeToChannel.start() }.collect { msg ->
-                                    if (msg.channel == channel && msg.data != null && msg.data != NullNode.instance) {
-                                        try {
-                                            val data = objectMapper.convertValue<T>(msg.data, respClass)
-                                            main.send(data)
-                                        } catch (e: Exception) {
-                                            logger.error("Can't parse websocket message", e)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } finally {
-                        withContext(NonCancellable) {
-                            val command = Command(CommandType.Unsubscribe, channel)
-                            val json = objectMapper.writeValueAsString(command)
-
-                            try {
-                                session.send(Mono.just(session.textMessage(json))).awaitFirstOrNull()
-                                if (logger.isDebugEnabled) logger.debug("Unsubscribe from $channel channel")
-                            } catch (e: Exception) {
-                                if (logger.isDebugEnabled) logger.debug("Can't unsubscribe from $channel channel: ${e.message}")
-                            }
-                        }
+                        val data = objectMapper.convertValue<T>(msg.data, respClass)
+                        main.send(data)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        logger.error("Can't parse websocket message", e)
                     }
                 }
+            }
+        }
+
+        fun subscribeToChannel() = launch {
+            while (isActive) {
+                val payload = if (privateApi) {
+                    val payload = "nonce=${System.currentTimeMillis()}"
+                    val sign = signer.sign(payload)
+                    val command = PrivateCommand(
+                        CommandType.Subscribe,
+                        channel,
+                        poloniexApiKey,
+                        payload,
+                        sign
+                    )
+                    objectMapper.writeValueAsString(command)
+                } else {
+                    val command = Command(CommandType.Subscribe, channel)
+                    objectMapper.writeValueAsString(command)
+                }
+
+                try {
+                    connectionOutput.send(payload)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.warn("Can't send message over websocket channel: ${e.message}. Retry in 1 sec...")
+                    delay(1000)
+                    continue
+                }
+
+                if (logger.isDebugEnabled) logger.debug("Subscribe to $channel channel")
+                break
+            }
+        }
+
+        suspend fun unsubscribeFromChannel() {
+            val command = Command(CommandType.Unsubscribe, channel)
+            val json = objectMapper.writeValueAsString(command)
+
+            try {
+                withTimeout(2000) {
+                    connectionOutput.send(json)
+                }
+                if (logger.isDebugEnabled) logger.debug("Unsubscribe from $channel channel")
+            } catch (_: TimeoutCancellationException) {
+                if (logger.isDebugEnabled) logger.debug("Can't unsubscribe from $channel channel. Connection closed ?")
             } catch (e: Exception) {
-                // Timeout fail
-                // Internet connection error
-                // Other errors
-                logger.warn(e.message)
+                if (logger.isDebugEnabled) logger.debug("Can't unsubscribe from $channel channel: ${e.message}")
+            }
+        }
+
+        fun subscribeAndStartMessagesConsumption() = launch {
+            subscribeToChannel().join()
+
+            try {
+                startMessagesConsumption().join()
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    unsubscribeFromChannel()
+                }
+                throw e
+            }
+        }
+
+        connect.collect { connected ->
+            if (messagesConsumptionJob != null) {
+                messagesConsumptionJob!!.cancelAndJoin()
+                messagesConsumptionJob = null
+            }
+
+            if (connected) {
+                messagesConsumptionJob = subscribeAndStartMessagesConsumption()
             }
         }
     }

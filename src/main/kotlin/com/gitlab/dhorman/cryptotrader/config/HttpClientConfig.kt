@@ -1,5 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.config
 
+import io.netty.handler.codec.http.HttpHeaderNames
 import io.netty.handler.ssl.SslContextBuilder
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory
 import org.springframework.context.annotation.Bean
@@ -10,7 +11,6 @@ import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClien
 import org.springframework.web.reactive.socket.client.WebSocketClient
 import reactor.netty.http.client.HttpClient
 import reactor.netty.tcp.ProxyProvider
-
 
 @Configuration
 class HttpClientConfig {
@@ -37,8 +37,8 @@ class HttpClientConfig {
             opt.type(tpe).host(host).port(port)
         }
 
-
         return HttpClient.create()
+            .headers { it[HttpHeaderNames.USER_AGENT] = "trading-robot" }
             .secure { it.sslContext(sslContextBuilder.build()) }
             .tcpConfiguration { tcpClient ->
                 if (System.getenv("HTTP_PROXY_ENABLED") != null) {
@@ -56,6 +56,8 @@ class HttpClientConfig {
 
     @Bean
     fun websocketClient(): WebSocketClient {
-        return ReactorNettyWebSocketClient(defaultHttpClient())
+        val webSocketClient = ReactorNettyWebSocketClient(defaultHttpClient())
+        webSocketClient.maxFramePayloadLength = 65536 * 4
+        return webSocketClient
     }
 }
