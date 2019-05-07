@@ -27,6 +27,7 @@ import kotlinx.coroutines.reactor.mono
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
+import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
@@ -45,6 +46,7 @@ import kotlin.Comparator
 //TODO: Add Poloniex events error handlers
 
 //TODO: Add logging
+@Service
 class PoloniexTrader(private val poloniexApi: PoloniexApi) {
     private val logger = KotlinLogging.logger {}
 

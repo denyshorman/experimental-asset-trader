@@ -6,7 +6,6 @@ import com.fasterxml.jackson.annotation.JsonValue
 import com.fasterxml.jackson.databind.JsonDeserializer
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize
-import com.gitlab.dhorman.cryptotrader.config.MsgId
 import com.gitlab.dhorman.cryptotrader.service.poloniex.codec.*
 import io.vavr.collection.Map
 import java.math.BigDecimal
@@ -148,6 +147,6 @@ enum class FundingType(@get:JsonValue val id: Int) {
     companion object {
         @JsonCreator
         @JvmStatic
-        fun valueById(id: Byte) = MsgId.values().find { it.id == id }
+        fun valueById(id: Int) = FundingType.values().find { it.id == id }
     }
 }

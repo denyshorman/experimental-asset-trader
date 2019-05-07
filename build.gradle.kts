@@ -5,7 +5,6 @@ version = "1.0.0-SNAPSHOT"
 
 val kotlinVersion = "1.3.31"
 val kotlinCoroutinesVersion = "1.2.1"
-val vertxVersion = "3.7.0"
 val reactorVersion = "3.2.8.RELEASE"
 val reactorAddonsVersion = "3.2.2.RELEASE"
 val jacksonVersion = "2.9.8"
@@ -30,13 +29,6 @@ repositories {
 }
 
 dependencies {
-    implementation("io.vertx:vertx-core:$vertxVersion")
-    implementation("io.vertx:vertx-lang-kotlin:$vertxVersion")
-    implementation("io.vertx:vertx-web:$vertxVersion")
-    implementation("io.vertx:vertx-web-client:$vertxVersion")
-    implementation("io.vertx:vertx-reactive-streams:$vertxVersion")
-    implementation("io.vertx:vertx-rx-java2:$vertxVersion")
-    implementation("io.vertx:vertx-lang-kotlin-coroutines:$vertxVersion")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion")
     implementation("org.jetbrains.kotlin:kotlin-reflect:$kotlinVersion")
     implementation("org.jetbrains.kotlin:kotlin-test-junit5:$kotlinVersion")
@@ -60,6 +52,7 @@ dependencies {
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:$jacksonVersion")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:$jacksonVersion")
     implementation("org.springframework.boot:spring-boot-starter-webflux")
+    implementation("org.springframework.boot:spring-boot-starter-rsocket")
     implementation("io.springfox:springfox-swagger2:$swaggerVersion")
     implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
@@ -72,7 +65,6 @@ dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.4.0")
     testImplementation("org.mockito:mockito-core:2.26.0")
     testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.1.0")
-    testImplementation("io.vertx:vertx-junit5:$vertxVersion")
     testImplementation("io.projectreactor:reactor-test")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }

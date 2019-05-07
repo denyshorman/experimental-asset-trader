@@ -1,5 +1,5 @@
 server:
-  port: ${PORT}
+  port: ${HTTP_API_PORT}
   error:
     whitelabel:
       enabled: false
@@ -7,9 +7,14 @@ server:
 spring:
   main:
     banner-mode: "off"
+    lazy-initialization: false
   output:
     ansi:
       enabled: always
   devtools:
     livereload:
       enabled: true
+  rsocket:
+    server:
+      mapping-path: /api
+      port: ${RSOCKET_PORT}
