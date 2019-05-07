@@ -1,6 +1,9 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.gitlab.dhorman.cryptotrader.core.*
+import com.gitlab.dhorman.cryptotrader.core.ExhaustivePath
+import com.gitlab.dhorman.cryptotrader.core.FeeMultiplier
+import com.gitlab.dhorman.cryptotrader.core.MarketPathGenerator
+import com.gitlab.dhorman.cryptotrader.core.TradeStat
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
@@ -16,6 +19,7 @@ import kotlinx.coroutines.reactive.awaitFirst
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.withContext
 import mu.KotlinLogging
+import org.springframework.stereotype.Component
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
@@ -23,6 +27,7 @@ import java.time.Duration
 import java.util.*
 import java.util.function.Function.identity
 
+@Component
 class IndicatorStreams(private val data: DataStreams) {
     private val logger = KotlinLogging.logger {}
 

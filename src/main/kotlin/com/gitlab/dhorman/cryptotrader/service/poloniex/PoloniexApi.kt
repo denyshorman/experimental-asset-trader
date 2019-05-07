@@ -62,7 +62,7 @@ class PoloniexApi(
     private val connectionInput = EmitterProcessor.create<PushNotification>()
     private val connectionOutput = Channel<String>()
 
-    private val connect = run {
+    val connect = run {
         FlowScope.flux<Boolean> {
             val main = this
             val jsonReader = objectMapper.readerFor(PushNotification::class.java)

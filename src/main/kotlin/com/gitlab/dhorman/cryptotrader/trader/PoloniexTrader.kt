@@ -6,14 +6,16 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidOrderNumberException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.TransactionFailedException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import io.vavr.Tuple2
-import io.vavr.collection.Queue
-import io.vavr.collection.List
 import io.vavr.collection.Array
+import io.vavr.collection.List
+import io.vavr.collection.Queue
 import io.vavr.collection.Vector
-import io.vavr.kotlin.*
+import io.vavr.kotlin.component1
+import io.vavr.kotlin.component2
+import io.vavr.kotlin.list
+import io.vavr.kotlin.tuple
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.ProducerScope
@@ -47,13 +49,12 @@ import kotlin.Comparator
 
 //TODO: Add logging
 @Service
-class PoloniexTrader(private val poloniexApi: PoloniexApi) {
+class PoloniexTrader(
+    private val poloniexApi: PoloniexApi,
+    val data: DataStreams,
+    val indicators: IndicatorStreams
+) {
     private val logger = KotlinLogging.logger {}
-
-    private val trigger = TriggerStreams()
-    private val raw = RawStreams(trigger, poloniexApi)
-    val data = DataStreams(raw, trigger, poloniexApi)
-    val indicators = IndicatorStreams(data)
 
     @Volatile
     var primaryCurrencies: List<Currency> = list("USDT", "USDC")
@@ -444,7 +445,7 @@ class PoloniexTrader(private val poloniexApi: PoloniexApi) {
 
                 var unfilledAmount = fromCurrencyAmount
 
-                raw.accountNotifications.collect { trade ->
+                poloniexApi.accountNotificationStream.collect { trade ->
                     if (trade !is TradeNotification) return@collect
 
                     if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Trade received: $trade")

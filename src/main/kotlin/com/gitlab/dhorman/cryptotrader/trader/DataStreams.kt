@@ -4,6 +4,7 @@ import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.data.tradestat.*
+import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import io.vavr.Tuple2
 import io.vavr.collection.HashMap
 import io.vavr.collection.Map
@@ -11,9 +12,15 @@ import io.vavr.collection.Queue
 import io.vavr.collection.Set
 import io.vavr.kotlin.component1
 import io.vavr.kotlin.component2
+import io.vavr.kotlin.getOrNull
 import io.vavr.kotlin.tuple
+import kotlinx.coroutines.*
 import kotlinx.coroutines.reactive.awaitFirst
+import kotlinx.coroutines.reactive.awaitSingle
+import kotlinx.coroutines.reactive.collect
+import kotlinx.coroutines.reactor.flux
 import mu.KotlinLogging
+import org.springframework.stereotype.Component
 import reactor.core.publisher.Flux
 import java.math.BigDecimal
 import java.time.Duration
@@ -37,74 +44,115 @@ data class BookOrder(
     val orderType: OrderType
 )
 
-class DataStreams(
-    private val raw: RawStreams,
-    private val trigger: TriggerStreams,
-    private val poloniexApi: PoloniexApi
-) {
+private object BalancesAndCurrenciesNotInSync : Exception("", null, true, false)
+
+@Component
+class DataStreams(private val poloniexApi: PoloniexApi) {
     private val logger = KotlinLogging.logger {}
 
     val currencies: Flux<Tuple2<Map<Currency, CurrencyDetails>, Map<Int, Currency>>> = run {
-        raw.currencies.map { curr ->
-            Tuple2(curr, curr.map { k, v -> Tuple2(v.id, k) })
+        FlowScope.flux {
+            while (isActive) {
+                try {
+                    val currencies = poloniexApi.currencies().awaitSingle()
+                    send(tuple(currencies, currencies.map { k, v -> tuple(v.id, k) }))
+                    delay(10 * 60 * 1000)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (logger.isDebugEnabled) logger.warn("Can't fetch currencies from Poloniex because ${e.message}")
+                    delay(2000)
+                }
+            }
         }.cache(1)
     }
 
     val balances: Flux<Map<Currency, Amount>> = run {
-        raw.balances.switchMap { balanceInfo ->
-            currencies.switchMap { curr ->
-                raw.accountNotifications
-                    .handle<BalanceUpdate> { notification, sink ->
-                        if (notification is BalanceUpdate) sink.next(notification)
-                    }
-                    .scan(
-                        balanceInfo
-                    ) { allBalances, balanceUpdate ->
-                        if (balanceUpdate.walletType == WalletType.Exchange) {
-                            val currAmountOption = curr._2
-                                .get(balanceUpdate.currencyId)
-                                .flatMap { currencyId ->
-                                    allBalances.get(currencyId).map { balance -> Tuple2(currencyId, balance) }
+        FlowScope.flux {
+            while (isActive) {
+                try {
+                    var allBalances = poloniexApi.availableBalances().awaitSingle()
+                    send(allBalances)
+
+                    val currenciesSnapshot = currencies.awaitFirst()
+
+
+                    var balanceUpdateDeltaJob: Job? = null
+
+                    fun balanceDeltaUpdateJob() = launch {
+                        poloniexApi.accountNotificationStream.onBackpressureBuffer().collect { balanceDelta ->
+                            if (balanceDelta !is BalanceUpdate) return@collect
+
+                            if (balanceDelta.walletType == WalletType.Exchange) {
+                                val currencyId = balanceDelta.currencyId
+                                val currency = currenciesSnapshot._2.getOrNull(currencyId)
+                                val balance = currency?.run { allBalances.getOrNull(this) }
+
+                                if (currency != null && balance != null) {
+                                    val newBalance = balance + balanceDelta.amount
+
+                                    allBalances = allBalances.put(currency, newBalance)
+                                    this@flux.send(allBalances)
+                                } else {
+                                    logger.warn("Balances and currencies are not in sync.")
+                                    throw BalancesAndCurrenciesNotInSync
                                 }
-
-                            if (currAmountOption != null) {
-                                val (currencyId, balance) = currAmountOption.get()
-                                val newBalance = balance + balanceUpdate.amount
-
-                                allBalances.put(currencyId, newBalance)
-                            } else {
-                                logger.warn("Balances and currencies can be not in sync. Fetch new balances and currencies.")
-                                trigger.currencies.onNext(Unit)
-                                trigger.balances.onNext(Unit)
-
-                                allBalances
                             }
-                        } else {
-                            allBalances
                         }
                     }
+
+                    coroutineScope {
+                        poloniexApi.connect.collect { connected ->
+                            if (balanceUpdateDeltaJob != null) {
+                                balanceUpdateDeltaJob!!.cancelAndJoin()
+                                balanceUpdateDeltaJob = null
+                            }
+
+                            if (connected) {
+                                balanceUpdateDeltaJob = balanceDeltaUpdateJob()
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (logger.isDebugEnabled) logger.warn(e.message, e)
+                    delay(1000)
+                    continue
+                }
             }
         }.cache(1)
     }
 
     val markets: Flux<MarketData> = run {
-        raw.ticker.map { tickers ->
-            var marketIntStringMap: Map<MarketId, Market> = HashMap.empty()
-            var marketStringIntMap: Map<Market, MarketId> = HashMap.empty()
+        FlowScope.flux {
+            while (isActive) {
+                try {
+                    val tickers = poloniexApi.ticker().awaitSingle()
+                    var marketIntStringMap: Map<MarketId, Market> = HashMap.empty()
+                    var marketStringIntMap: Map<Market, MarketId> = HashMap.empty()
 
-            // TODO: Review frozen filter
-            tickers.iterator().filter { !it._2.isFrozen }.forEach { tick ->
-                marketIntStringMap = marketIntStringMap.put(tick._2.id, tick._1)
-                marketStringIntMap = marketStringIntMap.put(tick._1, tick._2.id)
+                    for ((market, tick) in tickers) {
+                        if (!tick.isFrozen) {
+                            marketIntStringMap = marketIntStringMap.put(tick.id, market)
+                            marketStringIntMap = marketStringIntMap.put(market, tick.id)
+                        }
+                    }
+
+                    send(tuple(marketIntStringMap, marketStringIntMap))
+
+                    delay(10 * 60 * 1000)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (logger.isDebugEnabled) logger.warn("Can't fetch markets from Poloniex because ${e.message}")
+                    delay(2000)
+                }
             }
-
-            Tuple2(marketIntStringMap, marketStringIntMap)
-        }.doOnNext { markets ->
-            logger.info("Markets fetched: ${markets._2.size()}")
-            if (logger.isDebugEnabled) logger.debug(markets.toString())
         }.cache(1)
     }
 
+    // TODO: Update trade stat
     val tradesStat: Flux<Map<MarketId, Flux<TradeStat>>> = run {
         val bufferLimit = 100
 
@@ -232,8 +280,9 @@ class DataStreams(
         }.cache(1)
     }
 
+    // TODO: Update Open orders
     val openOrders: Flux<Map<Long, OpenOrderWithMarket>> = run {
-        raw.openOrders.switchMap({ initOpenOrders ->
+        poloniexApi.allOpenOrders().flatMapMany { initOpenOrders ->
             markets.switchMap({ marketsInfo ->
                 poloniexApi.accountNotificationStream.scan(initOpenOrders) { orders, update ->
                     when (update) {
@@ -258,7 +307,7 @@ class DataStreams(
                                 orders.put(newOrder.orderId, newOrder)
                             } else {
                                 logger.warn("Market id not found in local cache. Fetching markets from API...")
-                                trigger.ticker.onNext(Unit)
+                                // trigger.ticker.onNext(Unit)
                                 orders
                             }
                         }
@@ -287,7 +336,7 @@ class DataStreams(
                                     orders.put(oldOrder.orderId, newOrder)
                                 } else {
                                     logger.warn("Order not found in local cache. Fetch orders from the server.")
-                                    trigger.openOrders.onNext(Unit)
+                                    // trigger.openOrders.onNext(Unit)
                                     orders
                                 }
                             }
@@ -296,8 +345,7 @@ class DataStreams(
                     }
                 }
             }, Int.MAX_VALUE)
-        }, Int.MAX_VALUE)
-            .cache(1)
+        }.cache(1)
     }
 
     // TODO: Optimize calculation
@@ -314,44 +362,54 @@ class DataStreams(
     }
 
     val tickers: Flux<Map<Market, Ticker>> = run {
-        markets.switchMap { marketInfo ->
-            raw.ticker.switchMap { allTickers ->
-                val allTickers0 = allTickers.map { m, t ->
-                    tuple(
-                        m,
-                        Ticker(
-                            t.id,
-                            t.last,
-                            t.lowestAsk,
-                            t.highestBid,
-                            t.percentChange,
-                            t.baseVolume,
-                            t.quoteVolume,
-                            t.isFrozen,
-                            t.high24hr,
-                            t.low24hr
-                        )
-                    )
-                }
+        fun mapTicker(m: Market, t: Ticker0): Tuple2<Market, Ticker> {
+            return tuple(
+                m,
+                Ticker(
+                    t.id,
+                    t.last,
+                    t.lowestAsk,
+                    t.highestBid,
+                    t.percentChange,
+                    t.baseVolume,
+                    t.quoteVolume,
+                    t.isFrozen,
+                    t.high24hr,
+                    t.low24hr
+                )
+            )
+        }
 
-                raw.tickerStream.scan(allTickers0) { tickers, ticker ->
-                    val marketId = marketInfo._1.get(ticker.id)
+        FlowScope.flux {
+            while (isActive) {
+                try {
+                    val marketInfo = markets.awaitFirst()
+                    var allTickers = poloniexApi.ticker().awaitSingle().map(::mapTicker)
+                    send(allTickers)
 
-                    if (marketId != null) {
-                        logger.trace {
-                            logger.trace(ticker.toString())
+                    coroutineScope {
+                        poloniexApi.tickerStream.onBackpressureDrop().collect { ticker ->
+                            val marketId = marketInfo._1.getOrNull(ticker.id)
+
+                            if (marketId != null) {
+                                allTickers = allTickers.put(marketId, ticker)
+                                send(allTickers)
+                            } else {
+                                throw Exception("Market for ticker not found in local cache.")
+                            }
                         }
-                        tickers.put(marketId.get(), ticker)
-                    } else {
-                        logger.warn("Market not found in local market cache. Updating market cache...")
-                        trigger.ticker.onNext(Unit)
-                        allTickers0
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    delay(1000)
+                    continue
                 }
             }
         }.cache(1)
     }
 
+    // TODO: Update order books
     val orderBooks: Flux<OrderBookDataMap> = run {
         markets.map { marketInfo ->
             val marketIds = marketInfo._1.keySet()
@@ -370,23 +428,51 @@ class DataStreams(
     }
 
     val fee: Flux<FeeMultiplier> = run {
-        poloniexApi.feeInfo().map { fee ->
-            FeeMultiplier(fee.makerFee.oneMinus, fee.takerFee.oneMinus)
-        }.flux().doOnNext { fee ->
-            logger.info("Fee fetched: $fee")
+        suspend fun fetchFee(): FeeMultiplier {
+            val fee = poloniexApi.feeInfo().awaitSingle()
+            return FeeMultiplier(fee.makerFee.oneMinus, fee.takerFee.oneMinus)
+        }
+
+        FlowScope.flux {
+            while (isActive) {
+                try {
+                    send(fetchFee())
+                    break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
+                    delay(2000)
+                }
+            }
+
+            // TODO: How to get fee instantly without pooling ?
+            while (isActive) {
+                delay(10 * 60 * 1000)
+
+                try {
+                    send(fetchFee())
+                    break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
+                }
+            }
         }.cache(1)
     }
 
     suspend fun getMarketId(market: Market): MarketId? {
-        return markets.awaitFirst()._2[market].orNull
+        return markets.awaitFirst()._2.getOrNull(market)
     }
 
     suspend fun getMarket(marketId: MarketId): Market? {
-        return markets.awaitFirst()._1[marketId].orNull
+        return markets.awaitFirst()._1.getOrNull(marketId)
     }
 
     suspend fun getOrderBookFlowBy(market: Market): Flux<OrderBookAbstract> {
         val marketId = getMarketId(market) ?: throw Exception("Market not found")
-        return (orderBooks.awaitFirst()[marketId].orNull  ?: throw Exception("Order book for $marketId not found")).map{it.book as OrderBookAbstract}
+        return (orderBooks.awaitFirst().getOrNull(marketId)
+            ?: throw Exception("Order book for $marketId not found")).map { it.book as OrderBookAbstract }
     }
 }
