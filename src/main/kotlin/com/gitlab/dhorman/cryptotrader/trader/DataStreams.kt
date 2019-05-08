@@ -102,7 +102,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     }
 
                     coroutineScope {
-                        poloniexApi.connect.collect { connected ->
+                        poloniexApi.connection.collect { connected ->
                             if (balanceUpdateDeltaJob != null) {
                                 balanceUpdateDeltaJob!!.cancelAndJoin()
                                 balanceUpdateDeltaJob = null
@@ -126,26 +126,33 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val markets: Flux<MarketData> = run {
         FlowScope.flux {
+            var prevMarketsSet = mutableSetOf<Int>()
+
             while (isActive) {
                 try {
                     val tickers = poloniexApi.ticker().awaitSingle()
                     var marketIntStringMap: Map<MarketId, Market> = HashMap.empty()
                     var marketStringIntMap: Map<Market, MarketId> = HashMap.empty()
+                    val currentMarketsSet = mutableSetOf<Int>()
 
                     for ((market, tick) in tickers) {
                         if (!tick.isFrozen) {
                             marketIntStringMap = marketIntStringMap.put(tick.id, market)
                             marketStringIntMap = marketStringIntMap.put(market, tick.id)
+                            currentMarketsSet.add(tick.id)
                         }
                     }
 
-                    send(tuple(marketIntStringMap, marketStringIntMap))
+                    if (!prevMarketsSet.containsAll(currentMarketsSet)) {
+                        prevMarketsSet = currentMarketsSet
+                        send(tuple(marketIntStringMap, marketStringIntMap))
+                    }
 
                     delay(10 * 60 * 1000)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    if (logger.isDebugEnabled) logger.warn("Can't fetch markets from Poloniex because ${e.message}")
+                    if (logger.isDebugEnabled) logger.warn("Can't fetch markets from Poloniex: ${e.message}")
                     delay(2000)
                 }
             }
@@ -280,84 +287,100 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         }.cache(1)
     }
 
-    // TODO: Update Open orders
     val openOrders: Flux<Map<Long, OpenOrderWithMarket>> = run {
-        poloniexApi.allOpenOrders().flatMapMany { initOpenOrders ->
-            markets.switchMap({ marketsInfo ->
-                poloniexApi.accountNotificationStream.scan(initOpenOrders) { orders, update ->
-                    when (update) {
-                        is LimitOrderCreated -> run {
-                            logger.info("Account info: $update")
+        FlowScope.flux {
+            while (isActive) {
+                try {
+                    var allOpenOrders = poloniexApi.allOpenOrders().awaitSingle()
+                    send(allOpenOrders)
 
-                            val marketId = marketsInfo._1.get(update.marketId)
-
-                            if (marketId.isDefined) {
-                                val newOrder = OpenOrderWithMarket(
-                                    update.orderNumber,
-                                    update.orderType,
-                                    update.rate,
-                                    update.amount,
-                                    update.amount,
-                                    update.rate * update.amount, // TODO: Incorrect arguments supplied
-                                    update.date,
-                                    false,
-                                    marketId.get()
-                                )
-
-                                orders.put(newOrder.orderId, newOrder)
-                            } else {
-                                logger.warn("Market id not found in local cache. Fetching markets from API...")
-                                // trigger.ticker.onNext(Unit)
-                                orders
+                    coroutineScope {
+                        launch {
+                            poloniexApi.connection.collect { connected ->
+                                if (!connected) throw Exception("Connection is closed")
                             }
                         }
-                        is OrderUpdate -> run {
-                            logger.info("Account info: $update")
 
-                            if (update.newAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                orders.remove(update.orderId)
-                            } else {
-                                val order = orders.get(update.orderId)
+                        poloniexApi.accountNotificationStream.onBackpressureBuffer().collect { update ->
+                            when (update) {
+                                is LimitOrderCreated -> run {
+                                    val marketId = markets.awaitFirst()._1.getOrNull(update.marketId)
 
-                                if (order.isDefined) {
-                                    val oldOrder = order.get()
-                                    val newOrder = OpenOrderWithMarket(
-                                        oldOrder.orderId,
-                                        oldOrder.type,
-                                        oldOrder.price,
-                                        oldOrder.startingAmount,
-                                        update.newAmount,
-                                        oldOrder.total, // TODO: Incorrect value supplied
-                                        oldOrder.date, // TODO: Incorrect value supplied
-                                        oldOrder.margin,
-                                        oldOrder.market
-                                    )
+                                    if (marketId != null) {
+                                        val newOrder = OpenOrderWithMarket(
+                                            update.orderNumber,
+                                            update.orderType,
+                                            update.rate,
+                                            update.amount,
+                                            update.amount,
+                                            update.rate * update.amount, // TODO: Incorrect arguments supplied
+                                            update.date,
+                                            false,
+                                            marketId
+                                        )
 
-                                    orders.put(oldOrder.orderId, newOrder)
-                                } else {
-                                    logger.warn("Order not found in local cache. Fetch orders from the server.")
-                                    // trigger.openOrders.onNext(Unit)
-                                    orders
+                                        allOpenOrders = allOpenOrders.put(newOrder.orderId, newOrder)
+                                        send(allOpenOrders)
+                                    } else {
+                                        throw Exception("Market id not found in local cache")
+                                    }
                                 }
+                                is OrderUpdate -> run {
+                                    if (update.newAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                        allOpenOrders = allOpenOrders.remove(update.orderId)
+                                        send(allOpenOrders)
+                                    } else {
+                                        val order = allOpenOrders.getOrNull(update.orderId)
+
+                                        if (order != null) {
+                                            val newOrder = OpenOrderWithMarket(
+                                                order.orderId,
+                                                order.type,
+                                                order.price,
+                                                order.startingAmount,
+                                                update.newAmount,
+                                                order.total, // TODO: Incorrect value supplied
+                                                order.date, // TODO: Incorrect value supplied
+                                                order.margin,
+                                                order.market
+                                            )
+
+                                            allOpenOrders = allOpenOrders.put(order.orderId, newOrder)
+                                            send(allOpenOrders)
+                                        } else {
+                                            throw Exception("Order not found in local cache")
+                                        }
+                                    }
+                                }
+                                else -> run { /*ignore*/ }
                             }
                         }
-                        else -> orders
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (logger.isDebugEnabled) logger.warn("Can't update open order: ${e.message}")
+                    delay(1000)
+                    continue
                 }
-            }, Int.MAX_VALUE)
+            }
         }.cache(1)
     }
 
     // TODO: Optimize calculation
     val orderBookOrders: Flux<Set<BookOrder>> = run {
-        openOrders.map { openOrdersMap ->
-            openOrdersMap.map { openOrder ->
-                BookOrder(
-                    openOrder._2.market,
-                    openOrder._2.price,
-                    openOrder._2.type
-                )
-            }.toSet()
+        FlowScope.flux {
+            openOrders.collect { openOrdersMap ->
+                val orderBookOrdersSet = openOrdersMap.map { openOrder ->
+                    BookOrder(
+                        openOrder._2.market,
+                        openOrder._2.price,
+                        openOrder._2.type
+                    )
+                }.toSet()
+
+                send(orderBookOrdersSet)
+            }
         }.cache(1)
     }
 
@@ -383,13 +406,18 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         FlowScope.flux {
             while (isActive) {
                 try {
-                    val marketInfo = markets.awaitFirst()
                     var allTickers = poloniexApi.ticker().awaitSingle().map(::mapTicker)
                     send(allTickers)
 
                     coroutineScope {
+                        launch {
+                            poloniexApi.connection.collect { connected ->
+                                if (!connected) throw Exception("Can't trust tickers because connection is closed")
+                            }
+                        }
+
                         poloniexApi.tickerStream.onBackpressureDrop().collect { ticker ->
-                            val marketId = marketInfo._1.getOrNull(ticker.id)
+                            val marketId = markets.awaitFirst()._1.getOrNull(ticker.id)
 
                             if (marketId != null) {
                                 allTickers = allTickers.put(marketId, ticker)
@@ -409,7 +437,6 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         }.cache(1)
     }
 
-    // TODO: Update order books
     val orderBooks: Flux<OrderBookDataMap> = run {
         markets.map { marketInfo ->
             val marketIds = marketInfo._1.keySet()

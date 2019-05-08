@@ -1,14 +1,16 @@
 package com.gitlab.dhorman.cryptotrader.util
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.Duration
 
 class RequestLimiter(private val allowedRequests: Int, private val perInterval: Duration) {
+    private val lock = Mutex()
     private var reqCountFromFirst = 0L
     private var firstReqExecTime = 0L
     private var lastReqExecTime = 0L
 
-    @Synchronized
-    fun get(): Duration {
+    suspend fun get(): Duration = lock.withLock {
         val currReqTime = System.currentTimeMillis()
 
         if (currReqTime - lastReqExecTime > perInterval.toMillis()) {
@@ -27,6 +29,7 @@ class RequestLimiter(private val allowedRequests: Int, private val perInterval: 
             if (d <= 0) 0 else d
         }
 
-        return Duration.ofMillis(delay)
+        Duration.ofMillis(delay)
     }
 }
+

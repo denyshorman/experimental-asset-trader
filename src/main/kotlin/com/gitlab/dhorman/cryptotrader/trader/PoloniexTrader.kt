@@ -6,6 +6,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidOrderNumberException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.TransactionFailedException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import io.vavr.Tuple2
 import io.vavr.collection.Array

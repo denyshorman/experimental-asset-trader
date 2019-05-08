@@ -62,18 +62,15 @@ class PoloniexApi(
     private val connectionInput = EmitterProcessor.create<PushNotification>()
     private val connectionOutput = Channel<String>()
 
-    val connect = run {
-        FlowScope.flux<Boolean> {
-            val main = this
+    val connection = run {
+        FlowScope.flux {
             val jsonReader = objectMapper.readerFor(PushNotification::class.java)
 
             while (isActive) {
                 try {
-                    main.send(false)
-
                     webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
                         FlowScope.mono {
-                            main.send(true)
+                            send(true)
                             logger.info("Connection established with $PoloniexWebSocketApiUrl")
 
                             val receive = async {
@@ -102,6 +99,7 @@ class PoloniexApi(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
+                    send(false)
                     if (logger.isDebugEnabled) logger.warn(e.message, e)
                     delay(1000)
                     continue
@@ -131,43 +129,57 @@ class PoloniexApi(
             .share()
     }
 
+    // TODO: Send notification list because they send atomic operation as list
     fun orderBookStream(marketId: MarketId): Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>> {
-        val notifications: Flux<OrderBookNotification> =
-            subscribeTo(marketId, jacksonTypeRef<List<OrderBookNotification>>())
-                .flatMapIterable(identity(), Int.MAX_VALUE)
+        return FlowScope.flux {
+            while (isActive) {
+                try {
+                    coroutineScope {
+                        var book = PriceAggregatedBook()
 
-        return notifications.scan(
-            Tuple2<PriceAggregatedBook, OrderBookNotification>(
-                PriceAggregatedBook(),
-                null
-            )
-        ) { state, notification ->
-            val (oldBook, _) = state
-
-            val newBook = when (notification) {
-                is OrderBookInit -> run {
-                    val newAsks = oldBook.asks.merge(notification.asks)
-                    val newBids = oldBook.bids.merge(notification.bids)
-                    PriceAggregatedBook(newAsks, newBids)
-                }
-                is OrderBookUpdate -> run {
-                    fun modifyBook(book: TreeMap<Price, Amount>): TreeMap<Price, Amount> =
-                        if (notification.amount.compareTo(BigDecimal.ZERO) == 0) {
-                            book.remove(notification.price)
-                        } else {
-                            book.put(notification.price, notification.amount)
+                        launch {
+                            connection.collect { connected ->
+                                if (!connected) throw Exception("Connection closed")
+                            }
                         }
 
-                    when (notification.orderType) {
-                        OrderType.Sell -> PriceAggregatedBook(modifyBook(oldBook.asks), oldBook.bids)
-                        OrderType.Buy -> PriceAggregatedBook(oldBook.asks, modifyBook(oldBook.bids))
-                    }
-                }
-                is OrderBookTrade -> oldBook
-            }
+                        subscribeTo(marketId, jacksonTypeRef<List<OrderBookNotification>>()).onBackpressureBuffer()
+                            .collect { notificationList ->
+                                for (notification in notificationList) {
+                                    book = when (notification) {
+                                        is OrderBookInit -> run {
+                                            val newAsks = book.asks.merge(notification.asks)
+                                            val newBids = book.bids.merge(notification.bids)
+                                            PriceAggregatedBook(newAsks, newBids)
+                                        }
+                                        is OrderBookUpdate -> run {
+                                            fun modifyBook(book: TreeMap<Price, Amount>): TreeMap<Price, Amount> =
+                                                if (notification.amount.compareTo(BigDecimal.ZERO) == 0) {
+                                                    book.remove(notification.price)
+                                                } else {
+                                                    book.put(notification.price, notification.amount)
+                                                }
 
-            tuple(newBook, notification)
-        }.skip(1).replay(1).refCount()
+                                            when (notification.orderType) {
+                                                OrderType.Sell -> PriceAggregatedBook(modifyBook(book.asks), book.bids)
+                                                OrderType.Buy -> PriceAggregatedBook(book.asks, modifyBook(book.bids))
+                                            }
+                                        }
+                                        is OrderBookTrade -> book
+                                    }
+
+                                    send(tuple(book, notification))
+                                }
+                            }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    delay(1000)
+                    continue
+                }
+            }
+        }.replay(1).refCount()
     }
 
     fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>>> {
@@ -613,7 +625,7 @@ class PoloniexApi(
             }
         }
 
-        connect.collect { connected ->
+        connection.collect { connected ->
             if (messagesConsumptionJob != null) {
                 messagesConsumptionJob!!.cancelAndJoin()
                 messagesConsumptionJob = null
