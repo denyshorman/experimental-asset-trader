@@ -15,11 +15,6 @@ data class SimpleTrade(
     val timestamp: Instant
 )
 
-data class Trade0(
-    val sell: Queue<SimpleTrade>,
-    val buy: Queue<SimpleTrade>
-)
-
 data class Trade1(
     val sellOld: Queue<SimpleTrade>,
     val sellNew: Queue<SimpleTrade>,
