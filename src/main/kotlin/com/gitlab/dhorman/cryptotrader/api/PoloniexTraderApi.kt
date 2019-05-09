@@ -9,10 +9,12 @@ import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import io.swagger.annotations.ApiOperation
 import io.vavr.collection.List
 import io.vavr.collection.Map
+import io.vavr.kotlin.toVavrList
 import org.springframework.http.MediaType
 import org.springframework.messaging.handler.annotation.MessageMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestMethod
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
@@ -39,6 +41,19 @@ class PoloniexTraderApi(private val poloniexTrader: PoloniexTrader) {
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/balances"])
     fun balancesSnapshot(): Mono<Map<Currency, Amount>> {
         return poloniexTrader.data.balances.take(1).toMono()
+    }
+
+    @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/paths"])
+    fun pathsSnapshot(@RequestParam initAmount: Amount, @RequestParam currencies: kotlin.collections.List<Currency>) = run {
+        poloniexTrader.indicators.getPaths(PathsSettings(initAmount, currencies.toVavrList()))
+            .sampleFirst(Duration.ofSeconds(30))
+            .onBackpressureLatest()
+            .flatMapSequential({
+                Flux.fromIterable(it)
+                    .buffer(250)
+                    .subscribeOn(Schedulers.elastic())
+            }, 1, 1)
+            .take(1)
     }
 
     @MessageMapping("traders/poloniex/tickers")

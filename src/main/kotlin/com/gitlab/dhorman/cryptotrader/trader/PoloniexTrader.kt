@@ -7,6 +7,9 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidOrderNu
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.TransactionFailedException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
+import com.gitlab.dhorman.cryptotrader.trader.dao.BalanceDao
+import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
+import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import io.vavr.Tuple2
 import io.vavr.collection.Array
@@ -53,7 +56,10 @@ import kotlin.Comparator
 class PoloniexTrader(
     private val poloniexApi: PoloniexApi,
     val data: DataStreams,
-    val indicators: IndicatorStreams
+    val indicators: IndicatorStreams,
+    private val balanceDao: BalanceDao,
+    private val transactionsDao: TransactionsDao,
+    private val unfilledMarketsDao: UnfilledMarketsDao
 ) {
     private val logger = KotlinLogging.logger {}
 
@@ -194,7 +200,7 @@ class PoloniexTrader(
         TODO("implement requestBalanceForTransaction")
     }
 
-    private inner class TransactionIntent(
+    inner class TransactionIntent(
         val markets: Array<TranIntentMarket>,
         val marketIdx: Int,
         val TranIntentScope: CoroutineScope
