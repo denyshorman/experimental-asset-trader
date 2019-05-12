@@ -1,5 +1,8 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
+import com.fasterxml.jackson.annotation.JsonSubTypes
+import com.fasterxml.jackson.annotation.JsonTypeInfo
+import com.fasterxml.jackson.annotation.JsonView
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.*
@@ -7,7 +10,6 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidOrderNu
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.TransactionFailedException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
-import com.gitlab.dhorman.cryptotrader.trader.dao.BalanceDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
@@ -16,26 +18,22 @@ import io.vavr.collection.Array
 import io.vavr.collection.List
 import io.vavr.collection.Queue
 import io.vavr.collection.Vector
-import io.vavr.kotlin.component1
-import io.vavr.kotlin.component2
-import io.vavr.kotlin.list
-import io.vavr.kotlin.tuple
+import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.reactive.awaitFirst
+import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.reactive.collect
 import kotlinx.coroutines.reactor.asCoroutineDispatcher
 import kotlinx.coroutines.reactor.flux
 import kotlinx.coroutines.reactor.mono
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
+import org.springframework.data.r2dbc.function.TransactionalDatabaseClient
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
-import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -43,57 +41,30 @@ import java.time.Duration
 import java.util.*
 import kotlin.Comparator
 
-//TODO: Implement state persistence in database
-// - store all balances in db
-// - store all active and historical paths
-
 //TODO: Implement handling for cancel events
-
 //TODO: Add Poloniex events error handlers
-
-//TODO: Add logging
+//TODO: Add more logging logging and research async logging
 @Service
 class PoloniexTrader(
     private val poloniexApi: PoloniexApi,
     val data: DataStreams,
     val indicators: IndicatorStreams,
-    private val balanceDao: BalanceDao,
     private val transactionsDao: TransactionsDao,
-    private val unfilledMarketsDao: UnfilledMarketsDao
+    private val unfilledMarketsDao: UnfilledMarketsDao,
+    private val tranDatabaseClient: TransactionalDatabaseClient
 ) {
     private val logger = KotlinLogging.logger {}
 
     @Volatile
     var primaryCurrencies: List<Currency> = list("USDT", "USDC")
 
-    private val unfilledMarkets = HashMap<Currency, Array<TranIntentMarket>>()
-    private val unfilledMarketsMutex = Mutex()
-
-    private suspend fun saveUnfilledMarketInfo(
-        initCurrency: Currency,
-        initCurrencyAmount: Amount,
-        currentCurrency: Currency,
-        currentCurrencyAmount: Amount
-    ) {
-        unfilledMarketsMutex.withLock {
-            TODO("Implement saveUnfilledMarketInfo")
-        }
-    }
-
-    private suspend fun fetchAndRemoveUnfilledMarkets(
-        initFromCurrency: Currency,
-        fromCurrency: Currency
-    ): List<Tuple2<Amount, Amount>>? {
-        unfilledMarketsMutex.withLock {
-            TODO("Implement fetchAndRemoveUnfilledMarkets")
-        }
-    }
-
-    fun start(): Mono<Unit> = FlowScope.mono {
+    fun start(scope: CoroutineScope) = scope.launch {
         logger.info("Start trading")
 
         val tranIntentScope =
             CoroutineScope(Schedulers.parallel().asCoroutineDispatcher() + SupervisorJob(coroutineContext[Job]))
+
+        resumeSleepingTransactions(tranIntentScope)
 
         try {
             val tickerFlow = Flux.interval(Duration.ofSeconds(60))
@@ -103,17 +74,60 @@ class PoloniexTrader(
             tickerFlow.collect {
                 val (startCurrency, requestedAmount) = requestBalanceForTransaction() ?: return@collect
 
-                val bestPath = try {
+                val bestPath =
                     selectBestPath(requestedAmount, startCurrency, requestedAmount, primaryCurrencies) ?: return@collect
-                } finally {
-                    releaseBalance(startCurrency, requestedAmount)
-                }
 
                 startPathTransaction(bestPath, tranIntentScope)
             }
         } finally {
             tranIntentScope.cancel()
         }
+    }
+
+    private suspend fun resumeSleepingTransactions(scope: CoroutineScope) {
+        for ((id, markets) in transactionsDao.getAll()) {
+            val startMarketIdx = partiallyCompletedMarketIndex(markets)!!
+            val initAmount = markets.first().fromAmount(markets, 0)
+            val targetAmount = markets.last().targetAmount(markets, markets.length() - 1)
+
+            if (initAmount > targetAmount) {
+                val currMarket = markets[startMarketIdx] as TranIntentMarketPartiallyCompleted
+                val fromCurrency = currMarket.fromCurrency
+                val fromCurrencyAmount = currMarket.fromAmount
+                scope.launch {
+                    var bestPath: Array<TranIntentMarket>? = null
+                    while (isActive) {
+                        bestPath = findNewPath(initAmount, fromCurrency, fromCurrencyAmount, primaryCurrencies)
+                        if (bestPath != null) break;
+                        delay(60000)
+                    }
+                    val changedMarkets = updateMarketsWithBestPath(markets, startMarketIdx, bestPath!!)
+                    val newId = UUID.randomUUID()
+
+                    withContext(NonCancellable) {
+                        tranDatabaseClient.inTransaction { dbClient ->
+                            FlowScope.mono {
+                                transactionsDao.add(newId, changedMarkets, startMarketIdx, dbClient)
+                                transactionsDao.delete(id, dbClient)
+                            }
+                        }.awaitFirstOrNull()
+                    }
+
+                    TransactionIntent(newId, changedMarkets, startMarketIdx, scope).start()
+                }
+            } else {
+                TransactionIntent(id, markets, startMarketIdx, scope).start()
+            }
+        }
+    }
+
+    private fun partiallyCompletedMarketIndex(markets: Array<TranIntentMarket>): Int? {
+        var i = 0
+        for (market in markets) {
+            if (market is TranIntentMarketPartiallyCompleted) break
+            i++
+        }
+        return if (i == markets.length()) null else i
     }
 
     private suspend fun selectBestPath(
@@ -136,9 +150,31 @@ class PoloniexTrader(
         return allPaths.headOption().orNull
     }
 
-    private fun startPathTransaction(bestPath: ExhaustivePath, TranIntentScope: CoroutineScope): Job {
+    private suspend fun startPathTransaction(bestPath: ExhaustivePath, scope: CoroutineScope) {
+        val id = UUID.randomUUID()
         val markets = prepareMarketsForIntent(bestPath)
-        return TransactionIntent(markets, 0, TranIntentScope).start()
+        val marketIdx = 0
+        val fromCurrency = markets[marketIdx].fromCurrency
+        val requestedAmount = (markets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
+
+        val canStartTransaction = tranDatabaseClient.inTransaction { dbClient ->
+            FlowScope.mono {
+                val allAmount = data.balances.awaitSingle().getOrNull(fromCurrency) ?: return@mono false
+                val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency, dbClient) ?: return@mono false
+                val availableAmount = allAmount - amountInUse
+
+                if (availableAmount >= requestedAmount) {
+                    transactionsDao.add(id, markets, marketIdx, dbClient)
+                    true
+                } else {
+                    false
+                }
+            }
+        }.awaitFirstOrNull() ?: return
+
+        if (canStartTransaction) {
+            TransactionIntent(id, markets, marketIdx, scope).start()
+        }
     }
 
     private fun prepareMarketsForIntent(bestPath: ExhaustivePath): Array<TranIntentMarket> {
@@ -192,15 +228,161 @@ class PoloniexTrader(
         return prepareMarketsForIntent(bestPath)
     }
 
-    private fun releaseBalance(startCurrency: Currency, requestedAmount: Amount) {
-        TODO("implement releaseBalance")
+    private fun updateMarketsWithBestPath(
+        markets: Array<TranIntentMarket>,
+        marketIdx: Int,
+        bestPath: Array<TranIntentMarket>
+    ): Array<TranIntentMarket> {
+        return markets.dropRight(markets.length() - marketIdx).appendAll(bestPath)
     }
 
-    private fun requestBalanceForTransaction(): Tuple2<Currency, Amount>? {
-        TODO("implement requestBalanceForTransaction")
+    /**
+     * @throws OrderBookEmptyException
+     */
+    private fun getInstantOrderTargetAmount(
+        orderType: OrderType,
+        fromAmount: Amount,
+        takerFeeMultiplier: BigDecimal,
+        orderBook: OrderBookAbstract
+    ): Amount {
+        var unusedFromAmount: Amount = fromAmount
+        var toAmount = BigDecimal.ZERO
+
+        if (orderType == OrderType.Buy) {
+            if (orderBook.asks.length() == 0) throw OrderBookEmptyException(SubBookType.Sell)
+
+            for ((basePrice, quoteAmount) in orderBook.asks) {
+                val availableFromAmount = buyBaseAmount(quoteAmount, basePrice)
+
+                if (unusedFromAmount <= availableFromAmount) {
+                    toAmount += buyQuoteAmount(calcQuoteAmount(unusedFromAmount, basePrice), takerFeeMultiplier)
+                    break
+                } else {
+                    unusedFromAmount -= buyBaseAmount(quoteAmount, basePrice)
+                    toAmount += buyQuoteAmount(quoteAmount, takerFeeMultiplier)
+                }
+            }
+        } else {
+            if (orderBook.bids.length() == 0) throw OrderBookEmptyException(SubBookType.Buy)
+
+            for ((basePrice, quoteAmount) in orderBook.bids) {
+                if (unusedFromAmount <= quoteAmount) {
+                    toAmount += sellBaseAmount(unusedFromAmount, basePrice, takerFeeMultiplier)
+                    break
+                } else {
+                    unusedFromAmount -= sellQuoteAmount(quoteAmount)
+                    toAmount += sellBaseAmount(quoteAmount, basePrice, takerFeeMultiplier)
+                }
+            }
+        }
+
+        return toAmount
+    }
+
+    /**
+     * @throws OrderBookEmptyException
+     */
+    private fun getDelayedOrderTargetAmount(
+        orderType: OrderType,
+        fromAmount: Amount,
+        makerFeeMultiplier: BigDecimal,
+        orderBook: OrderBookAbstract
+    ): Amount {
+        return if (orderType == OrderType.Buy) {
+            if (orderBook.bids.length() == 0) throw OrderBookEmptyException(SubBookType.Sell)
+
+            val basePrice = orderBook.bids.head()._1
+            val quoteAmount = calcQuoteAmount(fromAmount, basePrice)
+
+            buyQuoteAmount(quoteAmount, makerFeeMultiplier)
+        } else {
+            if (orderBook.asks.length() == 0) throw OrderBookEmptyException(SubBookType.Sell)
+
+            val basePrice = orderBook.asks.head()._1
+
+            sellBaseAmount(fromAmount, basePrice, makerFeeMultiplier)
+        }
+    }
+
+    private suspend fun TranIntentMarketPredicted.predictedFromAmount(
+        markets: Array<TranIntentMarket>,
+        idx: Int
+    ): Amount {
+        val prevIdx = idx - 1
+        return when (val prevTran = markets[prevIdx]) {
+            is TranIntentMarketCompleted -> prevTran.targetAmount
+            is TranIntentMarketPartiallyCompleted -> prevTran.predictedTargetAmount()
+            is TranIntentMarketPredicted -> prevTran.predictedTargetAmount(markets, prevIdx)
+        }
+    }
+
+    private suspend fun TranIntentMarketPredicted.predictedTargetAmount(
+        markets: Array<TranIntentMarket>,
+        idx: Int
+    ): Amount {
+        val fee = data.fee.awaitFirst()
+        val orderBook = data.getOrderBookFlowBy(market).awaitFirst()
+        val fromAmount = predictedFromAmount(markets, idx)
+
+        return if (orderSpeed == OrderSpeed.Instant) {
+            getInstantOrderTargetAmount(orderType, fromAmount, fee.taker, orderBook)
+        } else {
+            getDelayedOrderTargetAmount(orderType, fromAmount, fee.maker, orderBook)
+        }
+    }
+
+    private suspend fun TranIntentMarketPartiallyCompleted.predictedTargetAmount(): Amount {
+        val fee = data.fee.awaitFirst()
+        val orderBook = data.getOrderBookFlowBy(market).awaitFirst()
+
+        return if (orderSpeed == OrderSpeed.Instant) {
+            getInstantOrderTargetAmount(orderType, fromAmount, fee.taker, orderBook)
+        } else {
+            getDelayedOrderTargetAmount(orderType, fromAmount, fee.maker, orderBook)
+        }
+    }
+
+    private suspend fun TranIntentMarket.fromAmount(markets: Array<TranIntentMarket>, idx: Int): Amount {
+        return when (this) {
+            is TranIntentMarketCompleted -> fromAmount
+            is TranIntentMarketPartiallyCompleted -> fromAmount
+            is TranIntentMarketPredicted -> predictedFromAmount(markets, idx)
+        }
+    }
+
+    private suspend fun TranIntentMarket.targetAmount(markets: Array<TranIntentMarket>, idx: Int): Amount {
+        return when (this) {
+            is TranIntentMarketCompleted -> targetAmount
+            is TranIntentMarketPartiallyCompleted -> predictedTargetAmount()
+            is TranIntentMarketPredicted -> predictedTargetAmount(markets, idx)
+        }
+    }
+
+    private suspend fun requestBalanceForTransaction(): Tuple2<Currency, Amount>? {
+        // TODO: Review requestBalanceForTransaction algorithm
+        val usedBalances = transactionsDao.balancesInUse(primaryCurrencies)
+        val allBalances = data.balances.awaitSingle()
+
+        val availableBalances = usedBalances.toVavrStream()
+            .map { (currency, balanceInUse) ->
+                allBalances.get(currency).map { all -> tuple(currency, all - balanceInUse) }
+            }
+            .filter { it.isDefined }
+            .map { it.get() }
+            .filter { it._2 > BigDecimal(2) }
+            .firstOrNull()
+
+        return availableBalances?.run {
+            if (_2 > BigDecimal(5)) {
+                tuple(_1, BigDecimal(5))
+            } else {
+                this
+            }
+        }
     }
 
     inner class TransactionIntent(
+        val id: UUID,
         val markets: Array<TranIntentMarket>,
         val marketIdx: Int,
         val TranIntentScope: CoroutineScope
@@ -210,8 +392,23 @@ class PoloniexTrader(
             val orderBookFlow = data.getOrderBookFlowBy(currentMarket.market)
             val feeFlow = data.fee
             val newMarketIdx = marketIdx + 1
-            val unfilledMarkets = fetchAndRemoveUnfilledMarkets(markets[0].fromCurrency, currentMarket.fromCurrency)
-            val modifiedMarkets = mergeMarkets(markets, unfilledMarkets)
+            val modifiedMarkets = tranDatabaseClient.inTransaction { dbClient ->
+                FlowScope.mono {
+                    // TODO: SET TRANSACTION ISOLATION LEVEL XXX
+
+                    val unfilledMarkets =
+                        unfilledMarketsDao.get(markets[0].fromCurrency, currentMarket.fromCurrency, dbClient)
+
+                    val modifiedMarkets = mergeMarkets(markets, unfilledMarkets)
+
+                    if (unfilledMarkets.length() != 0) {
+                        transactionsDao.update(id, modifiedMarkets, marketIdx, dbClient)
+                        unfilledMarketsDao.remove(markets[0].fromCurrency, currentMarket.fromCurrency, dbClient)
+                    }
+
+                    modifiedMarkets
+                }
+            }.awaitFirst()
 
             when (currentMarket.orderSpeed) {
                 OrderSpeed.Instant -> run {
@@ -225,15 +422,23 @@ class PoloniexTrader(
 
                     val (unfilledTradeMarkets, committedMarkets) = splitMarkets(modifiedMarkets, marketIdx, trades)
 
-                    saveUnfilledMarketInfo(
-                        unfilledTradeMarkets[0].fromCurrency,
-                        unfilledTradeMarkets[0].fromAmount(unfilledTradeMarkets, 0),
-                        unfilledTradeMarkets[marketIdx].fromCurrency,
-                        unfilledTradeMarkets[marketIdx].fromAmount(unfilledTradeMarkets, marketIdx)
-                    )
+                    val unfilledFromAmount = unfilledTradeMarkets[marketIdx].fromAmount(unfilledTradeMarkets, marketIdx)
+
+                    if (unfilledFromAmount.compareTo(BigDecimal.ZERO) != 0) {
+                        unfilledMarketsDao.add(
+                            unfilledTradeMarkets[0].fromCurrency,
+                            unfilledTradeMarkets[0].fromAmount(unfilledTradeMarkets, 0),
+                            unfilledTradeMarkets[marketIdx].fromCurrency,
+                            unfilledFromAmount
+                        )
+                    }
 
                     if (newMarketIdx != modifiedMarkets.length()) {
-                        TransactionIntent(committedMarkets, newMarketIdx, TranIntentScope).start()
+                        transactionsDao.update(id, committedMarkets, newMarketIdx)
+                        TransactionIntent(id, committedMarkets, newMarketIdx, TranIntentScope).start()
+                    } else {
+                        transactionsDao.addCompleted(id, committedMarkets)
+                        transactionsDao.delete(id)
                     }
                 }
                 OrderSpeed.Delayed -> run {
@@ -246,16 +451,19 @@ class PoloniexTrader(
                         .buffer(Duration.ofSeconds(10))
                         .map { Array.ofAll(it) }
                         .collect { trades ->
+                            // TODO: Take into account unfilled amount
                             val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
-
                             updatedMarkets = marketSplit._1
                             updatedMarketsChannel.send(updatedMarkets)
-
-                            if (newMarketIdx == modifiedMarkets.length()) return@collect
-
                             val committedMarkets = marketSplit._2
 
-                            TransactionIntent(committedMarkets, newMarketIdx, TranIntentScope).start()
+                            if (newMarketIdx != modifiedMarkets.length()) {
+                                val newId = UUID.randomUUID()
+                                transactionsDao.add(newId, committedMarkets, newMarketIdx)
+                                TransactionIntent(newId, committedMarkets, newMarketIdx, TranIntentScope).start()
+                            } else {
+                                transactionsDao.addCompleted(id, committedMarkets)
+                            }
                         }
 
                     profitMonitoringJob.cancelAndJoin()
@@ -267,7 +475,7 @@ class PoloniexTrader(
             currentMarkets: Array<TranIntentMarket>,
             unfilledMarkets: List<Tuple2<Amount, Amount>>?
         ): Array<TranIntentMarket> {
-            if (unfilledMarkets == null) return currentMarkets
+            if (unfilledMarkets == null || unfilledMarkets.length() == 0) return currentMarkets
 
             var newMarkets = currentMarkets
 
@@ -376,15 +584,6 @@ class PoloniexTrader(
             return updatedMarkets
         }
 
-        private fun partiallyCompletedMarketIndex(markets: Array<TranIntentMarket>): Int? {
-            var i = 0
-            for (market in markets) {
-                if (market is TranIntentMarketPartiallyCompleted) break
-                i++
-            }
-            return if (i == markets.length()) null else i
-        }
-
         private suspend fun tradeInstantly(
             market: Market,
             fromCurrency: Currency,
@@ -445,6 +644,18 @@ class PoloniexTrader(
             val tradesChannel: ProducerScope<BareTrade> = this
             val unfilledAmountChannel = ConflatedBroadcastChannel<Amount>()
             val latestOrderIdsChannel = ConflatedBroadcastChannel<Queue<Long>>()
+
+            val predefinedOrderIds = transactionsDao.getOrderIds(id)
+            if (predefinedOrderIds.size != 0) {
+                poloniexApi.tradeHistory(market).awaitSingle().getOrNull(market)?.run {
+                    for (trade in this) {
+                        if (predefinedOrderIds.contains(trade.orderId)) {
+                            tradesChannel.send(BareTrade(trade.amount, trade.price, trade.feeMultiplier))
+                        }
+                    }
+                }
+                latestOrderIdsChannel.send(Queue.ofAll(predefinedOrderIds))
+            }
 
             // Trades monitoring
             launch {
@@ -509,6 +720,7 @@ class PoloniexTrader(
                                 latestOrderIds = latestOrderIds.append(lastOrderId)
                                 if (latestOrderIds.size() > maxOrdersCount) latestOrderIds = latestOrderIds.drop(1)
                                 latestOrderIdsChannel.send(latestOrderIds)
+                                transactionsDao.updateOrderIds(id, latestOrderIds) // TODO: Send to db asynchroniously ?
 
                                 if (logger.isTraceEnabled) logger.trace("[$market, $orderType] New order placed: $lastOrderId, $prevPrice")
 
@@ -541,6 +753,10 @@ class PoloniexTrader(
                                     latestOrderIds = latestOrderIds.append(lastOrderId)
                                     if (latestOrderIds.size() > maxOrdersCount) latestOrderIds = latestOrderIds.drop(1)
                                     latestOrderIdsChannel.send(latestOrderIds)
+                                    transactionsDao.updateOrderIds(
+                                        id,
+                                        latestOrderIds
+                                    ) // TODO: Send to db asynchroniously ?
                                 }
                             }
                         }
@@ -756,18 +972,10 @@ class PoloniexTrader(
                             delay(60000)
                         }
                         val changedMarkets = updateMarketsWithBestPath(updatedMarkets, marketIdx, bestPath!!)
-                        TransactionIntent(changedMarkets, marketIdx, TranIntentScope).start()
+                        TransactionIntent(UUID.randomUUID(), changedMarkets, marketIdx, TranIntentScope).start()
                     }
                 }
             }
-        }
-
-        private fun updateMarketsWithBestPath(
-            markets: Array<TranIntentMarket>,
-            marketIdx: Int,
-            bestPath: Array<TranIntentMarket>
-        ): Array<TranIntentMarket> {
-            return markets.dropRight(markets.length() - marketIdx).appendAll(bestPath)
         }
 
         private fun splitMarkets(
@@ -933,138 +1141,31 @@ class PoloniexTrader(
                 else -> throw Exception("Can't find quote amount that matches target price")
             }
         }
-
-        private suspend fun TranIntentMarketPredicted.predictedFromAmount(
-            markets: Array<TranIntentMarket>,
-            idx: Int
-        ): Amount {
-            val prevIdx = idx - 1
-            return when (val prevTran = markets[prevIdx]) {
-                is TranIntentMarketCompleted -> prevTran.targetAmount
-                is TranIntentMarketPartiallyCompleted -> prevTran.predictedTargetAmount()
-                is TranIntentMarketPredicted -> prevTran.predictedTargetAmount(markets, prevIdx)
-            }
-        }
-
-        private suspend fun TranIntentMarketPredicted.predictedTargetAmount(
-            markets: Array<TranIntentMarket>,
-            idx: Int
-        ): Amount {
-            val fee = data.fee.awaitFirst()
-            val orderBook = data.getOrderBookFlowBy(market).awaitFirst()
-            val fromAmount = predictedFromAmount(markets, idx)
-
-            return if (orderSpeed == OrderSpeed.Instant) {
-                getInstantOrderTargetAmount(orderType, fromAmount, fee.taker, orderBook)
-            } else {
-                getDelayedOrderTargetAmount(orderType, fromAmount, fee.maker, orderBook)
-            }
-        }
-
-        private suspend fun TranIntentMarketPartiallyCompleted.predictedTargetAmount(): Amount {
-            val fee = data.fee.awaitFirst()
-            val orderBook = data.getOrderBookFlowBy(market).awaitFirst()
-
-            return if (orderSpeed == OrderSpeed.Instant) {
-                getInstantOrderTargetAmount(orderType, fromAmount, fee.taker, orderBook)
-            } else {
-                getDelayedOrderTargetAmount(orderType, fromAmount, fee.maker, orderBook)
-            }
-        }
-
-        private suspend fun TranIntentMarket.fromAmount(markets: Array<TranIntentMarket>, idx: Int): Amount {
-            return when (this) {
-                is TranIntentMarketCompleted -> fromAmount
-                is TranIntentMarketPartiallyCompleted -> fromAmount
-                is TranIntentMarketPredicted -> predictedFromAmount(markets, idx)
-            }
-        }
-
-        private suspend fun TranIntentMarket.targetAmount(markets: Array<TranIntentMarket>, idx: Int): Amount {
-            return when (this) {
-                is TranIntentMarketCompleted -> targetAmount
-                is TranIntentMarketPartiallyCompleted -> predictedTargetAmount()
-                is TranIntentMarketPredicted -> predictedTargetAmount(markets, idx)
-            }
-        }
-
-        /**
-         * @throws OrderBookEmptyException
-         */
-        private fun getInstantOrderTargetAmount(
-            orderType: OrderType,
-            fromAmount: Amount,
-            takerFeeMultiplier: BigDecimal,
-            orderBook: OrderBookAbstract
-        ): Amount {
-            var unusedFromAmount: Amount = fromAmount
-            var toAmount = BigDecimal.ZERO
-
-            if (orderType == OrderType.Buy) {
-                if (orderBook.asks.length() == 0) throw OrderBookEmptyException(SubBookType.Sell)
-
-                for ((basePrice, quoteAmount) in orderBook.asks) {
-                    val availableFromAmount = buyBaseAmount(quoteAmount, basePrice)
-
-                    if (unusedFromAmount <= availableFromAmount) {
-                        toAmount += buyQuoteAmount(calcQuoteAmount(unusedFromAmount, basePrice), takerFeeMultiplier)
-                        break
-                    } else {
-                        unusedFromAmount -= buyBaseAmount(quoteAmount, basePrice)
-                        toAmount += buyQuoteAmount(quoteAmount, takerFeeMultiplier)
-                    }
-                }
-            } else {
-                if (orderBook.bids.length() == 0) throw OrderBookEmptyException(SubBookType.Buy)
-
-                for ((basePrice, quoteAmount) in orderBook.bids) {
-                    if (unusedFromAmount <= quoteAmount) {
-                        toAmount += sellBaseAmount(unusedFromAmount, basePrice, takerFeeMultiplier)
-                        break
-                    } else {
-                        unusedFromAmount -= sellQuoteAmount(quoteAmount)
-                        toAmount += sellBaseAmount(quoteAmount, basePrice, takerFeeMultiplier)
-                    }
-                }
-            }
-
-            return toAmount
-        }
-
-        /**
-         * @throws OrderBookEmptyException
-         */
-        private fun getDelayedOrderTargetAmount(
-            orderType: OrderType,
-            fromAmount: Amount,
-            makerFeeMultiplier: BigDecimal,
-            orderBook: OrderBookAbstract
-        ): Amount {
-            return if (orderType == OrderType.Buy) {
-                if (orderBook.bids.length() == 0) throw OrderBookEmptyException(SubBookType.Sell)
-
-                val basePrice = orderBook.bids.head()._1
-                val quoteAmount = calcQuoteAmount(fromAmount, basePrice)
-
-                buyQuoteAmount(quoteAmount, makerFeeMultiplier)
-            } else {
-                if (orderBook.asks.length() == 0) throw OrderBookEmptyException(SubBookType.Sell)
-
-                val basePrice = orderBook.asks.head()._1
-
-                sellBaseAmount(fromAmount, basePrice, makerFeeMultiplier)
-            }
-        }
     }
 }
 
+@JsonTypeInfo(
+    use = JsonTypeInfo.Id.NAME,
+    include = JsonTypeInfo.As.PROPERTY,
+    property = "tpe"
+)
+@JsonSubTypes(
+    JsonSubTypes.Type(value = TranIntentMarketCompleted::class, name = "c"),
+    JsonSubTypes.Type(value = TranIntentMarketPartiallyCompleted::class, name = "pc"),
+    JsonSubTypes.Type(value = TranIntentMarketPredicted::class, name = "p")
+)
 sealed class TranIntentMarket(
     open val market: Market,
     open val orderSpeed: OrderSpeed,
     open val fromCurrencyType: CurrencyType
 ) {
+    @get:JsonView(Views.UI::class)
     val fromCurrency: Currency by lazy(LazyThreadSafetyMode.NONE) { market.currency(fromCurrencyType) }
+
+    @get:JsonView(Views.UI::class)
     val targetCurrency: Currency by lazy(LazyThreadSafetyMode.NONE) { market.currency(fromCurrencyType.inverse()) }
+
+    @get:JsonView(Views.UI::class)
     val orderType: OrderType by lazy(LazyThreadSafetyMode.NONE) { market.orderType(fromCurrencyType.inverse()) }
 }
 
@@ -1074,6 +1175,7 @@ data class TranIntentMarketCompleted(
     override val fromCurrencyType: CurrencyType,
     val trades: Array<BareTrade>
 ) : TranIntentMarket(market, orderSpeed, fromCurrencyType) {
+    @get:JsonView(Views.UI::class)
     val fromAmount: Amount by lazy(LazyThreadSafetyMode.NONE) {
         var amount = BigDecimal.ZERO
         for (trade in trades) {
@@ -1086,6 +1188,7 @@ data class TranIntentMarketCompleted(
         amount
     }
 
+    @get:JsonView(Views.UI::class)
     val targetAmount: Amount by lazy(LazyThreadSafetyMode.NONE) {
         var amount = BigDecimal.ZERO
         for (trade in trades) {
@@ -1111,3 +1214,8 @@ data class TranIntentMarketPredicted(
     override val orderSpeed: OrderSpeed,
     override val fromCurrencyType: CurrencyType
 ) : TranIntentMarket(market, orderSpeed, fromCurrencyType)
+
+object Views {
+    open class DB
+    open class UI : DB()
+}

@@ -67,6 +67,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         }.cache(1)
     }
 
+    // TODO: Get all balances without inOrders
     val balances: Flux<Map<Currency, Amount>> = run {
         FlowScope.flux {
             while (isActive) {

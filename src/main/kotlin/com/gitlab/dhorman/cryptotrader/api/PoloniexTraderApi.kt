@@ -5,14 +5,11 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Ticker
 import com.gitlab.dhorman.cryptotrader.trader.PoloniexTrader
-import com.gitlab.dhorman.cryptotrader.trader.dao.BalanceDao
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
-import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import io.swagger.annotations.ApiOperation
 import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.kotlin.toVavrList
-import kotlinx.coroutines.reactor.mono
 import org.springframework.http.MediaType
 import org.springframework.messaging.handler.annotation.MessageMapping
 import org.springframework.web.bind.annotation.RequestMapping
@@ -27,10 +24,7 @@ import java.time.Duration
 
 @RestController
 @RequestMapping(value = ["/api/traders/poloniex"], produces = [MediaType.APPLICATION_JSON_UTF8_VALUE])
-class PoloniexTraderApi(
-    private val poloniexTrader: PoloniexTrader,
-    private val balanceDao: BalanceDao
-) {
+class PoloniexTraderApi(private val poloniexTrader: PoloniexTrader) {
     @ApiOperation(
         value = "Retrieve ticker snapshot",
         notes = "Use this resource to retrieve ticker snapshot"
@@ -62,15 +56,6 @@ class PoloniexTraderApi(
                 }, 1, 1)
                 .take(1)
         }
-
-    @ApiOperation(
-        value = "Retrieve balances from db",
-        notes = "Use this resource to retrieve balances from db"
-    )
-    @RequestMapping(method = [RequestMethod.GET], value = ["/db/balances"])
-    fun balancesDb(): Mono<Map<Currency, Amount>> {
-        return FlowScope.mono { balanceDao.getAll() }
-    }
 
     @MessageMapping("traders/poloniex/tickers")
     fun tickers() = run {
