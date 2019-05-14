@@ -1,6 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.config
 
 import com.fasterxml.jackson.core.JsonParser
+import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.module.SimpleModule
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module
@@ -25,6 +26,7 @@ class JacksonConfig {
 
         mapper.configure(JsonParser.Feature.ALLOW_COMMENTS, true)
         mapper.configure(JsonParser.Feature.ALLOW_TRAILING_COMMA, true)
+        //mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
         // TODO: Extract module
         val simpleModule = SimpleModule()

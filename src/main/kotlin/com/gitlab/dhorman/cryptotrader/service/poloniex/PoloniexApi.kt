@@ -284,11 +284,11 @@ class PoloniexApi(
      *            A post-only order will only be placed if no portion of it fills immediately; this guarantees you will never pay the taker fee on any part of the order that fills.
      * @return If successful, the method will return the order number.
      */
-    fun buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
+    suspend fun buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
         return buySell("buy", market, price, amount, tpe)
     }
 
-    fun sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): Mono<BuySell> {
+    suspend fun sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
         return buySell("sell", market, price, amount, tpe)
     }
 
@@ -297,13 +297,13 @@ class PoloniexApi(
      *
      * Example: If the current market price is 250 and I want to buy lower than that at 249, then I would place a limit buy order at 249. If the market reaches 249 and a seller’s ask matches with my bid, my limit order will be executed at 249.
      */
-    private fun buySell(
+    private suspend fun buySell(
         command: String,
         market: Market,
         price: Price,
         amount: Amount,
         tpe: BuyOrderType?
-    ): Mono<BuySell> {
+    ): BuySell {
         val params = hashMap(
             "currencyPair" to market.toString(),
             "rate" to price.toString(),
@@ -311,8 +311,11 @@ class PoloniexApi(
         )
         val additionalParams = tpe?.let { hashMap(it.toString() to "1") } ?: HashMap.empty()
 
-        return callPrivateApi(command, jacksonTypeRef<BuySell>(), params.merge(additionalParams))
-            .onErrorMap { handleBuySellErrors(it) }
+        try {
+            return callPrivateApi(command, jacksonTypeRef<BuySell>(), params.merge(additionalParams)).awaitSingle()
+        } catch (e: Throwable) {
+            throw handleBuySellErrors(e)
+        }
     }
 
     private fun handleBuySellErrors(e: Throwable): Throwable {
@@ -323,7 +326,7 @@ class PoloniexApi(
 
         if (match != null) {
             val (maxOrdersCount) = match.destructured
-            return MaxOrdersExcidedException(maxOrdersCount.toInt(), msg)
+            return MaxOrdersExceededException(maxOrdersCount.toInt(), msg)
         }
 
         match = RateMustBeLessThanPattern.matchEntire(msg)
@@ -338,6 +341,13 @@ class PoloniexApi(
         if (match != null) {
             val (amount) = match.destructured
             return TotalMustBeAtLeastException(BigDecimal(amount), msg)
+        }
+
+        match = NotEnoughCryptoPattern.matchEntire(msg)
+
+        if (match != null) {
+            val (currency) = match.destructured
+            return NotEnoughCryptoException(currency, msg)
         }
 
         if (InvalidOrderNumberPattern == msg) {
@@ -363,12 +373,12 @@ class PoloniexApi(
      * @param orderType "postOnly" or "immediateOrCancel" may be specified for exchange orders, but will have no effect on margin orders.
      * @return
      */
-    fun moveOrder(
+    suspend fun moveOrder(
         orderId: Long,
         price: Price,
         amount: Amount?,
         orderType: BuyOrderType?
-    ): Mono<MoveOrderResult2> {
+    ): MoveOrderResult2 {
         val command = "moveOrder"
         val params = hashMap(
             "orderNumber" to orderId.toString(),
@@ -383,20 +393,18 @@ class PoloniexApi(
             .map { v -> tuple(v._1.get().toString(), v._2.get().toString()) }
             .toMap { it }
 
-        return callPrivateApi(command, jacksonTypeRef<MoveOrderResult>(), params.merge(optParams))
-            .onErrorMap { handleBuySellErrors(it) }
-            .map {
-                if (it.success) {
-                    MoveOrderResult2(
-                        it.orderId!!,
-                        it.resultingTrades!!,
-                        it.fee,
-                        it.currencyPair
-                    )
+        try {
+            return callPrivateApi(command, jacksonTypeRef<MoveOrderResult>(), params.merge(optParams)).awaitSingle().run {
+                val r = this
+                if (r.success) {
+                    MoveOrderResult2(r.orderId!!, r.resultingTrades!!, r.fee, r.currencyPair)
                 } else {
-                    throw handleBuySellErrors(Exception(it.errorMsg))
+                    throw Exception(r.errorMsg)
                 }
             }
+        } catch (e: Throwable) {
+            throw handleBuySellErrors(e)
+        }
     }
 
     /**
@@ -495,49 +503,51 @@ class PoloniexApi(
             return try {
                 objectMapper.readValue(jsonString, type)
             } catch (respException: Exception) {
+                val error: Error
                 try {
-                    val error = objectMapper.readValue<Error>(jsonString)
-
-                    if (error.msg != null) {
-                        handleKnownError(error.msg)
-                    } else {
-                        throw Exception("Received http error with empty description", respException)
-                    }
+                    error = objectMapper.readValue<Error>(jsonString)
                 } catch (_: Exception) {
+                    throw respException
+                }
+
+                if (error.msg != null) {
+                    throw mapToKnownException(error.msg) ?: Exception(error.msg)
+                } else {
                     throw respException
                 }
             }
         } else {
+            val error: Error
             try {
-                val error = objectMapper.readValue<Error>(jsonString)
-
-                if (error.msg != null) {
-                    handleKnownError(error.msg)
-                } else {
-                    throw Exception("Received http error with empty description")
-                }
+                error = objectMapper.readValue<Error>(jsonString)
             } catch (e: Exception) {
                 throw Exception("Error response not recognized", e)
+            }
+
+            if (error.msg != null) {
+                throw mapToKnownException(error.msg) ?: Exception(error.msg)
+            } else {
+                throw Exception("$statusCode: Can't call API")
             }
         }
     }
 
-    private fun handleKnownError(errorMsg: String): Nothing {
+    private fun mapToKnownException(errorMsg: String): Throwable? {
         var match = ApiCallLimitPattern.matchEntire(errorMsg)
 
         if (match != null) {
             val (count) = match.destructured
-            throw ApiCallLimitException(count.toInt(), errorMsg)
+            return ApiCallLimitException(count.toInt(), errorMsg)
         }
 
         match = IncorrectNonceMsgPattern.matchEntire(errorMsg)
 
         if (match != null) {
             val (provided, required) = match.destructured
-            throw IncorrectNonceException(provided.toLong(), required.toLong(), errorMsg)
+            return IncorrectNonceException(provided.toLong(), required.toLong(), errorMsg)
         }
 
-        throw Exception(errorMsg)
+        return null
     }
 
     private fun <T : Any> subscribeTo(

@@ -1,6 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniex.model
 
 import com.fasterxml.jackson.annotation.JsonFormat
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonValue
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize
@@ -12,6 +13,7 @@ import io.vavr.collection.Map
 import java.math.BigDecimal
 import java.time.LocalDateTime
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class Error(
     @JsonProperty("error") val msg: String?
 )
@@ -157,7 +159,8 @@ data class BuyResultingTrade(
     @JsonProperty("rate") val price: Price,
     val amount: Amount,
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") val date: LocalDateTime,
-    val total: BigDecimal
+    val total: BigDecimal,
+    val takerAdjustment: BigDecimal
 )
 
 enum class BuyOrderType(@get:JsonValue val id: String) {

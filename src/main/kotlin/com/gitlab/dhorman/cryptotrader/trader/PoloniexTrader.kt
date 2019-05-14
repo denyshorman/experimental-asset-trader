@@ -615,10 +615,8 @@ class PoloniexTrader(
                 // TODO: Investigate FillOrKill and ImmediateOrCancel
                 val transaction = if (orderType == OrderType.Buy) {
                     poloniexApi.buy(market, firstSimulatedTrade.price, expectQuoteAmount, BuyOrderType.FillOrKill)
-                        .awaitSingle()
                 } else {
                     poloniexApi.sell(market, firstSimulatedTrade.price, expectQuoteAmount, BuyOrderType.FillOrKill)
-                        .awaitSingle()
                 }
 
                 for (trade in transaction.trades) {
@@ -848,7 +846,7 @@ class PoloniexTrader(
                 newPrice,
                 amountValue,
                 BuyOrderType.PostOnly
-            ).awaitSingle()
+            )
 
             return tuple(moveOrderResult.orderId, newPrice)
         }
@@ -896,7 +894,7 @@ class PoloniexTrader(
             val result = when (orderType) {
                 OrderType.Buy -> poloniexApi.buy(market, price, amountValue, BuyOrderType.PostOnly)
                 OrderType.Sell -> poloniexApi.sell(market, price, amountValue, BuyOrderType.PostOnly)
-            }.awaitSingle()
+            }
 
             return tuple(result.orderId, price)
         }
