@@ -1,6 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniex
 
 import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.NullNode
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
@@ -219,15 +220,15 @@ class PoloniexApi(
     /**
      * Returns all of your available balances
      */
-    fun availableBalances(): Mono<Map<Currency, BigDecimal>> {
-        return callPrivateApi("returnBalances", jacksonTypeRef())
+    suspend fun availableBalances(): Map<Currency, BigDecimal> {
+        return callPrivateApi("returnBalances", jacksonTypeRef<Map<Currency, BigDecimal>>()).awaitSingle()
     }
 
     /**
      * Returns all of your balances, including available balance, balance on orders, and the estimated BTC value of your balance.
      */
-    fun completeBalances(): Mono<Map<Currency, CompleteBalance>> {
-        return callPrivateApi("returnCompleteBalances", jacksonTypeRef())
+    suspend fun completeBalances(): Map<Currency, CompleteBalance> {
+        return callPrivateApi("returnCompleteBalances", jacksonTypeRef<Map<Currency, CompleteBalance>>()).awaitSingle()
     }
 
 
@@ -255,24 +256,55 @@ class PoloniexApi(
             }
     }
 
-    fun orderStatus(orderId: Long): Mono<OrderStatus> {
-        TODO("Implement orderStatus")
-    }
+    suspend fun orderStatus(orderId: Long): OrderStatus? {
+        val command = "returnOrderStatus"
+        val params = hashMap("orderNumber" to orderId.toString())
+        val json = callPrivateApi(command, jacksonTypeRef<JsonNode>(), params).awaitSingle()
 
-    fun tradeHistory(market: Market?): Mono<Map<Market, List<TradeHistoryPrivate>>> {
-        val command = "returnTradeHistory"
-        val params = hashMap("currencyPair" to (market?.toString() ?: "all"))
-        return if (market == null) {
-            callPrivateApi(command, jacksonTypeRef(), params)
-        } else {
-            callPrivateApi(command, jacksonTypeRef<List<TradeHistoryPrivate>>(), params).map { hashMap(market to it) }
+        try {
+            val res = objectMapper.convertValue<OrderStatusWrapper>(json, jacksonTypeRef<OrderStatusWrapper>())
+            if (res.success) {
+                return res.result.getOrNull(orderId)
+            } else {
+                return null
+            }
+        } catch (e: Exception) {
+            try {
+                val res =
+                    objectMapper.convertValue<OrderStatusErrorWrapper>(json, jacksonTypeRef<OrderStatusErrorWrapper>())
+                val errorMsg = res.result.getOrNull("error")
+                if (logger.isTraceEnabled && errorMsg != null) logger.trace("Can't get order status: $errorMsg")
+                return null
+            } catch (e: Exception) {
+                throw e
+            }
         }
     }
 
-    fun orderTrades(orderNumber: BigDecimal): Mono<List<OrderTrade>> {
+
+    // TODO: Add start, end, and limit parameters https://docs.poloniex.com/#returntradehistory-private
+    suspend fun tradeHistory(market: Market?): Map<Market, List<TradeHistoryPrivate>> {
+        val command = "returnTradeHistory"
+        val params = hashMap("currencyPair" to (market?.toString() ?: "all"))
+        return if (market == null) {
+            callPrivateApi(command, jacksonTypeRef<Map<Market, List<TradeHistoryPrivate>>>(), params)
+        } else {
+            callPrivateApi(command, jacksonTypeRef<List<TradeHistoryPrivate>>(), params).map { hashMap(market to it) }
+        }.awaitSingle()
+    }
+
+    suspend fun orderTrades(orderNumber: Long): List<OrderTrade> {
         val command = "returnOrderTrades"
         val params = hashMap("orderNumber" to orderNumber.toString())
-        return callPrivateApi(command, jacksonTypeRef(), params)
+        try {
+            return callPrivateApi(command, jacksonTypeRef<List<OrderTrade>>(), params).awaitSingle()
+        } catch (e: Exception) {
+            if (e.message == OrderNotFoundPattern) {
+                return List.empty()
+            } else {
+                throw e
+            }
+        }
     }
 
     /**
@@ -394,14 +426,15 @@ class PoloniexApi(
             .toMap { it }
 
         try {
-            return callPrivateApi(command, jacksonTypeRef<MoveOrderResult>(), params.merge(optParams)).awaitSingle().run {
-                val r = this
-                if (r.success) {
-                    MoveOrderResult2(r.orderId!!, r.resultingTrades!!, r.fee, r.currencyPair)
-                } else {
-                    throw Exception(r.errorMsg)
+            return callPrivateApi(command, jacksonTypeRef<MoveOrderResult>(), params.merge(optParams)).awaitSingle()
+                .run {
+                    val r = this
+                    if (r.success) {
+                        MoveOrderResult2(r.orderId!!, r.resultingTrades!!, r.fee, r.currencyPair)
+                    } else {
+                        throw Exception(r.errorMsg)
+                    }
                 }
-            }
         } catch (e: Throwable) {
             throw handleBuySellErrors(e)
         }

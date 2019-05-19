@@ -87,42 +87,6 @@ class PoloniexApiSpec {
     }
 
     @Test
-    fun `PoloniexApi returnBalances should return some value`() {
-        val p = Promise.make<Unit>()
-
-        poloniexApi.availableBalances()
-            .doOnTerminate {
-                p.success(Unit)
-            }
-            .subscribe({ balances ->
-                logger.info(balances.toString())
-            }, { err ->
-                logger.error(err.toString(), err)
-                fail(err)
-            })
-
-        p.future().await()
-    }
-
-    @Test
-    fun `PoloniexApi returnCompleteBalances should return some value`() {
-        val p = Promise.make<Unit>()
-
-        poloniexApi.completeBalances()
-            .doOnTerminate {
-                p.success(Unit)
-            }
-            .subscribe({ balances ->
-                logger.info(balances.toString())
-            }, { err ->
-                logger.error(err.toString(), err)
-                fail(err)
-            })
-
-        p.future().await()
-    }
-
-    @Test
     fun `PoloniexApi openOrders should return some value`() {
         val p = Promise.make<Unit>()
 

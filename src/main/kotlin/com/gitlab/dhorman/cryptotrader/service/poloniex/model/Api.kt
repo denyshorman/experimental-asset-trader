@@ -217,7 +217,18 @@ data class OrderStatus (
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") val date: LocalDateTime,
     val total: BigDecimal,
     val type: OrderType,
-    val startingAmount: Amount
+    val startingAmount: Amount,
+    val fee: BigDecimal
+)
+
+data class OrderStatusWrapper (
+    val success: Boolean,
+    val result: Map<Long, OrderStatus>
+)
+
+data class OrderStatusErrorWrapper (
+    val success: Boolean,
+    val result: Map<String, String>
 )
 
 enum class OrderStatusType(@get:JsonValue val id: String) {

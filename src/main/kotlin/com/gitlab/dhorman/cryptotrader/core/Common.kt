@@ -41,8 +41,58 @@ enum class OrderSpeed {
     Delayed
 }
 
-data class BareTrade(
-    val quoteAmount: BigDecimal,
-    val price: BigDecimal,
-    val feeMultiplier: BigDecimal
-)
+open class BareTrade(
+    open val quoteAmount: BigDecimal,
+    open val price: BigDecimal,
+    open val feeMultiplier: BigDecimal
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as BareTrade
+
+        if (quoteAmount != other.quoteAmount) return false
+        if (price != other.price) return false
+        if (feeMultiplier != other.feeMultiplier) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = quoteAmount.hashCode()
+        result = 31 * result + price.hashCode()
+        result = 31 * result + feeMultiplier.hashCode()
+        return result
+    }
+
+    override fun toString(): String {
+        return "BareTrade(quoteAmount=$quoteAmount, price=$price, feeMultiplier=$feeMultiplier)"
+    }
+}
+
+class BareTradeWithId(
+    val orderId: Long,
+    override val quoteAmount: BigDecimal,
+    override val price: BigDecimal,
+    override val feeMultiplier: BigDecimal
+) : BareTrade(quoteAmount, price, feeMultiplier) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as BareTradeWithId
+
+        if (orderId != other.orderId) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        return orderId.hashCode()
+    }
+
+    override fun toString(): String {
+        return "BareTradeWithId(orderId=$orderId, quoteAmount=$quoteAmount, price=$price, feeMultiplier=$feeMultiplier)"
+    }
+}

@@ -8,3 +8,4 @@ val OrdersCountExceededPattern = """You may not have more than (\d+) open orders
 val NotEnoughCryptoPattern = """Not enough (.+?)\.""".toRegex()
 const val InvalidOrderNumberPattern = """Invalid order number, or you are not the person who placed the order."""
 const val TransactionFailedPattern = """Transaction failed. Please try again."""
+const val OrderNotFoundPattern = """Order not found, or you are not the person who placed it."""

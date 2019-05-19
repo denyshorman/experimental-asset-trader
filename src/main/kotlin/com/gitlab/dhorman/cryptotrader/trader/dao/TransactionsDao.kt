@@ -99,23 +99,38 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
+    // TODO: Add added_ts column (needed for tradeHistory method)
     suspend fun getOrderIds(tranId: UUID, databaseClient: DatabaseClient = defaultDbClient): List<Long> {
         return databaseClient.execute()
-            .sql("SELECT order_ids FROM poloniex_transaction_order_ids WHERE tran_id = $1")
+            .sql("SELECT order_id FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY order_id DESC LIMIT 32")
             .bind(0, tranId)
             .fetch().one()
             .map { mapper.readValue<List<Long>>(it["order_ids"] as String) }
             .awaitFirstOrDefault(emptyList())
     }
 
-    suspend fun updateOrderIds(
+    // TODO: Implement deletion of old records
+    suspend fun addOrderId(
+        tranId: UUID,
+        orderId: Long,
+        databaseClient: DatabaseClient = defaultDbClient
+    ) {
+        databaseClient.execute()
+            .sql("INSERT INTO poloniex_transaction_order_ids(tran_id, order_id) VALUES($1, $2)")
+            .bind(0, tranId)
+            .bind(1, orderId)
+            .then()
+            .awaitFirstOrNull()
+    }
+
+    suspend fun removeOrderIds(
         tranId: UUID,
         orderIds: Traversable<Long>,
         databaseClient: DatabaseClient = defaultDbClient
     ) {
+        val orderIdsStr = orderIds.joinToString()
         databaseClient.execute()
-            .sql("UPDATE poloniex_transaction_order_ids SET order_ids = $1 WHERE tran_id = $2")
-            .bind(0, mapper.writeValueAsString(orderIds))
+            .sql("DELETE FROM poloniex_transaction_order_ids WHERE tran_id = $1 AND order_id IN ($orderIdsStr)")
             .bind(1, tranId)
             .then()
             .awaitFirstOrNull()

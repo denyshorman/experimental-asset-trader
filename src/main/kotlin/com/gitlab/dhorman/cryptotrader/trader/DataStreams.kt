@@ -67,16 +67,14 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         }.cache(1)
     }
 
-    // TODO: Get all balances without inOrders
     val balances: Flux<Map<Currency, Amount>> = run {
         FlowScope.flux {
             while (isActive) {
                 try {
-                    var allBalances = poloniexApi.availableBalances().awaitSingle()
+                    var allBalances = poloniexApi.completeBalances().mapValues { it.available + it.onOrders }
                     send(allBalances)
 
                     val currenciesSnapshot = currencies.awaitFirst()
-
 
                     var balanceUpdateDeltaJob: Job? = null
 
