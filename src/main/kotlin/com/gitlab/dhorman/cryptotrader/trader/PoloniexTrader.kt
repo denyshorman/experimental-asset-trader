@@ -112,7 +112,7 @@ class PoloniexTrader(
                                 transactionsDao.add(newId, changedMarkets, startMarketIdx, dbClient)
                                 transactionsDao.delete(id, dbClient)
                             }
-                        }.awaitFirstOrNull()
+                        }.retry().awaitFirstOrNull()
                     }
 
                     TransactionIntent(newId, changedMarkets, startMarketIdx, scope).start()
@@ -161,6 +161,8 @@ class PoloniexTrader(
 
         val canStartTransaction = tranDatabaseClient.inTransaction { dbClient ->
             FlowScope.mono {
+                dbClient.execute().sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").then().awaitFirstOrNull()
+
                 val allAmount = data.balances.awaitSingle().getOrNull(fromCurrency) ?: return@mono false
                 val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency, dbClient) ?: return@mono false
                 val availableAmount = allAmount - amountInUse
@@ -172,7 +174,7 @@ class PoloniexTrader(
                     false
                 }
             }
-        }.awaitFirstOrNull() ?: return
+        }.retry().awaitFirstOrNull() ?: return
 
         if (canStartTransaction) {
             TransactionIntent(id, markets, marketIdx, scope).start()
@@ -387,7 +389,7 @@ class PoloniexTrader(
             val newMarketIdx = marketIdx + 1
             val modifiedMarkets = tranDatabaseClient.inTransaction { dbClient ->
                 FlowScope.mono {
-                    // TODO: SET TRANSACTION ISOLATION LEVEL XXX
+                    dbClient.execute().sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").then().awaitFirstOrNull()
 
                     val unfilledMarkets =
                         unfilledMarketsDao.get(markets[0].fromCurrency, currentMarket.fromCurrency, dbClient)
@@ -401,7 +403,7 @@ class PoloniexTrader(
 
                     modifiedMarkets
                 }
-            }.awaitFirst() // TODO: Retry if transaction failed
+            }.retry().awaitFirst()
 
             when (currentMarket.orderSpeed) {
                 OrderSpeed.Instant -> run {
@@ -468,7 +470,7 @@ class PoloniexTrader(
                                             transactionsDao.update(id, updatedMarkets, marketIdx, dbClient)
                                             transactionsDao.add(newId, committedMarkets, newMarketIdx, dbClient)
                                         }
-                                    }
+                                    }.retry().awaitFirstOrNull()
                                     TransactionIntent(newId, committedMarkets, newMarketIdx, TranIntentScope).start()
                                 } else {
                                     transactionsDao.addCompleted(id, committedMarkets)
@@ -497,7 +499,7 @@ class PoloniexTrader(
                                         dbClient
                                     )
                                 }
-                            }.awaitFirstOrNull()
+                            }.retry().awaitFirstOrNull()
                         } else {
                             transactionsDao.delete(id)
                         }
