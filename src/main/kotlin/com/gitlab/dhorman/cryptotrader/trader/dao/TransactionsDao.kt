@@ -17,19 +17,18 @@ import kotlinx.coroutines.reactive.awaitFirstOrDefault
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.beans.factory.annotation.Qualifier
-import org.springframework.data.r2dbc.function.DatabaseClient
+import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
 import java.time.LocalDateTime
 import java.util.*
 
-// TODO: Add private from DatabaseClient when https://github.com/spring-projects/spring-boot/issues/16825 will be resolved
 @Repository
 class TransactionsDao(
-    @Qualifier("pg_client") val defaultDbClient: DatabaseClient,
+    @Qualifier("pg_client") private val databaseClient: DatabaseClient,
     private val mapper: ObjectMapper
 ) {
-    suspend fun getAll(databaseClient: DatabaseClient = defaultDbClient): List<Tuple2<UUID, Array<TranIntentMarket>>> {
+    suspend fun getAll(): List<Tuple2<UUID, Array<TranIntentMarket>>> {
         return databaseClient.execute()
             .sql("SELECT id, markets FROM poloniex_active_transactions")
             .fetch().all()
@@ -43,12 +42,7 @@ class TransactionsDao(
             .awaitSingle()
     }
 
-    suspend fun add(
-        id: UUID,
-        markets: Array<TranIntentMarket>,
-        activeMarketId: Int,
-        databaseClient: DatabaseClient = defaultDbClient
-    ) {
+    suspend fun add(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
         val marketsJson = mapper
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
             .withView(Views.DB::class.java)
@@ -67,7 +61,7 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun delete(id: UUID, databaseClient: DatabaseClient = defaultDbClient) {
+    suspend fun delete(id: UUID) {
         databaseClient.execute()
             .sql("DELETE FROM poloniex_active_transactions WHERE id = $1")
             .bind(0, id)
@@ -75,12 +69,7 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun update(
-        id: UUID,
-        markets: Array<TranIntentMarket>,
-        activeMarketId: Int,
-        databaseClient: DatabaseClient = defaultDbClient
-    ) {
+    suspend fun update(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
         val marketsJson = mapper
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
             .withView(Views.DB::class.java)
@@ -100,7 +89,7 @@ class TransactionsDao(
     }
 
     // TODO: Add added_ts column (needed for tradeHistory method)
-    suspend fun getOrderIds(tranId: UUID, databaseClient: DatabaseClient = defaultDbClient): List<Long> {
+    suspend fun getOrderIds(tranId: UUID): List<Long> {
         return databaseClient.execute()
             .sql("SELECT order_id FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY order_id DESC LIMIT 32")
             .bind(0, tranId)
@@ -110,11 +99,7 @@ class TransactionsDao(
     }
 
     // TODO: Implement deletion of old records
-    suspend fun addOrderId(
-        tranId: UUID,
-        orderId: Long,
-        databaseClient: DatabaseClient = defaultDbClient
-    ) {
+    suspend fun addOrderId(tranId: UUID, orderId: Long) {
         databaseClient.execute()
             .sql("INSERT INTO poloniex_transaction_order_ids(tran_id, order_id) VALUES($1, $2)")
             .bind(0, tranId)
@@ -123,11 +108,7 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun removeOrderIds(
-        tranId: UUID,
-        orderIds: Traversable<Long>,
-        databaseClient: DatabaseClient = defaultDbClient
-    ) {
+    suspend fun removeOrderIds(tranId: UUID, orderIds: Traversable<Long>) {
         val orderIdsStr = orderIds.joinToString()
         databaseClient.execute()
             .sql("DELETE FROM poloniex_transaction_order_ids WHERE tran_id = $1 AND order_id IN ($orderIdsStr)")
@@ -136,7 +117,7 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun getCompleted(databaseClient: DatabaseClient = defaultDbClient): List<Tuple4<Long, Array<TranIntentMarket>, LocalDateTime, LocalDateTime>> {
+    suspend fun getCompleted(): List<Tuple4<Long, Array<TranIntentMarket>, LocalDateTime, LocalDateTime>> {
         return databaseClient.execute()
             .sql("SELECT * FROM poloniex_completed_transactions")
             .fetch().all()
@@ -152,11 +133,7 @@ class TransactionsDao(
             .awaitFirstOrDefault(emptyList())
     }
 
-    suspend fun addCompleted(
-        activeTranId: UUID,
-        markets: Array<TranIntentMarket>,
-        databaseClient: DatabaseClient = defaultDbClient
-    ) {
+    suspend fun addCompleted(activeTranId: UUID, markets: Array<TranIntentMarket>) {
         val marketsJson = mapper
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
             .withView(Views.DB::class.java)
@@ -170,10 +147,7 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun balanceInUse(
-        currency: Currency,
-        databaseClient: DatabaseClient = defaultDbClient
-    ): Tuple2<Currency, BigDecimal>? {
+    suspend fun balanceInUse(currency: Currency): Tuple2<Currency, BigDecimal>? {
         return databaseClient.execute()
             .sql("SELECT from_currency, from_amount FROM poloniex_active_transactions WHERE from_currency = $1")
             .bind(0, currency)
@@ -187,10 +161,7 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun balancesInUse(
-        currencies: io.vavr.collection.List<Currency>,
-        databaseClient: DatabaseClient = defaultDbClient
-    ): List<Tuple2<Currency, BigDecimal>> {
+    suspend fun balancesInUse(currencies: io.vavr.collection.List<Currency>): List<Tuple2<Currency, BigDecimal>> {
         // TODO: Escape input and wait until driver will support List input
         val currencyList = currencies.toVavrStream().map { "'$it'" }.joinToString()
 

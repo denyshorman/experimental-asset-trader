@@ -14,7 +14,7 @@ plugins {
     kotlin("jvm") version "1.3.31"
     id("kotlinx-serialization") version "1.3.31"
     id("org.jetbrains.kotlin.plugin.spring") version "1.3.31"
-    id("org.springframework.boot") version "2.2.0.M2"
+    id("org.springframework.boot") version "2.2.0.M3"
 }
 
 apply(plugin = "io.spring.dependency-management")
@@ -44,7 +44,6 @@ dependencies {
     implementation("org.slf4j:slf4j-api:1.7.26")
     implementation("ch.qos.logback:logback-classic:1.2.3")
     implementation("io.github.microutils:kotlin-logging:1.6.24")
-    implementation("org.kodein.di:kodein-di-erased-jvm:6.1.0")
     implementation("io.vavr:vavr-kotlin:0.10.0")
     implementation("io.vavr:vavr-jackson:0.10.0")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:$jacksonVersion")
@@ -56,8 +55,8 @@ dependencies {
     implementation("io.springfox:springfox-swagger2:$swaggerVersion")
     implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
-    implementation("org.springframework.data:spring-data-r2dbc:1.0.0.M1")
-    implementation("io.r2dbc:r2dbc-postgresql:1.0.0.M7")
+    implementation("org.springframework.data:spring-data-r2dbc:1.0.0.M2")
+    implementation("io.r2dbc:r2dbc-postgresql:0.8.0.M8")
     implementation("org.springframework.plugin:spring-plugin-core:1.2.0.RELEASE") // TODO: Remove when springfox and spring will be released
 
     runtimeOnly("org.springframework.boot:spring-boot-devtools")

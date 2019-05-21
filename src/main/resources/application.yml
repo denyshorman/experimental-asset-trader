@@ -8,6 +8,7 @@ spring:
   main:
     banner-mode: "off"
     lazy-initialization: false
+    web-application-type: reactive
   output:
     ansi:
       enabled: always
@@ -16,5 +17,5 @@ spring:
       enabled: true
   rsocket:
     server:
-      mapping-path: /api
-      port: ${RSOCKET_PORT}
+      mapping-path: /api/ws
+      transport: websocket

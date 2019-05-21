@@ -23,7 +23,7 @@ import reactor.core.scheduler.Schedulers
 import java.time.Duration
 
 @RestController
-@RequestMapping(value = ["/api/traders/poloniex"], produces = [MediaType.APPLICATION_JSON_UTF8_VALUE])
+@RequestMapping(value = ["/api/traders/poloniex"], produces = [MediaType.APPLICATION_JSON_VALUE])
 class PoloniexTraderApi(private val poloniexTrader: PoloniexTrader) {
     @ApiOperation(
         value = "Retrieve ticker snapshot",

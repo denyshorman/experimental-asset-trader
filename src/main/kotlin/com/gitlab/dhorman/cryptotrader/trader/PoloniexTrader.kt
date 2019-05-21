@@ -30,8 +30,14 @@ import kotlinx.coroutines.reactor.asCoroutineDispatcher
 import kotlinx.coroutines.reactor.flux
 import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
-import org.springframework.data.r2dbc.function.TransactionalDatabaseClient
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Service
+import org.springframework.transaction.ReactiveTransactionManager
+import org.springframework.transaction.TransactionDefinition
+import org.springframework.transaction.reactive.TransactionalOperator
+import org.springframework.transaction.support.DefaultTransactionDefinition
+import org.springframework.transaction.support.TransactionTemplate
 import reactor.core.publisher.Flux
 import reactor.core.scheduler.Schedulers
 import java.io.IOException
@@ -53,7 +59,7 @@ class PoloniexTrader(
     val indicators: IndicatorStreams,
     private val transactionsDao: TransactionsDao,
     private val unfilledMarketsDao: UnfilledMarketsDao,
-    private val tranDatabaseClient: TransactionalDatabaseClient
+    @Qualifier("pg_tran_manager") private val tranManager: ReactiveTransactionManager
 ) {
     private val logger = KotlinLogging.logger {}
 
@@ -107,12 +113,10 @@ class PoloniexTrader(
                     val newId = UUID.randomUUID()
 
                     withContext(NonCancellable) {
-                        tranDatabaseClient.inTransaction { dbClient ->
-                            FlowScope.mono {
-                                transactionsDao.add(newId, changedMarkets, startMarketIdx, dbClient)
-                                transactionsDao.delete(id, dbClient)
-                            }
-                        }.retry().awaitFirstOrNull()
+                        TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                            transactionsDao.add(newId, changedMarkets, startMarketIdx)
+                            transactionsDao.delete(id)
+                        }).retry().awaitFirstOrNull()
                     }
 
                     TransactionIntent(newId, changedMarkets, startMarketIdx, scope).start()
@@ -159,22 +163,20 @@ class PoloniexTrader(
         val fromCurrency = markets[marketIdx].fromCurrency
         val requestedAmount = (markets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
-        val canStartTransaction = tranDatabaseClient.inTransaction { dbClient ->
-            FlowScope.mono {
-                dbClient.execute().sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").then().awaitFirstOrNull()
+        val canStartTransaction = TransactionalOperator.create(tranManager, object : TransactionDefinition {
+            override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
+        }).transactional(FlowScope.mono {
+            val allAmount = data.balances.awaitSingle().getOrNull(fromCurrency) ?: return@mono false
+            val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency) ?: return@mono false
+            val availableAmount = allAmount - amountInUse
 
-                val allAmount = data.balances.awaitSingle().getOrNull(fromCurrency) ?: return@mono false
-                val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency, dbClient) ?: return@mono false
-                val availableAmount = allAmount - amountInUse
-
-                if (availableAmount >= requestedAmount) {
-                    transactionsDao.add(id, markets, marketIdx, dbClient)
-                    true
-                } else {
-                    false
-                }
+            if (availableAmount >= requestedAmount) {
+                transactionsDao.add(id, markets, marketIdx)
+                true
+            } else {
+                false
             }
-        }.retry().awaitFirstOrNull() ?: return
+        }).retry().awaitFirstOrNull() ?: return
 
         if (canStartTransaction) {
             TransactionIntent(id, markets, marketIdx, scope).start()
@@ -387,23 +389,21 @@ class PoloniexTrader(
             val orderBookFlow = data.getOrderBookFlowBy(currentMarket.market)
             val feeFlow = data.fee
             val newMarketIdx = marketIdx + 1
-            val modifiedMarkets = tranDatabaseClient.inTransaction { dbClient ->
-                FlowScope.mono {
-                    dbClient.execute().sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").then().awaitFirstOrNull()
+            val modifiedMarkets = TransactionalOperator.create(tranManager, object : TransactionDefinition {
+                override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
+            }).transactional(FlowScope.mono {
+                val unfilledMarkets =
+                    unfilledMarketsDao.get(markets[0].fromCurrency, currentMarket.fromCurrency)
 
-                    val unfilledMarkets =
-                        unfilledMarketsDao.get(markets[0].fromCurrency, currentMarket.fromCurrency, dbClient)
+                val modifiedMarkets = mergeMarkets(markets, unfilledMarkets)
 
-                    val modifiedMarkets = mergeMarkets(markets, unfilledMarkets)
-
-                    if (unfilledMarkets.length() != 0) {
-                        transactionsDao.update(id, modifiedMarkets, marketIdx, dbClient)
-                        unfilledMarketsDao.remove(markets[0].fromCurrency, currentMarket.fromCurrency, dbClient)
-                    }
-
-                    modifiedMarkets
+                if (unfilledMarkets.length() != 0) {
+                    transactionsDao.update(id, modifiedMarkets, marketIdx)
+                    unfilledMarketsDao.remove(markets[0].fromCurrency, currentMarket.fromCurrency)
                 }
-            }.retry().awaitFirst()
+
+                modifiedMarkets
+            }).retry().awaitFirst()
 
             when (currentMarket.orderSpeed) {
                 OrderSpeed.Instant -> run {
@@ -464,13 +464,11 @@ class PoloniexTrader(
 
                                 if (newMarketIdx != modifiedMarkets.length()) {
                                     val newId = UUID.randomUUID()
-                                    tranDatabaseClient.inTransaction { dbClient ->
-                                        FlowScope.mono {
-                                            transactionsDao.removeOrderIds(id, orderIds, dbClient)
-                                            transactionsDao.update(id, updatedMarkets, marketIdx, dbClient)
-                                            transactionsDao.add(newId, committedMarkets, newMarketIdx, dbClient)
-                                        }
-                                    }.retry().awaitFirstOrNull()
+                                    TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                                        transactionsDao.removeOrderIds(id, orderIds)
+                                        transactionsDao.update(id, updatedMarkets, marketIdx)
+                                        transactionsDao.add(newId, committedMarkets, newMarketIdx)
+                                    }).retry().awaitFirstOrNull()
                                     TransactionIntent(newId, committedMarkets, newMarketIdx, TranIntentScope).start()
                                 } else {
                                     transactionsDao.addCompleted(id, committedMarkets)
@@ -488,18 +486,15 @@ class PoloniexTrader(
                         val currMarket = updatedMarkets[marketIdx]
 
                         if (currMarket.fromAmount(updatedMarkets, marketIdx).compareTo(BigDecimal.ZERO) != 0) {
-                            tranDatabaseClient.inTransaction { dbClient ->
-                                FlowScope.mono {
-                                    transactionsDao.delete(id, dbClient)
-                                    unfilledMarketsDao.add(
-                                        initMarket.fromCurrency,
-                                        initMarket.fromAmount(updatedMarkets, 0),
-                                        currMarket.fromCurrency,
-                                        currMarket.fromAmount(updatedMarkets, marketIdx),
-                                        dbClient
-                                    )
-                                }
-                            }.retry().awaitFirstOrNull()
+                            TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                                transactionsDao.delete(id)
+                                unfilledMarketsDao.add(
+                                    initMarket.fromCurrency,
+                                    initMarket.fromAmount(updatedMarkets, 0),
+                                    currMarket.fromCurrency,
+                                    currMarket.fromAmount(updatedMarkets, marketIdx)
+                                )
+                            }).retry().awaitFirstOrNull()
                         } else {
                             transactionsDao.delete(id)
                         }

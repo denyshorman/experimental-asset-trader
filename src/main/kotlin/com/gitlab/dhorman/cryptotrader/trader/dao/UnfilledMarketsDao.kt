@@ -9,18 +9,15 @@ import io.vavr.kotlin.tuple
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.beans.factory.annotation.Qualifier
-import org.springframework.data.r2dbc.function.DatabaseClient
+import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Repository
+import org.springframework.transaction.reactive.TransactionalOperator
+import reactor.core.publisher.Mono
 import java.math.BigDecimal
 
-// TODO: Add private from DatabaseClient when https://github.com/spring-projects/spring-boot/issues/16825 will be resolved
 @Repository
-class UnfilledMarketsDao(@Qualifier("pg_client") val defaultDbClient: DatabaseClient) {
-    suspend fun get(
-        initFromCurrency: Currency,
-        fromCurrency: Currency,
-        databaseClient: DatabaseClient = defaultDbClient
-    ): List<Tuple2<Amount, Amount>> {
+class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: DatabaseClient) {
+    suspend fun get(initFromCurrency: Currency, fromCurrency: Currency): List<Tuple2<Amount, Amount>> {
         return databaseClient.execute()
             .sql(
                 """
@@ -43,11 +40,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") val defaultDbClient: DatabaseCl
             .awaitSingle()
     }
 
-    suspend fun remove(
-        initFromCurrency: Currency,
-        fromCurrency: Currency,
-        databaseClient: DatabaseClient = defaultDbClient
-    ) {
+    suspend fun remove(initFromCurrency: Currency, fromCurrency: Currency) {
         databaseClient.execute()
             .sql("DELETE FROM poloniex_unfilled_markets WHERE init_currency = $1 AND current_currency = $2")
             .bind(0, initFromCurrency)
@@ -60,8 +53,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") val defaultDbClient: DatabaseCl
         initCurrency: Currency,
         initCurrencyAmount: Amount,
         currentCurrency: Currency,
-        currentCurrencyAmount: Amount,
-        databaseClient: DatabaseClient = defaultDbClient
+        currentCurrencyAmount: Amount
     ): Long {
         return databaseClient.execute()
             .sql(

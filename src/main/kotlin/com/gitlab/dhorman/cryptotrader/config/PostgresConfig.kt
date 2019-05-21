@@ -6,8 +6,9 @@ import io.r2dbc.postgresql.PostgresqlConnectionFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
-import org.springframework.data.r2dbc.function.DatabaseClient
-import org.springframework.data.r2dbc.function.TransactionalDatabaseClient
+import org.springframework.data.r2dbc.connectionfactory.R2dbcTransactionManager
+import org.springframework.data.r2dbc.core.DatabaseClient
+import org.springframework.transaction.ReactiveTransactionManager
 
 @Configuration
 class PostgresConfig {
@@ -44,8 +45,8 @@ class PostgresConfig {
         return DatabaseClient.create(connectionFactory)
     }
 
-    @Bean("pg_tran_client")
-    fun getTransactionalDatabaseClient(@Qualifier("pg_conn_factory") connectionFactory: PostgresqlConnectionFactory): TransactionalDatabaseClient {
-        return TransactionalDatabaseClient.create(connectionFactory)
+    @Bean("pg_tran_manager")
+    fun getPostgresTransactionManager(@Qualifier("pg_conn_factory") connectionFactory: PostgresqlConnectionFactory): ReactiveTransactionManager {
+        return R2dbcTransactionManager(connectionFactory)
     }
 }
