@@ -9,3 +9,6 @@ val NotEnoughCryptoPattern = """Not enough (.+?)\.""".toRegex()
 const val InvalidOrderNumberPattern = """Invalid order number, or you are not the person who placed the order."""
 const val TransactionFailedPattern = """Transaction failed. Please try again."""
 const val OrderNotFoundPattern = """Order not found, or you are not the person who placed it."""
+const val UnableToFillOrderPattern = """Unable to fill order completely."""
+const val UnableToPlacePostOnlyOrderPattern = """Unable to place post-only order at this price."""
+val OrderCompletedOrNotExistPattern = """Order (\d+) is either completed or does not exist\.""".toRegex()

@@ -75,7 +75,8 @@ tasks.withType<KotlinCompile>().all {
         freeCompilerArgs = freeCompilerArgs + listOf(
             "-Xjsr305=strict",
             "-Xuse-experimental=kotlinx.coroutines.ExperimentalCoroutinesApi",
-            "-Xuse-experimental=kotlinx.coroutines.ObsoleteCoroutinesApi"
+            "-Xuse-experimental=kotlinx.coroutines.ObsoleteCoroutinesApi",
+            "-Xuse-experimental=kotlinx.coroutines.FlowPreview"
         )
     }
 }

@@ -148,7 +148,8 @@ data class BuySell(
     @JsonProperty("orderNumber") val orderId: Long,
     @JsonProperty("resultingTrades") val trades: Array<BuyResultingTrade>,
     val fee: BigDecimal,
-    @JsonProperty("currencyPair") val market: Market
+    @JsonProperty("currencyPair") val market: Market,
+    val amountUnfilled: Amount? // available when ImmediateOrCancel order type is used
 ) {
     val feeMultiplier get(): BigDecimal = BigDecimal.ONE - fee
 }
@@ -175,26 +176,34 @@ enum class BuyOrderType(@get:JsonValue val id: String) {
     PostOnly("postOnly")
 }
 
-data class CancelOrder(
+data class CancelOrderWrapper(
     val success: Boolean,
     val amount: Amount,
-    val message: String
+    val message: String,
+    val fee: BigDecimal,
+    @JsonProperty("currencyPair") val market: Market
 )
 
-data class MoveOrderResult(
+data class CancelOrder(
+    val amount: Amount,
+    val fee: BigDecimal,
+    val market: Market
+)
+
+data class MoveOrderWrapper(
     val success: Boolean,
     @JsonProperty("error") val errorMsg: String?,
     @JsonProperty("orderNumber") val orderId: Long?,
     val resultingTrades: Map<Market, Array<BuyResultingTrade>>?,
     val fee: BigDecimal,
-    val currencyPair: Boolean
+    @JsonProperty("currencyPair") val market: Market
 )
 
-data class MoveOrderResult2(
+data class MoveOrderResult(
     @JsonProperty("orderNumber") val orderId: Long,
     val resultingTrades: Map<Market, Array<BuyResultingTrade>>,
     val fee: BigDecimal,
-    val currencyPair: Boolean
+    val market: Market
 )
 
 data class FeeInfo(
@@ -209,7 +218,7 @@ enum class AccountType(@get:JsonValue val id: String) {
     Margin("margin")
 }
 
-data class OrderStatus (
+data class OrderStatus(
     val status: OrderStatusType,
     @JsonProperty("rate") val price: Price,
     val amount: Amount,
@@ -221,12 +230,12 @@ data class OrderStatus (
     val fee: BigDecimal
 )
 
-data class OrderStatusWrapper (
+data class OrderStatusWrapper(
     val success: Boolean,
     val result: Map<Long, OrderStatus>
 )
 
-data class OrderStatusErrorWrapper (
+data class OrderStatusErrorWrapper(
     val success: Boolean,
     val result: Map<String, String>
 )

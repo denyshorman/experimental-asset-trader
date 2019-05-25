@@ -334,14 +334,14 @@ class PoloniexApi(
         market: Market,
         price: Price,
         amount: Amount,
-        tpe: BuyOrderType?
+        tpe: BuyOrderType? = null
     ): BuySell {
         val params = hashMap(
             "currencyPair" to market.toString(),
             "rate" to price.toString(),
             "amount" to amount.toString()
         )
-        val additionalParams = tpe?.let { hashMap(it.toString() to "1") } ?: HashMap.empty()
+        val additionalParams = tpe?.let { hashMap(it.id to "1") } ?: HashMap.empty()
 
         try {
             return callPrivateApi(command, jacksonTypeRef<BuySell>(), params.merge(additionalParams)).awaitSingle()
@@ -382,6 +382,14 @@ class PoloniexApi(
             return NotEnoughCryptoException(currency, msg)
         }
 
+        if (UnableToFillOrderPattern == msg) {
+            return UnableToFillOrderException
+        }
+
+        if (UnableToPlacePostOnlyOrderPattern == msg) {
+            return UnableToPlacePostOnlyOrderException
+        }
+
         if (InvalidOrderNumberPattern == msg) {
             return InvalidOrderNumberException
         }
@@ -393,10 +401,27 @@ class PoloniexApi(
         return e
     }
 
-    fun cancelOrder(orderId: Long): Mono<CancelOrder> {
+    suspend fun cancelOrder(orderId: Long): CancelOrder {
         val command = "cancelOrder"
         val params = hashMap("orderNumber" to orderId.toString())
-        return callPrivateApi(command, jacksonTypeRef(), params)
+        try {
+            val res = callPrivateApi(command, jacksonTypeRef<CancelOrderWrapper>(), params).awaitSingle()
+            if (!res.success) throw Exception(res.message)
+            return CancelOrder(res.amount, res.fee, res.market)
+        } catch (e: Exception) {
+            if (e.message == null) throw e
+
+            val msg = e.message!!
+
+            var match: MatchResult? = OrderCompletedOrNotExistPattern.matchEntire(msg)
+
+            if (match != null) {
+                val (orderIdStr) = match.destructured
+                throw OrderCompletedOrNotExistException(orderIdStr.toLong(), msg)
+            }
+
+            throw e
+        }
     }
 
     /**
@@ -408,9 +433,9 @@ class PoloniexApi(
     suspend fun moveOrder(
         orderId: Long,
         price: Price,
-        amount: Amount?,
-        orderType: BuyOrderType?
-    ): MoveOrderResult2 {
+        amount: Amount? = null,
+        orderType: BuyOrderType? = null
+    ): MoveOrderResult {
         val command = "moveOrder"
         val params = hashMap(
             "orderNumber" to orderId.toString(),
@@ -418,7 +443,7 @@ class PoloniexApi(
         )
         val optParams = hashMap(
             some("amount") to amount.option(),
-            orderType.option() to some("1")
+            orderType.option().map { it.id } to some("1")
         )
             .iterator()
             .filter { v -> v._1.isDefined && v._2.isDefined }
@@ -426,11 +451,11 @@ class PoloniexApi(
             .toMap { it }
 
         try {
-            return callPrivateApi(command, jacksonTypeRef<MoveOrderResult>(), params.merge(optParams)).awaitSingle()
+            return callPrivateApi(command, jacksonTypeRef<MoveOrderWrapper>(), params.merge(optParams)).awaitSingle()
                 .run {
                     val r = this
                     if (r.success) {
-                        MoveOrderResult2(r.orderId!!, r.resultingTrades!!, r.fee, r.currencyPair)
+                        MoveOrderResult(r.orderId!!, r.resultingTrades!!, r.fee, r.market)
                     } else {
                         throw Exception(r.errorMsg)
                     }

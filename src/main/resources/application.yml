@@ -1,5 +1,13 @@
 server:
   port: ${HTTP_API_PORT}
+  http2:
+    enabled: true
+#  ssl:
+#    enabled: true
+#    key-store: ${SSL_API_KEYSTORE}
+#    key-store-type: PKCS12
+#    key-store-password: ${SSL_API_KEYSTORE_PASS}
+#    key-password: ${SSL_API_KEYSTORE_PASS}
   error:
     whitelabel:
       enabled: false
@@ -15,7 +23,7 @@ spring:
   devtools:
     livereload:
       enabled: true
-  rsocket:
-    server:
-      mapping-path: /api/ws
-      transport: websocket
+#  rsocket:
+#    server:
+#      mapping-path: /api/ws
+#      transport: websocket

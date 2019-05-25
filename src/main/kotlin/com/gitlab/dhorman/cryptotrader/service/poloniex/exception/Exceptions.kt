@@ -23,5 +23,10 @@ data class MaxOrdersExceededException(val maxOrders: Int, override val originalM
 data class NotEnoughCryptoException(val currency: Currency, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
+data class OrderCompletedOrNotExistException(val orderId: Long, override val originalMsg: String) :
+    PoloniexException(originalMsg)
+
 object InvalidOrderNumberException : PoloniexException(InvalidOrderNumberPattern)
 object TransactionFailedException : PoloniexException(TransactionFailedPattern)
+object UnableToFillOrderException : PoloniexException(UnableToFillOrderPattern)
+object UnableToPlacePostOnlyOrderException : PoloniexException(UnableToPlacePostOnlyOrderPattern)

@@ -3,5 +3,6 @@
     <include resource="org/springframework/boot/logging/logback/base.xml"/>
     <logger name="root" level="info"/>
     <logger name="org.springframework.web" level="info"/>
+    <logger name="org.springframework.data.r2dbc" level="info"/>
     <logger name="com.gitlab.dhorman.cryptotrader" level="debug"/>
 </configuration>
