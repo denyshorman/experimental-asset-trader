@@ -79,7 +79,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                     var balanceUpdateDeltaJob: Job? = null
 
-                    fun balanceDeltaUpdateJob() = launch {
+                    fun CoroutineScope.balanceDeltaUpdateJob() = this.launch {
                         poloniexApi.accountNotificationStream.onBackpressureBuffer().collect { balanceDelta ->
                             if (balanceDelta !is BalanceUpdate) return@collect
 

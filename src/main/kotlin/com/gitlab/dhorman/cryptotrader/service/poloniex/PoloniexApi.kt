@@ -40,6 +40,7 @@ import reactor.core.publisher.Mono
 import java.math.BigDecimal
 import java.net.URI
 import java.time.Duration
+import java.time.Instant
 import java.util.function.Function.identity
 
 private const val PoloniexPrivatePublicHttpApiUrl = "https://poloniex.com"
@@ -60,8 +61,12 @@ class PoloniexApi(
     private val signer = HmacSha512Digest(poloniexApiSecret)
     private val reqLimiter = RequestLimiter(allowedRequests = 6, perInterval = Duration.ofSeconds(1))
 
-    private val connectionInput = EmitterProcessor.create<PushNotification>()
+    private val connectionInput = EmitterProcessor.create<PushNotification>(1, false)
     private val connectionOutput = Channel<String>()
+
+    init {
+        connectionInput.publish().autoConnect().subscribe()
+    }
 
     val connection = run {
         FlowScope.flux {
@@ -75,7 +80,7 @@ class PoloniexApi(
                             logger.info("Connection established with $PoloniexWebSocketApiUrl")
 
                             val receive = async {
-                                session.receive().timeout(Duration.ofSeconds(2)).collect { msg ->
+                                session.receive().timeout(Duration.ofSeconds(3)).collect { msg ->
                                     try {
                                         val payload =
                                             jsonReader.readValue<PushNotification>(msg.payload.asInputStream())
@@ -196,17 +201,17 @@ class PoloniexApi(
         return callPublicApi(command, jacksonTypeRef())
     }
 
-    fun tradeHistoryPublic(market: Market, fromDate: Long? = null, toDate: Long? = null): Mono<Array<TradeHistory>> {
+    fun tradeHistoryPublic(market: Market, fromTs: Instant? = null, toTs: Instant? = null): Mono<Array<TradeHistory>> {
         val command = "returnTradeHistory"
 
         val params = hashMap(
-            "currencyPair" to some(market),
-            "start" to fromDate.option(),
-            "end" to toDate.option()
+            "currencyPair" to some(market.toString()),
+            "start" to fromTs.option().map { it.epochSecond.toString() },
+            "end" to toTs.option().map { it.epochSecond.toString() }
         )
             .iterator()
             .filter { it._2.isDefined }
-            .map { v -> tuple(v._1, v._2.get().toString()) }
+            .map { v -> tuple(v._1, v._2.get()) }
             .toMap { it }
 
         return callPublicApi(command, jacksonTypeRef(), params)
@@ -230,7 +235,6 @@ class PoloniexApi(
     suspend fun completeBalances(): Map<Currency, CompleteBalance> {
         return callPrivateApi("returnCompleteBalances", jacksonTypeRef<Map<Currency, CompleteBalance>>()).awaitSingle()
     }
-
 
     /**
      * Returns your open orders for a given market, specified by the currencyPair.
@@ -281,11 +285,24 @@ class PoloniexApi(
         }
     }
 
-
-    // TODO: Add start, end, and limit parameters https://docs.poloniex.com/#returntradehistory-private
-    suspend fun tradeHistory(market: Market?): Map<Market, List<TradeHistoryPrivate>> {
+    suspend fun tradeHistory(
+        market: Market? = null,
+        fromTs: Instant? = null,
+        toTs: Instant? = null,
+        limit: Long? = null
+    ): Map<Market, List<TradeHistoryPrivate>> {
         val command = "returnTradeHistory"
-        val params = hashMap("currencyPair" to (market?.toString() ?: "all"))
+        val params = hashMap(
+            "currencyPair" to some(market?.toString() ?: "all"),
+            "start" to fromTs.option().map { it.epochSecond.toString() },
+            "end" to toTs.option().map { it.epochSecond.toString() },
+            "limit" to limit.option().map { it.toString() }
+        )
+            .iterator()
+            .filter { it._2.isDefined }
+            .map { v -> tuple(v._1, v._2.get()) }
+            .toMap { it }
+
         return if (market == null) {
             callPrivateApi(command, jacksonTypeRef<Map<Market, List<TradeHistoryPrivate>>>(), params)
         } else {
@@ -296,11 +313,11 @@ class PoloniexApi(
     suspend fun orderTrades(orderNumber: Long): List<OrderTrade> {
         val command = "returnOrderTrades"
         val params = hashMap("orderNumber" to orderNumber.toString())
-        try {
-            return callPrivateApi(command, jacksonTypeRef<List<OrderTrade>>(), params).awaitSingle()
+        return try {
+            callPrivateApi(command, jacksonTypeRef<List<OrderTrade>>(), params).awaitSingle()
         } catch (e: Exception) {
             if (e.message == OrderNotFoundPattern) {
-                return List.empty()
+                List.empty()
             } else {
                 throw e
             }
@@ -413,7 +430,7 @@ class PoloniexApi(
 
             val msg = e.message!!
 
-            var match: MatchResult? = OrderCompletedOrNotExistPattern.matchEntire(msg)
+            val match: MatchResult? = OrderCompletedOrNotExistPattern.matchEntire(msg)
 
             if (match != null) {
                 val (orderIdStr) = match.destructured
@@ -563,7 +580,7 @@ class PoloniexApi(
             } catch (respException: Exception) {
                 val error: Error
                 try {
-                    error = objectMapper.readValue<Error>(jsonString)
+                    error = objectMapper.readValue(jsonString)
                 } catch (_: Exception) {
                     throw respException
                 }
@@ -577,7 +594,7 @@ class PoloniexApi(
         } else {
             val error: Error
             try {
-                error = objectMapper.readValue<Error>(jsonString)
+                error = objectMapper.readValue(jsonString)
             } catch (e: Exception) {
                 throw Exception("Error response not recognized", e)
             }
@@ -616,7 +633,7 @@ class PoloniexApi(
         val main = this
         var messagesConsumptionJob: Job? = null
 
-        fun startMessagesConsumption() = launch {
+        fun CoroutineScope.startMessagesConsumption() = this.launch {
             connectionInput.onBackpressureBuffer().collect { msg ->
                 if (msg.channel == channel && msg.data != null && msg.data != NullNode.instance) {
                     try {
@@ -631,7 +648,7 @@ class PoloniexApi(
             }
         }
 
-        fun subscribeToChannel() = launch {
+        fun CoroutineScope.subscribeToChannel() = this.launch {
             while (isActive) {
                 val payload = if (privateApi) {
                     val payload = "nonce=${System.currentTimeMillis()}"
@@ -680,7 +697,7 @@ class PoloniexApi(
             }
         }
 
-        fun subscribeAndStartMessagesConsumption() = launch {
+        fun CoroutineScope.subscribeAndStartMessagesConsumption() = this.launch {
             subscribeToChannel().join()
 
             try {

@@ -638,6 +638,7 @@ class PoloniexTrader(
             feeFlow: Flux<FeeMultiplier>
         ): Array<BareTrade> {
             val trades = LinkedList<BareTrade>()
+            val feeMultiplier = feeFlow.awaitFirst() // TODO: Remove when Poloniex will fix the bug with fee
             var unfilledAmount = fromCurrencyAmount
 
             val orderType = if (market.baseCurrency == fromCurrency) {
@@ -719,7 +720,8 @@ class PoloniexTrader(
                             sellQuoteAmount(trade.amount)
                         }
 
-                        trades.addLast(BareTrade(trade.amount, trade.price, transaction.feeMultiplier))
+                        // TODO: Replace with transaction.feeMultiplier when Poloniex will fix the bug with sell fee
+                        trades.addLast(BareTrade(trade.amount, trade.price, feeMultiplier.taker))
                     }
                 }
             } catch (e: CancellationException) {
@@ -744,12 +746,13 @@ class PoloniexTrader(
                 if (predefinedOrderIds.isNotEmpty()) {
                     latestOrderIdsChannel.send(Queue.ofAll(predefinedOrderIds).reverse())
 
+                    val latestOrderTs = transactionsDao.getTimestampLatestOrderId(id)!!
+
                     while (true) {
                         try {
                             var unfilledAmount = fromCurrencyAmount
 
-                            // TODO: Specify time period
-                            poloniexApi.tradeHistory(market).getOrNull(market)?.run {
+                            poloniexApi.tradeHistory(market, latestOrderTs, limit = 50).getOrNull(market)?.run {
                                 for (trade in this) {
                                     if (predefinedOrderIds.contains(trade.orderId)) {
                                         unfilledAmount -= if (orderType == OrderType.Buy) {
@@ -914,6 +917,14 @@ class PoloniexTrader(
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    // connection monitoring
+                    launch {
+                        // TODO: Implement connection monitor to catch missed trades
+                        poloniexApi.connection.collect {connected ->
+
                         }
                     }
 

@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
+import java.time.Instant
 import java.time.LocalDateTime
 import java.util.*
 
@@ -88,14 +89,23 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    // TODO: Add added_ts column (needed for tradeHistory method)
     suspend fun getOrderIds(tranId: UUID): List<Long> {
         return databaseClient.execute()
             .sql("SELECT order_id FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY order_id DESC LIMIT 32")
             .bind(0, tranId)
-            .fetch().one()
-            .map { mapper.readValue<List<Long>>(it["order_ids"] as String) }
+            .fetch().all()
+            .map { it["order_id"] as Long }
+            .collectList()
             .awaitFirstOrDefault(emptyList())
+    }
+
+    suspend fun getTimestampLatestOrderId(tranId: UUID): Instant? {
+        return databaseClient.execute()
+            .sql("SELECT added_ts FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY order_id DESC LIMIT 1")
+            .bind(0, tranId)
+            .fetch().one()
+            .map { it["added_ts"] as Instant }
+            .awaitFirstOrNull()
     }
 
     // TODO: Implement deletion of old records
@@ -112,7 +122,7 @@ class TransactionsDao(
         val orderIdsStr = orderIds.joinToString()
         databaseClient.execute()
             .sql("DELETE FROM poloniex_transaction_order_ids WHERE tran_id = $1 AND order_id IN ($orderIdsStr)")
-            .bind(1, tranId)
+            .bind(0, tranId)
             .then()
             .awaitFirstOrNull()
     }

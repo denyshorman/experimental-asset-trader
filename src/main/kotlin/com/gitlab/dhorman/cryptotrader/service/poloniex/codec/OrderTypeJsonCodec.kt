@@ -23,6 +23,8 @@ object OrderTypeJsonCodec {
             JsonToken.VALUE_STRING -> when (val str = p.valueAsString.toUpperCase()) {
                 "SELL" -> OrderType.Sell
                 "BUY" -> OrderType.Buy
+                "0" -> OrderType.Sell
+                "1" -> OrderType.Buy
                 else -> throw JsonMappingException(ctx.parser, """Not recognized string "$str" """)
             }
             JsonToken.VALUE_NUMBER_INT -> when (val num = p.valueAsInt) {
