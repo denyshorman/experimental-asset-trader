@@ -444,45 +444,58 @@ class PoloniexTrader(
                     val profitMonitoringJob = startProfitMonitoring(updatedMarketsChannel)
 
                     try {
-                        tradeDelayed(
-                            currentMarket.orderType,
-                            currentMarket.market,
-                            currentMarket.fromAmount,
-                            orderBookFlow
-                        )
-                            //.buffer(Duration.ofSeconds(5))
-                            .map { listOf(it) } // TODO: Need buffer operator
-                            .map { trades ->
-                                tuple(
-                                    trades.map { it.orderId }.toVavrList(),
-                                    Array.ofAll(trades.map { it as BareTrade })
-                                )
-                            }
-                            .collect { (orderIds, trades) ->
-                                withContext(NonCancellable) {
-                                    val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
-                                    updatedMarkets = marketSplit._1
-                                    updatedMarketsChannel.send(updatedMarkets)
-                                    val committedMarkets = marketSplit._2
+                        while (isActive) {
+                            try {
+                                val fromAmount =
+                                    (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
-                                    if (newMarketIdx != modifiedMarkets.length()) {
-                                        val newId = UUID.randomUUID()
-                                        TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
-                                            transactionsDao.removeOrderIds(id, orderIds)
-                                            transactionsDao.update(id, updatedMarkets, marketIdx)
-                                            transactionsDao.add(newId, committedMarkets, newMarketIdx)
-                                        }).retry().awaitFirstOrNull()
-                                        TransactionIntent(
-                                            newId,
-                                            committedMarkets,
-                                            newMarketIdx,
-                                            TranIntentScope
-                                        ).start()
-                                    } else {
-                                        transactionsDao.addCompleted(id, committedMarkets)
+                                tradeDelayed(
+                                    currentMarket.orderType,
+                                    currentMarket.market,
+                                    fromAmount,
+                                    orderBookFlow
+                                )
+                                    //.buffer(Duration.ofSeconds(5))
+                                    .map { listOf(it) } // TODO: Need buffer operator
+                                    .map { trades ->
+                                        tuple(
+                                            trades.map { it.orderId }.toVavrList(),
+                                            Array.ofAll(trades.map { it as BareTrade })
+                                        )
                                     }
-                                }
+                                    .collect { (orderIds, trades) ->
+                                        withContext(NonCancellable) {
+                                            val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
+                                            updatedMarkets = marketSplit._1
+                                            updatedMarketsChannel.send(updatedMarkets)
+                                            val committedMarkets = marketSplit._2
+
+                                            if (newMarketIdx != modifiedMarkets.length()) {
+                                                val newId = UUID.randomUUID()
+
+                                                TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                                                    transactionsDao.removeOrderIds(id, orderIds)
+                                                    transactionsDao.update(id, updatedMarkets, marketIdx)
+                                                    transactionsDao.add(newId, committedMarkets, newMarketIdx)
+                                                }).retry().awaitFirstOrNull()
+
+                                                TransactionIntent(
+                                                    newId,
+                                                    committedMarkets,
+                                                    newMarketIdx,
+                                                    TranIntentScope
+                                                ).start()
+                                            } else {
+                                                transactionsDao.addCompleted(id, committedMarkets)
+                                            }
+                                        }
+                                    }
+
+                                break
+                            } catch (e: DisconnectedException) {
+                                poloniexApi.connection.filter { it }.take(1).awaitSingle()
                             }
+                        }
                     } catch (e: CancellationException) {
                     } catch (e: Exception) {
                         if (logger.isDebugEnabled) logger.warn(e.message, e)
@@ -829,7 +842,7 @@ class PoloniexTrader(
                     }
 
                     // Place - Move order loop
-                    launch placeMoveOrderLoop@{
+                    launch {
                         var lastOrderId: Long? = latestOrderIdsChannel.value.lastOrNull()
                         var prevPrice: Price? = null
 
@@ -922,9 +935,8 @@ class PoloniexTrader(
 
                     // connection monitoring
                     launch {
-                        // TODO: Implement connection monitor to catch missed trades
-                        poloniexApi.connection.collect {connected ->
-
+                        poloniexApi.connection.collect { connected ->
+                            if (!connected) throw DisconnectedException
                         }
                     }
 
