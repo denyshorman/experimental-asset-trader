@@ -2,19 +2,17 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 group = "com.gitlab.dhorman"
 version = "1.0.0-SNAPSHOT"
+java.sourceCompatibility = JavaVersion.VERSION_12
 
 val kotlinVersion = "1.3.31"
 val kotlinCoroutinesVersion = "1.2.1"
-val reactorVersion = "3.2.8.RELEASE"
-val reactorAddonsVersion = "3.2.2.RELEASE"
-val jacksonVersion = "2.9.8"
+val jacksonVersion = "2.9.9"
 val swaggerVersion = "3.0.0-SNAPSHOT"
 
 plugins {
     kotlin("jvm") version "1.3.31"
-    id("kotlinx-serialization") version "1.3.31"
-    id("org.jetbrains.kotlin.plugin.spring") version "1.3.31"
-    id("org.springframework.boot") version "2.2.0.M3"
+    kotlin("plugin.spring") version "1.3.31"
+    id("org.springframework.boot") version "2.2.0.BUILD-SNAPSHOT"
 }
 
 apply(plugin = "io.spring.dependency-management")
@@ -32,18 +30,16 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion")
     implementation("org.jetbrains.kotlin:kotlin-reflect:$kotlinVersion")
     implementation("org.jetbrains.kotlin:kotlin-test-junit5:$kotlinVersion")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-runtime:0.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$kotlinCoroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive:$kotlinCoroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:$kotlinCoroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2:$kotlinCoroutinesVersion")
-    implementation("io.projectreactor:reactor-core:$reactorVersion")
-    implementation("io.projectreactor.addons:reactor-adapter:$reactorAddonsVersion")
-    implementation("io.projectreactor.addons:reactor-extra:$reactorAddonsVersion")
-    implementation("io.projectreactor.addons:reactor-logback:$reactorAddonsVersion")
+    implementation("io.projectreactor.addons:reactor-adapter")
+    implementation("io.projectreactor.addons:reactor-extra")
+    implementation("io.projectreactor.kotlin:reactor-kotlin-extensions")
     implementation("org.slf4j:slf4j-api:1.7.26")
     implementation("ch.qos.logback:logback-classic:1.2.3")
-    implementation("io.github.microutils:kotlin-logging:1.6.24")
+    implementation("io.github.microutils:kotlin-logging:1.6.26")
     implementation("io.vavr:vavr-kotlin:0.10.0")
     implementation("io.vavr:vavr-jackson:0.10.0")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:$jacksonVersion")
@@ -55,8 +51,8 @@ dependencies {
     implementation("io.springfox:springfox-swagger2:$swaggerVersion")
     implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
-    implementation("org.springframework.data:spring-data-r2dbc:1.0.0.M2")
-    implementation("io.r2dbc:r2dbc-postgresql:0.8.0.M8")
+    implementation("org.springframework.data:spring-data-r2dbc:1.0.0.BUILD-SNAPSHOT")
+    implementation("io.r2dbc:r2dbc-postgresql:0.8.0.BUILD-SNAPSHOT")
     implementation("org.springframework.plugin:spring-plugin-core:1.2.0.RELEASE") // TODO: Remove when springfox and spring will be released
 
     runtimeOnly("org.springframework.boot:spring-boot-devtools")

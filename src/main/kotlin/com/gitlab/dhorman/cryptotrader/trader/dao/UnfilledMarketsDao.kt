@@ -18,14 +18,13 @@ import java.math.BigDecimal
 @Repository
 class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: DatabaseClient) {
     suspend fun get(initFromCurrency: Currency, fromCurrency: Currency): List<Tuple2<Amount, Amount>> {
-        return databaseClient.execute()
-            .sql(
-                """
-                SELECT init_currency_amount, current_currency_amount
-                FROM poloniex_unfilled_markets
-                WHERE init_currency = $1 AND current_currency = $2
-                """.trimIndent()
-            )
+        return databaseClient.execute(
+            """
+            SELECT init_currency_amount, current_currency_amount
+            FROM poloniex_unfilled_markets
+            WHERE init_currency = $1 AND current_currency = $2
+            """.trimIndent()
+        )
             .bind(0, initFromCurrency)
             .bind(1, fromCurrency)
             .fetch().all()
@@ -41,8 +40,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
     }
 
     suspend fun remove(initFromCurrency: Currency, fromCurrency: Currency) {
-        databaseClient.execute()
-            .sql("DELETE FROM poloniex_unfilled_markets WHERE init_currency = $1 AND current_currency = $2")
+        databaseClient.execute("DELETE FROM poloniex_unfilled_markets WHERE init_currency = $1 AND current_currency = $2")
             .bind(0, initFromCurrency)
             .bind(1, fromCurrency)
             .then()
@@ -55,14 +53,13 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
         currentCurrency: Currency,
         currentCurrencyAmount: Amount
     ): Long {
-        return databaseClient.execute()
-            .sql(
-                """
-                INSERT INTO poloniex_unfilled_markets(init_currency, init_currency_amount, current_currency, current_currency_amount)
-                VALUES ($1, $2, $3, $4)
-                RETURNING id
-                """.trimIndent()
-            )
+        return databaseClient.execute(
+            """
+            INSERT INTO poloniex_unfilled_markets(init_currency, init_currency_amount, current_currency, current_currency_amount)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            """.trimIndent()
+        )
             .bind(0, initCurrency)
             .bind(1, initCurrencyAmount)
             .bind(2, currentCurrency)

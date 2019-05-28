@@ -10,6 +10,7 @@ import io.swagger.annotations.ApiOperation
 import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.kotlin.toVavrList
+import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.http.MediaType
 import org.springframework.messaging.handler.annotation.MessageMapping
 import org.springframework.web.bind.annotation.RequestMapping
@@ -17,8 +18,6 @@ import org.springframework.web.bind.annotation.RequestMethod
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
-import reactor.core.publisher.Mono
-import reactor.core.publisher.toMono
 import reactor.core.scheduler.Schedulers
 import java.time.Duration
 
@@ -30,8 +29,8 @@ class PoloniexTraderApi(private val poloniexTrader: PoloniexTrader) {
         notes = "Use this resource to retrieve ticker snapshot"
     )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/tickers"])
-    fun tickersSnapshot(): Mono<Map<Market, Ticker>> {
-        return poloniexTrader.data.tickers.take(1).toMono()
+    suspend fun tickersSnapshot(): Map<Market, Ticker> {
+        return poloniexTrader.data.tickers.take(1).awaitSingle()
     }
 
     @ApiOperation(
@@ -39,12 +38,12 @@ class PoloniexTraderApi(private val poloniexTrader: PoloniexTrader) {
         notes = "Use this resource to retrieve balance snapshot"
     )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/balances"])
-    fun balancesSnapshot(): Mono<Map<Currency, Amount>> {
-        return poloniexTrader.data.balances.take(1).toMono()
+    suspend fun balancesSnapshot(): Map<Currency, Amount> {
+        return poloniexTrader.data.balances.take(1).awaitSingle()
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/paths"])
-    fun pathsSnapshot(@RequestParam initAmount: Amount, @RequestParam currencies: kotlin.collections.List<Currency>) =
+    suspend fun pathsSnapshot(@RequestParam initAmount: Amount, @RequestParam currencies: kotlin.collections.List<Currency>) =
         run {
             poloniexTrader.indicators.getPaths(PathsSettings(initAmount, currencies.toVavrList()))
                 .sampleFirst(Duration.ofSeconds(30))
@@ -55,6 +54,7 @@ class PoloniexTraderApi(private val poloniexTrader: PoloniexTrader) {
                         .subscribeOn(Schedulers.elastic())
                 }, 1, 1)
                 .take(1)
+                .awaitSingle()
         }
 
     @MessageMapping("traders/poloniex/tickers")
