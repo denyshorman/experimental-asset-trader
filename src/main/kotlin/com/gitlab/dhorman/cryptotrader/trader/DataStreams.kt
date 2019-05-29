@@ -315,12 +315,12 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                                     if (marketId != null) {
                                         val newOrder = OpenOrderWithMarket(
-                                            update.orderNumber,
+                                            update.orderId,
                                             update.orderType,
-                                            update.rate,
+                                            update.price,
                                             update.amount,
                                             update.amount,
-                                            update.rate * update.amount, // TODO: Incorrect arguments supplied
+                                            update.price * update.amount, // TODO: Incorrect arguments supplied
                                             update.date,
                                             false,
                                             marketId

@@ -58,9 +58,9 @@ data class BalanceUpdate(
 @JsonDeserialize(using = LimitOrderCreatedJsonCodec.Decoder::class)
 data class LimitOrderCreated(
     val marketId: Int,
-    val orderNumber: Long,
+    val orderId: Long,
     val orderType: OrderType,
-    val rate: BigDecimal,
+    val price: BigDecimal,
     val amount: BigDecimal,
     val date: LocalDateTime
 ) : AccountNotification()
@@ -78,7 +78,9 @@ data class TradeNotification(
     val amount: Amount,
     val feeMultiplier: BigDecimal,
     val fundingType: FundingType,
-    val orderId: Long
+    val orderId: Long,
+    val totalFee: BigDecimal,
+    val date: LocalDateTime
 ) : AccountNotification()
 
 
