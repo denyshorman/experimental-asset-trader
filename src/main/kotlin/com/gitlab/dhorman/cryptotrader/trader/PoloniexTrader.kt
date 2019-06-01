@@ -411,10 +411,12 @@ class PoloniexTrader(
 
             when (currentMarket.orderSpeed) {
                 OrderSpeed.Instant -> run {
+                    val fromAmount = (modifiedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
+
                     val trades = tradeInstantly(
                         currentMarket.market,
                         currentMarket.fromCurrency,
-                        currentMarket.fromAmount,
+                        fromAmount,
                         orderBookFlow,
                         feeFlow
                     )
@@ -560,7 +562,8 @@ class PoloniexTrader(
             var updatedMarkets = currentMarkets
             var deltaAmount = currentCurrencyAmount
 
-            var i = partiallyCompletedMarketIndex(currentMarkets)!! - 1
+            val currMarketIdx = partiallyCompletedMarketIndex(currentMarkets)!!
+            var i = currMarketIdx - 1
 
             while (i >= 0 && deltaAmount.compareTo(BigDecimal.ZERO) != 0) {
                 val initAmountDefined = i == 0 && initCurrencyAmount.compareTo(BigDecimal.ZERO) != 0
@@ -646,6 +649,15 @@ class PoloniexTrader(
                     (updatedMarkets[i] as TranIntentMarketCompleted).fromAmount - (oldMarkets[i] as TranIntentMarketCompleted).fromAmount
                 i--
             }
+
+            val oldCurrentMarket = updatedMarkets[currMarketIdx] as TranIntentMarketPartiallyCompleted
+            val newCurrentMarket = TranIntentMarketPartiallyCompleted(
+                oldCurrentMarket.market,
+                oldCurrentMarket.orderSpeed,
+                oldCurrentMarket.fromCurrencyType,
+                if (currMarketIdx - 1 >= 0) (updatedMarkets[currMarketIdx - 1] as TranIntentMarketCompleted).targetAmount else oldCurrentMarket.fromAmount + initCurrencyAmount
+            )
+            updatedMarkets = updatedMarkets.update(currMarketIdx, newCurrentMarket)
 
             return updatedMarkets
         }
