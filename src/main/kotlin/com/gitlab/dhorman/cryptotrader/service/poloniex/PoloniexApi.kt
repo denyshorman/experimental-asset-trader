@@ -125,14 +125,12 @@ class PoloniexApi(
         subscribeTo(DefaultChannel.DayExchangeVolume.id, jacksonTypeRef<DayExchangeVolume>()).share()
     }
 
-    val accountNotificationStream: Flux<AccountNotification> = run {
+    val accountNotificationStream: Flux<List<AccountNotification>> = run {
         subscribeTo(
             DefaultChannel.AccountNotifications.id,
             jacksonTypeRef<List<AccountNotification>>(),
             privateApi = true
-        )
-            .flatMapIterable(identity(), Int.MAX_VALUE)
-            .share()
+        ).share()
     }
 
     // TODO: Send notification list because they send atomic operation as list

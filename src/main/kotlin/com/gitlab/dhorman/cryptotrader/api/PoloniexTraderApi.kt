@@ -7,6 +7,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Ticker
 import com.gitlab.dhorman.cryptotrader.trader.PoloniexTrader
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import io.swagger.annotations.ApiOperation
+import io.vavr.Tuple2
 import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.kotlin.toVavrList
@@ -38,7 +39,7 @@ class PoloniexTraderApi(private val poloniexTrader: PoloniexTrader) {
         notes = "Use this resource to retrieve balance snapshot"
     )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/balances"])
-    suspend fun balancesSnapshot(): Map<Currency, Amount> {
+    suspend fun balancesSnapshot(): Map<Currency, Tuple2<Amount, Amount>> {
         return poloniexTrader.data.balances.take(1).awaitSingle()
     }
 

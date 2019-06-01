@@ -161,9 +161,10 @@ class PoloniexTrader(
         val canStartTransaction = TransactionalOperator.create(tranManager, object : TransactionDefinition {
             override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
         }).transactional(FlowScope.mono {
-            val allAmount = data.balances.awaitSingle().getOrNull(fromCurrency) ?: return@mono false
+            val (available, onOrders) = data.balances.awaitFirst().getOrNull(fromCurrency) ?: return@mono false
             val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency) ?: return@mono false
-            val availableAmount = allAmount - amountInUse
+            val reservedAmount = onOrders - amountInUse
+            val availableAmount = available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
 
             if (availableAmount >= requestedAmount) {
                 transactionsDao.add(id, markets, marketIdx)
@@ -353,11 +354,17 @@ class PoloniexTrader(
     private suspend fun requestBalanceForTransaction(): Tuple2<Currency, Amount>? {
         // TODO: Review requestBalanceForTransaction algorithm
         val usedBalances = transactionsDao.balancesInUse(primaryCurrencies)
-        val allBalances = data.balances.awaitSingle()
+        val allBalances = data.balances.awaitFirst()
 
         val availableBalances = usedBalances.toVavrStream()
             .map { (currency, balanceInUse) ->
-                allBalances.get(currency).map { all -> tuple(currency, all - balanceInUse) }
+                allBalances.get(currency)
+                    .map { (available, onOrders) ->
+                        val reservedAmount = onOrders - balanceInUse
+                        val availableAmount =
+                            available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
+                        tuple(currency, availableAmount)
+                    }
             }
             .filter { it.isDefined }
             .map { it.get() }
@@ -812,33 +819,34 @@ class PoloniexTrader(
 
                         var unfilledAmount = unfilledAmountChannel.value
 
-                        poloniexApi.accountNotificationStream.collect { trade ->
-                            if (trade !is TradeNotification) return@collect
+                        poloniexApi.accountNotificationStream.flatMapIterable({ it }, Int.MAX_VALUE)
+                            .onBackpressureBuffer().collect { trade ->
+                                if (trade !is TradeNotification) return@collect
 
-                            if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Trade received: $trade")
+                                if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Trade received: $trade")
 
-                            val orderIds = latestOrderIdsChannel.value
+                                val orderIds = latestOrderIdsChannel.value
 
-                            for (orderId in orderIds.reverseIterator()) {
-                                if (orderId != trade.orderId) continue
+                                for (orderId in orderIds.reverseIterator()) {
+                                    if (orderId != trade.orderId) continue
 
-                                if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Trade matched. Sending trade to the client..")
+                                    if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Trade matched. Sending trade to the client..")
 
-                                unfilledAmount -= if (orderType == OrderType.Buy) {
-                                    buyBaseAmount(trade.amount, trade.price)
-                                } else {
-                                    sellQuoteAmount(trade.amount)
+                                    unfilledAmount -= if (orderType == OrderType.Buy) {
+                                        buyBaseAmount(trade.amount, trade.price)
+                                    } else {
+                                        sellQuoteAmount(trade.amount)
+                                    }
+
+                                    unfilledAmountChannel.send(unfilledAmount)
+
+                                    tradesChannel.emit(
+                                        BareTradeWithId(trade.orderId, trade.amount, trade.price, trade.feeMultiplier)
+                                    )
+
+                                    break
                                 }
-
-                                unfilledAmountChannel.send(unfilledAmount)
-
-                                tradesChannel.emit(
-                                    BareTradeWithId(trade.orderId, trade.amount, trade.price, trade.feeMultiplier)
-                                )
-
-                                break
                             }
-                        }
                     }
 
                     // Place - Move order loop

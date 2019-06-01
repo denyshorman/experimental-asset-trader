@@ -2,6 +2,7 @@ package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.poloniex.core.buyBaseAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.data.tradestat.*
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
@@ -23,8 +24,7 @@ import mu.KotlinLogging
 import org.springframework.stereotype.Component
 import reactor.core.publisher.Flux
 import java.math.BigDecimal
-import java.time.Duration
-import java.time.ZoneOffset
+import java.time.*
 
 typealias MarketIntMap = Map<MarketId, Market>
 typealias MarketStringMap = Map<Market, MarketId>
@@ -67,37 +67,187 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         }.cache(1)
     }
 
-    // TODO: Review balance updates!
-    val balances: Flux<Map<Currency, Amount>> = run {
+    val balances: Flux<Map<Currency, Tuple2<Amount, Amount>>> = run {
         FlowScope.flux {
-            while (isActive) {
+            mainLoop@ while (isActive) {
                 try {
-                    var allBalances = poloniexApi.completeBalances().mapValues { it.available + it.onOrders }
-                    send(allBalances)
+                    val rawApiBalances = poloniexApi.completeBalances()
+
+                    var allOpenOrders = poloniexApi.allOpenOrders().awaitSingle()
+
+                    // Check if open order balance equal to complete onOrder balance
+                    val balanceOnOrders = allOpenOrders.groupBy({ (_, order) ->
+                        if (order.type == OrderType.Buy) {
+                            order.market.baseCurrency
+                        } else {
+                            order.market.quoteCurrency
+                        }
+                    }, { (_, order) ->
+                        if (order.type == OrderType.Buy) {
+                            buyBaseAmount(order.amount, order.price)
+                        } else {
+                            order.amount
+                        }
+                    }).mapValues { it.value.reduce { a, b -> a + b } }
+
+                    for ((currency, balance) in rawApiBalances.iterator().map { (c, b) -> tuple(c, b.onOrders) }) {
+                        val orderBalance = balanceOnOrders.getOrDefault(currency, BigDecimal.ZERO)
+
+                        if (orderBalance.compareTo(balance) != 0) {
+                            logger.warn("Balances ($balance, $orderBalance) not equal for currency $currency")
+                            continue@mainLoop
+                        }
+                    }
+
+                    var availableAndOnOrderBalances =
+                        rawApiBalances.mapValues { it.available }.map { currency, availableBalance ->
+                            tuple(
+                                currency,
+                                tuple(availableBalance, balanceOnOrders.getOrDefault(currency, BigDecimal.ZERO))
+                            )
+                        }
+
+                    send(availableAndOnOrderBalances)
 
                     val currenciesSnapshot = currencies.awaitFirst()
 
                     var balanceUpdateDeltaJob: Job? = null
 
                     fun CoroutineScope.balanceDeltaUpdateJob() = this.launch {
-                        poloniexApi.accountNotificationStream.onBackpressureBuffer().collect { balanceDelta ->
-                            if (balanceDelta !is BalanceUpdate) return@collect
+                        poloniexApi.accountNotificationStream.onBackpressureBuffer().collect { deltaUpdates ->
+                            var notifySubscribers = false
 
-                            if (balanceDelta.walletType == WalletType.Exchange) {
-                                val currencyId = balanceDelta.currencyId
-                                val currency = currenciesSnapshot._2.getOrNull(currencyId)
-                                val balance = currency?.run { allBalances.getOrNull(this) }
+                            for (delta in deltaUpdates) {
+                                if (delta is BalanceUpdate) {
+                                    if (delta.walletType == WalletType.Exchange) {
+                                        val currencyId = delta.currencyId
+                                        val currency = currenciesSnapshot._2.getOrNull(currencyId)
+                                        val availableOnOrdersBalance =
+                                            currency?.run { availableAndOnOrderBalances.getOrNull(this) }
 
-                                if (currency != null && balance != null) {
-                                    val newBalance = balance + balanceDelta.amount
+                                        if (currency == null || availableOnOrdersBalance == null) {
+                                            logger.warn("Balances and currencies are not in sync.")
+                                            throw BalancesAndCurrenciesNotInSync
+                                        }
 
-                                    allBalances = allBalances.put(currency, newBalance)
-                                    this@flux.send(allBalances)
-                                } else {
-                                    logger.warn("Balances and currencies are not in sync.")
-                                    throw BalancesAndCurrenciesNotInSync
+                                        val (available, onOrders) = availableOnOrdersBalance
+                                        val newBalance = available + delta.amount
+                                        availableAndOnOrderBalances = availableAndOnOrderBalances.put(currency, tuple(newBalance, onOrders))
+
+                                        notifySubscribers = true
+                                    }
+                                } else if (delta is LimitOrderCreated) {
+                                    val marketId = delta.marketId
+                                    val market = markets.awaitFirst()._1.getOrNull(marketId)
+
+                                    if (market == null) {
+                                        logger.warn("Balances and currencies are not in sync.")
+                                        throw BalancesAndCurrenciesNotInSync
+                                    }
+
+                                    // 1. Add created order to orders list
+
+                                    allOpenOrders = allOpenOrders.put(
+                                        delta.orderId, OpenOrderWithMarket(
+                                            delta.orderId,
+                                            delta.orderType,
+                                            delta.price,
+                                            delta.amount,
+                                            delta.amount,
+                                            delta.amount,
+                                            LocalDateTime.ofInstant(Instant.now(), ZoneId.of("UTC")),
+                                            false,
+                                            market
+                                        )
+                                    )
+
+                                    val currency: Currency
+                                    val deltaOnOrdersAmount: Amount
+
+                                    if (delta.orderType == OrderType.Buy) {
+                                        currency = market.baseCurrency
+                                        deltaOnOrdersAmount = buyBaseAmount(delta.amount, delta.price)
+                                    } else {
+                                        currency = market.quoteCurrency
+                                        deltaOnOrdersAmount = delta.amount
+                                    }
+
+                                    val availableOnOrdersBalance = availableAndOnOrderBalances.getOrNull(currency)
+
+                                    if (availableOnOrdersBalance == null) {
+                                        logger.warn("Can't find balance by currency $currency")
+                                        throw BalancesAndCurrenciesNotInSync
+                                    }
+
+                                    val (available, onOrders) = availableOnOrdersBalance
+                                    val newOnOrders = onOrders + deltaOnOrdersAmount
+                                    availableAndOnOrderBalances =
+                                        availableAndOnOrderBalances.put(currency, tuple(available, newOnOrders))
+
+                                    notifySubscribers = true
+                                } else if (delta is OrderUpdate) {
+                                    val oldOrder = allOpenOrders.getOrNull(delta.orderId)
+
+                                    if (oldOrder == null) {
+                                        val msg = "Order ${delta.orderId} not found in local cache"
+                                        logger.warn(msg)
+                                        throw Exception(msg)
+                                    }
+
+                                    val oldOrderAmount: BigDecimal
+                                    val newOrderAmount: BigDecimal
+                                    val balanceCurrency: Currency
+
+                                    if (oldOrder.type == OrderType.Buy) {
+                                        oldOrderAmount = buyBaseAmount(oldOrder.amount, oldOrder.price)
+                                        newOrderAmount = buyBaseAmount(delta.newAmount, oldOrder.price)
+                                        balanceCurrency = oldOrder.market.baseCurrency
+                                    } else {
+                                        oldOrderAmount = oldOrder.amount
+                                        newOrderAmount = delta.newAmount
+                                        balanceCurrency = oldOrder.market.quoteCurrency
+                                    }
+
+                                    // 1. Adjust open orders map
+
+                                    if (delta.newAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                        allOpenOrders = allOpenOrders.remove(delta.orderId)
+                                    } else {
+                                        val newOrder = OpenOrderWithMarket(
+                                            oldOrder.orderId,
+                                            oldOrder.type,
+                                            oldOrder.price,
+                                            oldOrder.startingAmount,
+                                            delta.newAmount,
+                                            newOrderAmount,
+                                            oldOrder.date,
+                                            oldOrder.margin,
+                                            oldOrder.market
+                                        )
+
+                                        allOpenOrders = allOpenOrders.put(oldOrder.orderId, newOrder)
+                                    }
+
+                                    // 2. Adjust on orders balance
+
+                                    val availableOnOrdersBalance =
+                                        availableAndOnOrderBalances.getOrNull(balanceCurrency)
+
+                                    if (availableOnOrdersBalance == null) {
+                                        logger.warn("Balances and currencies are not in sync.")
+                                        throw BalancesAndCurrenciesNotInSync
+                                    }
+
+                                    val (available, onOrders) = availableOnOrdersBalance
+                                    val newOnOrders = onOrders - oldOrderAmount + newOrderAmount
+                                    availableAndOnOrderBalances =
+                                        availableAndOnOrderBalances.put(balanceCurrency, tuple(available, newOnOrders))
+
+                                    notifySubscribers = true
                                 }
                             }
+
+                            if (notifySubscribers) this@flux.send(availableAndOnOrderBalances)
                         }
                     }
 
@@ -308,58 +458,60 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                             }
                         }
 
-                        poloniexApi.accountNotificationStream.onBackpressureBuffer().collect { update ->
-                            when (update) {
-                                is LimitOrderCreated -> run {
-                                    val marketId = markets.awaitFirst()._1.getOrNull(update.marketId)
+                        poloniexApi.accountNotificationStream.onBackpressureBuffer().collect { notifications ->
+                            for (update in notifications) {
+                                when (update) {
+                                    is LimitOrderCreated -> run {
+                                        val marketId = markets.awaitFirst()._1.getOrNull(update.marketId)
 
-                                    if (marketId != null) {
-                                        val newOrder = OpenOrderWithMarket(
-                                            update.orderId,
-                                            update.orderType,
-                                            update.price,
-                                            update.amount,
-                                            update.amount,
-                                            update.price * update.amount, // TODO: Incorrect arguments supplied
-                                            update.date,
-                                            false,
-                                            marketId
-                                        )
-
-                                        allOpenOrders = allOpenOrders.put(newOrder.orderId, newOrder)
-                                        send(allOpenOrders)
-                                    } else {
-                                        throw Exception("Market id not found in local cache")
-                                    }
-                                }
-                                is OrderUpdate -> run {
-                                    if (update.newAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                        allOpenOrders = allOpenOrders.remove(update.orderId)
-                                        send(allOpenOrders)
-                                    } else {
-                                        val order = allOpenOrders.getOrNull(update.orderId)
-
-                                        if (order != null) {
+                                        if (marketId != null) {
                                             val newOrder = OpenOrderWithMarket(
-                                                order.orderId,
-                                                order.type,
-                                                order.price,
-                                                order.startingAmount,
-                                                update.newAmount,
-                                                order.total, // TODO: Incorrect value supplied
-                                                order.date, // TODO: Incorrect value supplied
-                                                order.margin,
-                                                order.market
+                                                update.orderId,
+                                                update.orderType,
+                                                update.price,
+                                                update.amount,
+                                                update.amount,
+                                                update.price * update.amount, // TODO: Incorrect arguments supplied
+                                                update.date,
+                                                false,
+                                                marketId
                                             )
 
-                                            allOpenOrders = allOpenOrders.put(order.orderId, newOrder)
+                                            allOpenOrders = allOpenOrders.put(newOrder.orderId, newOrder)
                                             send(allOpenOrders)
                                         } else {
-                                            throw Exception("Order not found in local cache")
+                                            throw Exception("Market id not found in local cache")
                                         }
                                     }
+                                    is OrderUpdate -> run {
+                                        if (update.newAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                            allOpenOrders = allOpenOrders.remove(update.orderId)
+                                            send(allOpenOrders)
+                                        } else {
+                                            val order = allOpenOrders.getOrNull(update.orderId)
+
+                                            if (order != null) {
+                                                val newOrder = OpenOrderWithMarket(
+                                                    order.orderId,
+                                                    order.type,
+                                                    order.price,
+                                                    order.startingAmount,
+                                                    update.newAmount,
+                                                    order.total, // TODO: Incorrect value supplied
+                                                    order.date,
+                                                    order.margin,
+                                                    order.market
+                                                )
+
+                                                allOpenOrders = allOpenOrders.put(order.orderId, newOrder)
+                                                send(allOpenOrders)
+                                            } else {
+                                                throw Exception("Order not found in local cache")
+                                            }
+                                        }
+                                    }
+                                    else -> run { /*ignore*/ }
                                 }
-                                else -> run { /*ignore*/ }
                             }
                         }
                     }
