@@ -7,7 +7,7 @@ import java.math.RoundingMode
 fun calcQuoteAmount(baseAmount: BigDecimal, price: BigDecimal): BigDecimal {
     var quoteAmount = baseAmount.divide(price, 8, RoundingMode.UP)
 
-    if ((quoteAmount * price).setScale(8, RoundingMode.DOWN) > baseAmount) {
+    if (buyBaseAmount(quoteAmount, price) > baseAmount) {
         quoteAmount = baseAmount.divide(price, 8, RoundingMode.DOWN)
     }
 

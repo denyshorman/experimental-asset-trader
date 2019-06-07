@@ -560,102 +560,55 @@ class PoloniexTrader(
             currentCurrencyAmount: Amount
         ): Array<TranIntentMarket> {
             var updatedMarkets = currentMarkets
-            var deltaAmount = currentCurrencyAmount
-
             val currMarketIdx = partiallyCompletedMarketIndex(currentMarkets)!!
-            var i = currMarketIdx - 1
+            val prevMarketIdx = currMarketIdx - 1
 
-            while (i >= 0 && deltaAmount.compareTo(BigDecimal.ZERO) != 0) {
-                val initAmountDefined = i == 0 && initCurrencyAmount.compareTo(BigDecimal.ZERO) != 0
-                val oldMarket = updatedMarkets[i] as TranIntentMarketCompleted
-                val oldTrade = oldMarket.trades[0]
-                val newTrade = run {
-                    var newQuoteAmount = if (oldMarket.fromCurrencyType == CurrencyType.Base) {
-                        val oldTradeTargetAmount = buyQuoteAmount(oldTrade.quoteAmount, oldTrade.feeMultiplier)
-                        val newTradeTargetAmount = oldTradeTargetAmount + deltaAmount
-                        var newTradeQuoteAmount =
-                            newTradeTargetAmount.divide(oldTrade.feeMultiplier, 8, RoundingMode.UP)
-                        if (buyQuoteAmount(
-                                newTradeQuoteAmount,
-                                oldTrade.feeMultiplier
-                            ).compareTo(newTradeTargetAmount) != 0
-                        ) {
-                            newTradeQuoteAmount =
-                                newTradeTargetAmount.divide(oldTrade.feeMultiplier, 8, RoundingMode.DOWN)
-                        }
-                        newTradeQuoteAmount
-                    } else {
-                        val oldTradeTargetAmount =
-                            sellBaseAmount(oldTrade.quoteAmount, oldTrade.price, oldTrade.feeMultiplier)
-                        val newTradeTargetAmount = oldTradeTargetAmount + deltaAmount
-                        calcQuoteAmountSellTrade(newTradeTargetAmount, oldTrade.price, oldTrade.feeMultiplier)
-                    }
+            if (prevMarketIdx >= 0) {
+                // 1. Add amount to trades of init market
 
-                    val newPrice = if (initAmountDefined) {
-                        if (oldMarket.fromCurrencyType == CurrencyType.Base) {
-                            val oldFromAmount = buyBaseAmount(oldTrade.quoteAmount, oldTrade.price)
-                            val newFromAmount = buyBaseAmount(newQuoteAmount, oldTrade.price)
-                            val delta = newFromAmount - oldFromAmount
-
-                            when (delta.compareTo(initCurrencyAmount)) {
-                                0, 1 -> oldTrade.price
-                                else -> run {
-                                    val fromAmountDelta = initCurrencyAmount - delta
-                                    val newFromAmount2 = newFromAmount + fromAmountDelta
-                                    var newPrice = newFromAmount2.divide(newQuoteAmount, 8, RoundingMode.DOWN)
-                                    if (buyBaseAmount(newQuoteAmount, newPrice).compareTo(newFromAmount2) != 0) {
-                                        newPrice = newFromAmount2.divide(newQuoteAmount, 8, RoundingMode.UP)
-                                    }
-                                    newPrice
-                                }
-                            }
-                        } else {
-                            val oldFromAmount = sellQuoteAmount(oldTrade.quoteAmount)
-                            val newFromAmount = sellQuoteAmount(newQuoteAmount)
-                            val delta = newFromAmount - oldFromAmount
-
-                            when (delta.compareTo(initCurrencyAmount)) {
-                                0, 1 -> oldTrade.price
-                                else -> run {
-                                    val fromAmountDelta = initCurrencyAmount - delta
-                                    newQuoteAmount = newFromAmount + fromAmountDelta
-                                    val oldTradeTargetAmount =
-                                        sellBaseAmount(oldTrade.quoteAmount, oldTrade.price, oldTrade.feeMultiplier)
-                                    val newTradeTargetAmount = oldTradeTargetAmount + deltaAmount
-                                    calcQuoteAmountSellTrade(
-                                        newTradeTargetAmount,
-                                        newQuoteAmount,
-                                        oldTrade.feeMultiplier
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        oldTrade.price
-                    }
-
-                    BareTrade(newQuoteAmount, newPrice, oldTrade.feeMultiplier)
+                if (initCurrencyAmount.compareTo(BigDecimal.ZERO) != 0) {
+                    val initMarket = updatedMarkets[0] as TranIntentMarketCompleted
+                    val newTrade = BareTrade(currentCurrencyAmount, BigDecimal.ONE, BigDecimal.ZERO)
+                    val newTrades = initMarket.trades.append(newTrade)
+                    val newMarket = TranIntentMarketCompleted(
+                        initMarket.market,
+                        initMarket.orderSpeed,
+                        initMarket.fromCurrencyType,
+                        newTrades
+                    )
+                    updatedMarkets = updatedMarkets.update(0, newMarket)
                 }
-                val newTrades = oldMarket.trades.update(0, newTrade)
+
+
+                // 2. Add amount to trades of previous market
+
+                val oldMarket = updatedMarkets[prevMarketIdx] as TranIntentMarketCompleted
+                val newTrade = if (oldMarket.orderType == OrderType.Buy) {
+                    BareTrade(currentCurrencyAmount, BigDecimal.ZERO, BigDecimal.ONE)
+                } else {
+                    BareTrade(currentCurrencyAmount, BigDecimal.ZERO, BigDecimal.ZERO)
+                }
+                val newTrades = oldMarket.trades.append(newTrade)
                 val newMarket = TranIntentMarketCompleted(
                     oldMarket.market,
                     oldMarket.orderSpeed,
                     oldMarket.fromCurrencyType,
                     newTrades
                 )
-                val oldMarkets = updatedMarkets
-                updatedMarkets = updatedMarkets.update(i, newMarket)
-                deltaAmount =
-                    (updatedMarkets[i] as TranIntentMarketCompleted).fromAmount - (oldMarkets[i] as TranIntentMarketCompleted).fromAmount
-                i--
+                updatedMarkets = updatedMarkets.update(prevMarketIdx, newMarket)
             }
+
+            // 3. Update current market
 
             val oldCurrentMarket = updatedMarkets[currMarketIdx] as TranIntentMarketPartiallyCompleted
             val newCurrentMarket = TranIntentMarketPartiallyCompleted(
                 oldCurrentMarket.market,
                 oldCurrentMarket.orderSpeed,
                 oldCurrentMarket.fromCurrencyType,
-                if (currMarketIdx - 1 >= 0) (updatedMarkets[currMarketIdx - 1] as TranIntentMarketCompleted).targetAmount else oldCurrentMarket.fromAmount + initCurrencyAmount
+                if (prevMarketIdx >= 0)
+                    (updatedMarkets[prevMarketIdx] as TranIntentMarketCompleted).targetAmount
+                else
+                    oldCurrentMarket.fromAmount + initCurrencyAmount + currentCurrencyAmount
             )
             updatedMarkets = updatedMarkets.update(currMarketIdx, newCurrentMarket)
 
@@ -1365,8 +1318,26 @@ class PoloniexTrader(
                             if (targetAmount.compareTo(BigDecimal.ZERO) == 0) {
                                 updatedTrades.add(trade)
                             } else {
-                                val commitQuoteAmount =
-                                    calcQuoteAmountSellTrade(targetAmount, trade.price, trade.feeMultiplier)
+                                val commitQuoteAmount: Amount
+                                val targetAmountDelta: Amount
+
+                                if (
+                                    trade.price.compareTo(BigDecimal.ZERO) == 0 &&
+                                    trade.feeMultiplier.compareTo(BigDecimal.ZERO) == 0
+                                ) {
+                                    commitQuoteAmount = targetAmount
+                                    targetAmountDelta = BigDecimal.ZERO
+                                } else {
+                                    commitQuoteAmount =
+                                        calcQuoteAmountSellTrade(targetAmount, trade.price, trade.feeMultiplier)
+                                    targetAmountDelta =
+                                        sellBaseAmount(commitQuoteAmount, trade.price, trade.feeMultiplier)
+                                }
+
+                                if (targetAmountDelta.compareTo(BigDecimal.ZERO) != 0) {
+                                    committedTrades.add(BareTrade(targetAmountDelta, BigDecimal.ZERO, BigDecimal.ZERO))
+                                }
+
                                 val updateQuoteAmount = trade.quoteAmount - commitQuoteAmount
                                 updatedTrades.add(BareTrade(updateQuoteAmount, trade.price, trade.feeMultiplier))
                                 committedTrades.add(BareTrade(commitQuoteAmount, trade.price, trade.feeMultiplier))
@@ -1404,32 +1375,25 @@ class PoloniexTrader(
             price: Price,
             feeMultiplier: BigDecimal
         ): BigDecimal {
-            val tfd: BigDecimal by lazy(LazyThreadSafetyMode.NONE) {
-                targetAmount.divide(
-                    feeMultiplier,
-                    8,
-                    RoundingMode.DOWN
-                )
-            }
-            val tfu: BigDecimal by lazy(LazyThreadSafetyMode.NONE) {
-                targetAmount.divide(
-                    feeMultiplier,
-                    8,
-                    RoundingMode.UP
-                )
-            }
-            val qdd: BigDecimal by lazy(LazyThreadSafetyMode.NONE) { tfd.divide(price, 8, RoundingMode.DOWN) }
-            val qdu: BigDecimal by lazy(LazyThreadSafetyMode.NONE) { tfd.divide(price, 8, RoundingMode.UP) }
-            val qud: BigDecimal by lazy(LazyThreadSafetyMode.NONE) { tfu.divide(price, 8, RoundingMode.DOWN) }
-            val quu: BigDecimal by lazy(LazyThreadSafetyMode.NONE) { tfu.divide(price, 8, RoundingMode.UP) }
+            val tfd = targetAmount.divide(feeMultiplier, 8, RoundingMode.DOWN)
+            val tfu = targetAmount.divide(feeMultiplier, 8, RoundingMode.UP)
 
-            return when {
-                sellBaseAmount(qdd, price, feeMultiplier).compareTo(targetAmount) == 0 -> qdd
-                sellBaseAmount(qdu, price, feeMultiplier).compareTo(targetAmount) == 0 -> qdu
-                sellBaseAmount(qud, price, feeMultiplier).compareTo(targetAmount) == 0 -> qud
-                sellBaseAmount(quu, price, feeMultiplier).compareTo(targetAmount) == 0 -> quu
-                else -> throw Exception("Can't find quote amount that matches target price")
-            }
+            val qdd = tfd.divide(price, 8, RoundingMode.DOWN)
+            val qdu = tfd.divide(price, 8, RoundingMode.UP)
+            val qud = tfu.divide(price, 8, RoundingMode.DOWN)
+            val quu = tfu.divide(price, 8, RoundingMode.UP)
+
+            val a = sellBaseAmount(qdd, price, feeMultiplier)
+            val b = sellBaseAmount(qdu, price, feeMultiplier)
+            val c = sellBaseAmount(qud, price, feeMultiplier)
+            val d = sellBaseAmount(quu, price, feeMultiplier)
+
+            return list(tuple(qdd, a), tuple(qdu, b), tuple(qud, c), tuple(quu, d))
+                .iterator()
+                .filter { it._2 <= targetAmount }
+                .map { it._1 }
+                .max()
+                .getOrElseThrow { Exception("Can't find quote amount that matches target price") }
         }
     }
 }
@@ -1472,7 +1436,11 @@ data class TranIntentMarketCompleted(
             amount += if (fromCurrencyType == CurrencyType.Base) {
                 buyBaseAmount(trade.quoteAmount, trade.price)
             } else {
-                sellQuoteAmount(trade.quoteAmount)
+                if (trade.price.compareTo(BigDecimal.ZERO) == 0 && trade.feeMultiplier.compareTo(BigDecimal.ZERO) == 0) {
+                    BigDecimal.ZERO
+                } else {
+                    sellQuoteAmount(trade.quoteAmount)
+                }
             }
         }
         amount
@@ -1485,7 +1453,11 @@ data class TranIntentMarketCompleted(
             amount += if (fromCurrencyType == CurrencyType.Base) {
                 buyQuoteAmount(trade.quoteAmount, trade.feeMultiplier)
             } else {
-                sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
+                if (trade.price.compareTo(BigDecimal.ZERO) == 0 && trade.feeMultiplier.compareTo(BigDecimal.ZERO) == 0) {
+                    trade.quoteAmount
+                } else {
+                    sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
+                }
             }
         }
         amount
