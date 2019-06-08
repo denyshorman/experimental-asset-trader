@@ -58,14 +58,19 @@ class PoloniexTraderApi(private val poloniexTrader: PoloniexTrader) {
                 .awaitSingle()
         }
 
-    @MessageMapping("traders/poloniex/tickers")
+    //@MessageMapping("/tickers")
+    @RequestMapping(method = [RequestMethod.GET], value = ["/tickers"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun tickers() = run {
         poloniexTrader.data.tickers.sample(Duration.ofSeconds(1))
     }
 
-    @MessageMapping("traders/poloniex/paths")
-    fun paths(initAmount: Amount, currencies: List<Currency>) = run {
-        poloniexTrader.indicators.getPaths(PathsSettings(initAmount, currencies))
+    //@MessageMapping("/paths")
+    @RequestMapping(method = [RequestMethod.GET], value = ["/paths"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
+    fun paths(
+        @RequestParam(required = true) initAmount: Amount,
+        @RequestParam(required = true) currencies: kotlin.collections.List<Currency>
+    ) = run {
+        poloniexTrader.indicators.getPaths(PathsSettings(initAmount, currencies.toVavrList()))
             .sampleFirst(Duration.ofSeconds(30))
             .onBackpressureLatest()
             .flatMapSequential({

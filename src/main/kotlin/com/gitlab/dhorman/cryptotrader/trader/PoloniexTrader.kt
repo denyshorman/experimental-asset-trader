@@ -144,7 +144,7 @@ class PoloniexTrader(
             if (p0.id == p1.id) {
                 0
             } else {
-                p0.id.compareTo(p1.id) // TODO: Define comparator for other metrics
+                p0.waitTime.compareTo(p1.waitTime)
             }
         })
 

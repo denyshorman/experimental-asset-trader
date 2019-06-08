@@ -1,4 +1,5 @@
 server:
+  address: 0.0.0.0
   port: ${HTTP_API_PORT}
   http2:
     enabled: true

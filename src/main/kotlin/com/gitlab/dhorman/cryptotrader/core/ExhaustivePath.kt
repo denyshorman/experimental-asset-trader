@@ -1,5 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.core
 
+import com.gitlab.dhorman.cryptotrader.service.poloniex.core.buyBaseAmount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.core.calcQuoteAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import io.vavr.collection.List
 import java.math.BigDecimal
@@ -21,7 +23,7 @@ data class ExhaustivePath(
         }.mkString("")
     }
 
-    val simpleMultiplier: BigDecimal by lazy {
+    val simpleMultiplier: BigDecimal by lazy(LazyThreadSafetyMode.NONE) {
         chain.iterator().map {
             when (it) {
                 is InstantOrder -> it.orderMultiplierSimple
@@ -30,7 +32,7 @@ data class ExhaustivePath(
         }.reduceLeft { a, b -> a * b }
     }
 
-    val amountMultiplier: BigDecimal by lazy {
+    val amountMultiplier: BigDecimal by lazy(LazyThreadSafetyMode.NONE) {
         chain.iterator().map {
             when (it) {
                 is InstantOrder -> it.orderMultiplierAmount
@@ -39,7 +41,7 @@ data class ExhaustivePath(
         }.reduceLeft { a, b -> a * b }
     }
 
-    val avgWaitTime: Long by lazy {
+    val avgWaitTime: Long by lazy(LazyThreadSafetyMode.NONE) {
         chain.iterator().map {
             when (it) {
                 is InstantOrder -> 0
@@ -48,7 +50,7 @@ data class ExhaustivePath(
         }.reduceLeft { a, b -> a + b }
     }
 
-    val maxWaitTime: Long by lazy {
+    val maxWaitTime: Long by lazy(LazyThreadSafetyMode.NONE) {
         chain.iterator().map {
             when (it) {
                 is InstantOrder -> 0
@@ -57,42 +59,41 @@ data class ExhaustivePath(
         }.reduceLeft { a, b -> a + b }
     }
 
-    val recommendedStartAmount: Amount by lazy {
-        var recommendedStartAmount: BigDecimal? = null
+    val recommendedStartAmount: Amount by lazy(LazyThreadSafetyMode.NONE) {
+        var startAmount: BigDecimal? = null
         var targetCurrency = targetPath._2
 
         for (order in chain.reverseIterator()) {
-            when (order) {
-                is DelayedOrder ->
-                    recommendedStartAmount = if (order.market.quoteCurrency == targetCurrency) {
-                        if (recommendedStartAmount == null) {
-                            order.stat.avgAmount.setScale(12, RoundingMode.HALF_EVEN) / order.orderMultiplier
-                        } else {
-                            (order.stat.avgAmount.min(recommendedStartAmount)).setScale(
-                                12,
-                                RoundingMode.HALF_EVEN
-                            ) / order.orderMultiplier
-                        }
+            if (order is DelayedOrder) {
+                val avgAmount = if (order.stat.avgAmount.compareTo(BigDecimal.ZERO) == 0) {
+                    MaxAvg
+                } else {
+                    order.stat.avgAmount
+                }
+
+                startAmount = if (order.market.quoteCurrency == targetCurrency) {
+                    if (startAmount == null) {
+                        buyBaseAmount(avgAmount, order.basePrice)
                     } else {
-                        if (recommendedStartAmount == null) {
-                            order.stat.avgAmount
-                        } else {
-                            (recommendedStartAmount * order.orderMultiplier).min(order.stat.avgAmount)
-                        }
+                        val quoteAmount = startAmount.divide(order.feeMultiplier, 8, RoundingMode.DOWN)
+                        buyBaseAmount(avgAmount.min(quoteAmount), order.basePrice)
                     }
-                else -> run {}
+                } else {
+                    if (startAmount == null) {
+                        avgAmount
+                    } else {
+                        calcQuoteAmount(startAmount, order.basePrice).min(avgAmount)
+                    }
+                }
             }
 
             targetCurrency = order.market.other(targetCurrency)!!
         }
 
-        recommendedStartAmount ?: when (val head = chain.head()) {
-            is DelayedOrder -> head.fromAmount
-            is InstantOrder -> head.fromAmount
-        }
+        startAmount ?: chain.head().fromAmount
     }
 
-    val simpleRisk: Int by lazy {
+    val simpleRisk: Int by lazy(LazyThreadSafetyMode.NONE) {
         var bit = 0
         var orderType = 0
         chain.reverseIterator().forEach { order ->
@@ -106,7 +107,7 @@ data class ExhaustivePath(
         sr[chain.length() - 1][orderType]
     }
 
-    val lastTran: Long by lazy {
+    val lastTran: Long by lazy(LazyThreadSafetyMode.NONE) {
         val now = Instant.now()
         val oldTranTime = chain.iterator().map {
             when (it) {
@@ -116,6 +117,19 @@ data class ExhaustivePath(
         }.min().get()
 
         now.toEpochMilli() - oldTranTime.toEpochMilli()
+    }
+
+    val waitTime: Long by lazy(LazyThreadSafetyMode.NONE) {
+        val avgTime0 = avgWaitTime + maxWaitTime
+        val fromAmount = chain.head().fromAmount
+        val deltaAmount = recommendedStartAmount - fromAmount
+        val deltaTime = if (deltaAmount >= BigDecimal.ZERO) {
+            0L
+        } else {
+            (deltaAmount.abs() * avgTime0.toBigDecimal()).divide(recommendedStartAmount, 0, RoundingMode.DOWN).toLong()
+        }
+
+        avgTime0 + deltaTime
     }
 
     override fun hashCode(): Int = id.hashCode()
@@ -131,5 +145,6 @@ data class ExhaustivePath(
         private val sr3 = arrayOf(0, 100, 110, 200, 0, 210, 210, 300)
         private val sr4 = arrayOf(0, 100, 110, 200, 120, 210, 210, 300, 0, 240, 240, 310, 220, 310, 310, 400)
         private val sr = arrayOf(sr1, sr2, sr3, sr4)
+        private val MaxAvg = Double.MAX_VALUE.toBigDecimal()
     }
 }

@@ -25,6 +25,7 @@ import org.springframework.stereotype.Component
 import reactor.core.publisher.Flux
 import java.math.BigDecimal
 import java.time.*
+import java.time.temporal.ChronoUnit
 
 typealias MarketIntMap = Map<MarketId, Market>
 typealias MarketStringMap = Map<Market, MarketId>
@@ -132,7 +133,8 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                                         val (available, onOrders) = availableOnOrdersBalance
                                         val newBalance = available + delta.amount
-                                        availableAndOnOrderBalances = availableAndOnOrderBalances.put(currency, tuple(newBalance, onOrders))
+                                        availableAndOnOrderBalances =
+                                            availableAndOnOrderBalances.put(currency, tuple(newBalance, onOrders))
 
                                         notifySubscribers = true
                                     }
@@ -317,7 +319,8 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                 val tradesFlow = FlowScope.flux {
                     while (isActive) {
                         try {
-                            var trade1 = poloniexApi.tradeHistoryPublic(market).awaitSingle().run {
+                            val tradeFromDate = Instant.now().minus(90, ChronoUnit.MINUTES)
+                            var trade1 = poloniexApi.tradeHistoryPublic(market, tradeFromDate).awaitSingle().run {
                                 var sellTrades = Queue.empty<SimpleTrade>()
                                 var buyTrades = Queue.empty<SimpleTrade>()
 

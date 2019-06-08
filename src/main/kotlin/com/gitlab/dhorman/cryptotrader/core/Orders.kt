@@ -50,13 +50,13 @@ object Orders {
             }
 
             val price = orderBook.asks.head()._1
-            orderMultiplierSimple = BigDecimal.ONE.divide(price, 12, RoundingMode.DOWN) * takerFeeMultiplier // TODO: Review rounding
+            orderMultiplierSimple = takerFeeMultiplier.divide(price, 8, RoundingMode.DOWN)
         } else {
             if (orderBook.bids.length() == 0) return null
 
             for ((basePrice, quoteAmount) in orderBook.bids) {
                 if (unusedFromCurrencyAmount <= quoteAmount) {
-                    targetCurrencyAmount += unusedFromCurrencyAmount * basePrice
+                    targetCurrencyAmount += sellBaseAmount(unusedFromCurrencyAmount, basePrice, takerFeeMultiplier)
                     trades = trades.prepend(InstantOrder.Companion.Trade(basePrice, unusedFromCurrencyAmount))
                     unusedFromCurrencyAmount = BigDecimal.ZERO
                     break
@@ -68,10 +68,10 @@ object Orders {
             }
 
             val price = orderBook.bids.head()._1
-            orderMultiplierSimple = price * takerFeeMultiplier // TODO: Review rounding
+            orderMultiplierSimple = (price * takerFeeMultiplier).setScale(8, RoundingMode.DOWN)
         }
 
-        orderMultiplierAmount = targetCurrencyAmount.divide(initCurrencyAmount, 12, RoundingMode.DOWN) // TODO: Review rounding
+        orderMultiplierAmount = targetCurrencyAmount.divide(initCurrencyAmount, 8, RoundingMode.DOWN)
 
         return InstantOrder(
             market,
@@ -113,7 +113,7 @@ object Orders {
 
             quoteAmount = calcQuoteAmount(fromAmount, basePrice)
             toAmount = buyQuoteAmount(quoteAmount, makerFeeMultiplier)
-            orderMultiplier = makerFeeMultiplier.divide(basePrice, 12, RoundingMode.DOWN) // TODO: Review rounding
+            orderMultiplier = toAmount.divide(fromAmount, 8, RoundingMode.DOWN)
         } else {
             if (orderBook.asks.length() == 0) return null
 
@@ -123,7 +123,7 @@ object Orders {
 
             quoteAmount = fromAmount
             toAmount = sellBaseAmount(quoteAmount, basePrice, makerFeeMultiplier)
-            orderMultiplier = makerFeeMultiplier * basePrice  // TODO: Review rounding
+            orderMultiplier = toAmount.divide(fromAmount, 8, RoundingMode.DOWN)
         }
 
         return DelayedOrder(
@@ -133,59 +133,7 @@ object Orders {
             fromAmount,
             basePrice,
             quoteAmount,
-            toAmount,
-            orderTpe,
-            orderMultiplier,
-            stat
-        )
-    }
-
-    // TODO: fix rounding
-    fun getDelayedOrderReverse(
-        market: Market,
-        targetCurrency: Currency,
-        toAmount: Amount,
-        makerFeeMultiplier: BigDecimal,
-        orderBook: OrderBookAbstract,
-        stat: TradeStatOrder
-    ): DelayedOrder? {
-        val fromCurrency = market.other(targetCurrency) ?: return null
-        val orderTpe = market.orderType(targetCurrency) ?: return null
-
-        val basePrice: Price
-        val quoteAmount: Amount
-        val fromAmount: Amount
-        val orderMultiplier: BigDecimal
-
-        if (orderTpe == OrderType.Buy) {
-            if (orderBook.bids.length() == 0) return null
-
-            basePrice = orderBook.bids.head()._1.cut8add1
-
-            if (orderBook.asks.length() > 0 && basePrice.compareTo(orderBook.asks.head()._1) == 0) return null
-
-            quoteAmount = toAmount.setScale(12, RoundingMode.HALF_EVEN) / makerFeeMultiplier
-            fromAmount = quoteAmount * basePrice
-            orderMultiplier = makerFeeMultiplier.setScale(12, RoundingMode.HALF_EVEN) / basePrice
-        } else {
-            if (orderBook.asks.length() == 0) return null
-
-            basePrice = orderBook.asks.head()._1.cut8minus1
-
-            if (orderBook.bids.length() > 0 && basePrice.compareTo(orderBook.bids.head()._1) == 0) return null
-
-            quoteAmount = toAmount.setScale(12, RoundingMode.HALF_EVEN) / (basePrice * makerFeeMultiplier)
-            fromAmount = quoteAmount
-            orderMultiplier = makerFeeMultiplier * basePrice
-        }
-
-        return DelayedOrder(
-            market,
-            fromCurrency,
-            targetCurrency,
-            fromAmount,
-            basePrice,
-            quoteAmount,
+            makerFeeMultiplier,
             toAmount,
             orderTpe,
             orderMultiplier,
@@ -209,7 +157,8 @@ sealed class InstantDelayedOrder(
     open val targetCurrency: Currency,
     open val fromAmount: Amount,
     open val toAmount: Amount,
-    open val orderType: OrderType
+    open val orderType: OrderType,
+    open val feeMultiplier: BigDecimal
 )
 
 data class InstantOrder(
@@ -222,9 +171,9 @@ data class InstantOrder(
     val orderMultiplierSimple: BigDecimal,
     val orderMultiplierAmount: BigDecimal,
     val unusedFromCurrencyAmount: Amount,
-    val feeMultiplier: BigDecimal,
+    override val feeMultiplier: BigDecimal,
     val trades: List<InstantOrder.Companion.Trade> // TODO: Change to BareTrade
-) : InstantDelayedOrder(market, fromCurrency, targetCurrency, fromAmount, toAmount, orderType) {
+) : InstantDelayedOrder(market, fromCurrency, targetCurrency, fromAmount, toAmount, orderType, feeMultiplier) {
     companion object {
         // TODO: Replace with BareTrade
         data class Trade(
@@ -241,8 +190,9 @@ data class DelayedOrder(
     override val fromAmount: Amount,
     val basePrice: Price,
     val quoteAmount: Amount,
+    override val feeMultiplier: BigDecimal,
     override val toAmount: Amount,
     override val orderType: OrderType,
     val orderMultiplier: BigDecimal,
     val stat: TradeStatOrder
-) : InstantDelayedOrder(market, fromCurrency, targetCurrency, fromAmount, toAmount, orderType)
+) : InstantDelayedOrder(market, fromCurrency, targetCurrency, fromAmount, toAmount, orderType, feeMultiplier)
