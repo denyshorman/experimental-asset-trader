@@ -110,7 +110,7 @@ class PoloniexTrader(
 
         val sleepingTransactions = transactionsDao.getAll()
 
-        for ((id, markets) in transactionsDao.getAll()) {
+        for ((id, markets) in sleepingTransactions) {
             val startMarketIdx = partiallyCompletedMarketIndex(markets)!!
             val initAmount = markets.first().fromAmount(markets, 0)
             val targetAmount = markets.last().targetAmount(markets, markets.length() - 1)
