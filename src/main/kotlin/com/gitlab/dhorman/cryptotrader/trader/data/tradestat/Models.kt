@@ -64,6 +64,8 @@ data class Trade2State(
 ) {
     companion object {
         private const val tsNull: Long = -1
+        private val MaxValue: BigDecimal = Long.MAX_VALUE.toBigDecimal()
+        private val MinValue: BigDecimal = Long.MIN_VALUE.toBigDecimal()
 
         private fun subSquare(a: BigDecimal, b: BigDecimal): BigDecimal {
             val x = a - b
@@ -92,14 +94,14 @@ data class Trade2State(
                 sumAmount = BigDecimal.ZERO,
                 varianceSumAmount = BigDecimal.ZERO,
 
-                ttwAverageMs = Double.MAX_VALUE.toBigDecimal(),
-                ttwVariance = Double.MAX_VALUE.toBigDecimal(),
-                ttwStdDev = Double.MAX_VALUE.toBigDecimal(),
-                minAmount = Double.MAX_VALUE.toBigDecimal(),
-                maxAmount = Double.MIN_VALUE.toBigDecimal(),
+                ttwAverageMs = MaxValue,
+                ttwVariance = MaxValue,
+                ttwStdDev = MaxValue,
+                minAmount = MaxValue,
+                maxAmount = MinValue,
                 avgAmount = BigDecimal.ZERO,
-                varianceAmount = Double.MAX_VALUE.toBigDecimal(),
-                stdDevAmount = Double.MAX_VALUE.toBigDecimal(),
+                varianceAmount = MaxValue,
+                stdDevAmount = MaxValue,
                 firstTranTs = Instant.EPOCH,
                 lastTranTs = Instant.EPOCH
             )
@@ -226,7 +228,11 @@ data class Trade2State(
                 }
 
                 val size = new.length()
-                ttwAverageMs = ttwSumMs.setScale(12, RoundingMode.HALF_EVEN) / (size - 1).toBigDecimal()
+                ttwAverageMs = if (ttwSumMs.compareTo(BigDecimal.ZERO) == 0) {
+                    lastTranTs.toEpochMilli().toBigDecimal()
+                } else {
+                    ttwSumMs.setScale(12, RoundingMode.HALF_EVEN) / (size - 1).toBigDecimal()
+                }
                 ttwVariance = ttwVarianceSum.setScale(12, RoundingMode.HALF_EVEN) / (size - 1).toBigDecimal()
                 ttwStdDev = ttwVariance.sqrt(MathContext.DECIMAL128).setScale(0, RoundingMode.DOWN)
                 avgAmount = sumAmount.setScale(12, RoundingMode.HALF_EVEN) / size.toBigDecimal()
@@ -268,8 +274,8 @@ data class Trade2State(
                     val ttwAverageMs: BigDecimal
                     val ttwVariance: BigDecimal
                     val ttwStdDev: BigDecimal
-                    var minAmount: BigDecimal = Double.MAX_VALUE.toBigDecimal()
-                    var maxAmount: BigDecimal = Double.MIN_VALUE.toBigDecimal()
+                    var minAmount: BigDecimal = MaxValue
+                    var maxAmount: BigDecimal = MinValue
                     val avgAmount: BigDecimal
                     val varianceAmount: BigDecimal
                     val stdDevAmount: BigDecimal
@@ -293,7 +299,11 @@ data class Trade2State(
 
                     a = tsNull
 
-                    ttwAverageMs = ttwSumMs.setScale(12, RoundingMode.HALF_EVEN) / (tradesSize - 1).toBigDecimal()
+                    ttwAverageMs = if (ttwSumMs.compareTo(BigDecimal.ZERO) == 0) {
+                        lastTranTs.toEpochMilli().toBigDecimal()
+                    } else {
+                        ttwSumMs.setScale(12, RoundingMode.HALF_EVEN) / (tradesSize - 1).toBigDecimal()
+                    }
                     avgAmount = sumAmount.setScale(12, RoundingMode.HALF_EVEN) / tradesSize.toBigDecimal()
 
                     for (t in trades) {
