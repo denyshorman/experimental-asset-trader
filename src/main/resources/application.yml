@@ -24,7 +24,7 @@ spring:
   devtools:
     livereload:
       enabled: true
-  rsocket:
-    server:
-      mapping-path: /api/ws
-      transport: websocket
+#  rsocket:
+#    server:
+#      mapping-path: /api/ws
+#      transport: websocket

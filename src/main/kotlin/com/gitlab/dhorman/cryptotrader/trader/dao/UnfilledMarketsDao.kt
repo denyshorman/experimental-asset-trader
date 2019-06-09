@@ -11,14 +11,12 @@ import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Repository
-import org.springframework.transaction.reactive.TransactionalOperator
-import reactor.core.publisher.Mono
 import java.math.BigDecimal
 
 @Repository
 class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: DatabaseClient) {
     suspend fun get(initFromCurrency: Currency, fromCurrency: Currency): List<Tuple2<Amount, Amount>> {
-        return databaseClient.execute(
+        return databaseClient.execute().sql(
             """
             SELECT init_currency_amount, current_currency_amount
             FROM poloniex_unfilled_markets
@@ -40,7 +38,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
     }
 
     suspend fun remove(initFromCurrency: Currency, fromCurrency: Currency) {
-        databaseClient.execute("DELETE FROM poloniex_unfilled_markets WHERE init_currency = $1 AND current_currency = $2")
+        databaseClient.execute().sql("DELETE FROM poloniex_unfilled_markets WHERE init_currency = $1 AND current_currency = $2")
             .bind(0, initFromCurrency)
             .bind(1, fromCurrency)
             .then()
@@ -53,7 +51,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
         currentCurrency: Currency,
         currentCurrencyAmount: Amount
     ): Long {
-        return databaseClient.execute(
+        return databaseClient.execute().sql(
             """
             INSERT INTO poloniex_unfilled_markets(init_currency, init_currency_amount, current_currency, current_currency_amount)
             VALUES ($1, $2, $3, $4)

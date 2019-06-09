@@ -2,7 +2,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 group = "com.gitlab.dhorman"
 version = "1.0.0-SNAPSHOT"
-java.sourceCompatibility = JavaVersion.VERSION_12
+java.sourceCompatibility = JavaVersion.VERSION_1_8
 
 val kotlinVersion = "1.3.31"
 val kotlinCoroutinesVersion = "1.2.1"
@@ -12,7 +12,7 @@ val swaggerVersion = "3.0.0-SNAPSHOT"
 plugins {
     kotlin("jvm") version "1.3.31"
     kotlin("plugin.spring") version "1.3.31"
-    id("org.springframework.boot") version "2.2.0.BUILD-SNAPSHOT"
+    id("org.springframework.boot") version "2.2.0.M3"
 }
 
 apply(plugin = "io.spring.dependency-management")
@@ -51,8 +51,8 @@ dependencies {
     implementation("io.springfox:springfox-swagger2:$swaggerVersion")
     implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
-    implementation("org.springframework.data:spring-data-r2dbc:1.0.0.BUILD-SNAPSHOT")
-    implementation("io.r2dbc:r2dbc-postgresql:0.8.0.BUILD-SNAPSHOT")
+    implementation("org.springframework.data:spring-data-r2dbc:1.0.0.M2")
+    implementation("io.r2dbc:r2dbc-postgresql:0.8.0.M8")
     implementation("org.springframework.plugin:spring-plugin-core:1.2.0.RELEASE") // TODO: Remove when springfox and spring will be released
 
     runtimeOnly("org.springframework.boot:spring-boot-devtools")
