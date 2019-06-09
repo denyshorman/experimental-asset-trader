@@ -75,10 +75,28 @@ class PoloniexTrader(
                 .onBackpressureDrop()
 
             tickerFlow.collect {
+                logger.debug { "Trying to find new transaction..." }
+
                 val (startCurrency, requestedAmount) = requestBalanceForTransaction() ?: return@collect
+
+                logger.debug { "Requested currency $startCurrency and amount $requestedAmount for transaction" }
 
                 val bestPath =
                     selectBestPath(requestedAmount, startCurrency, requestedAmount, primaryCurrencies) ?: return@collect
+
+                logger.debug {
+                    val startAmount = bestPath.chain.head().fromAmount
+                    val endAmount = bestPath.chain.last().toAmount
+                    val shortPath = "${bestPath.targetPath._1}->${bestPath.targetPath._2}"
+                    val longPath = bestPath.chain.iterator().map {
+                        when (it) {
+                            is InstantOrder -> "${it.market}0"
+                            is DelayedOrder -> "${it.market}1"
+                        }
+                    }.mkString("->")
+
+                    "Found optimal path: $shortPath, $longPath, using amount $startAmount with potential profit $endAmount"
+                }
 
                 startPathTransaction(bestPath, tranIntentScope)
             }
@@ -88,6 +106,10 @@ class PoloniexTrader(
     }
 
     private suspend fun resumeSleepingTransactions(scope: CoroutineScope) {
+        logger.debug { "Trying to resume sleeping transactions..." }
+
+        val sleepingTransactions = transactionsDao.getAll()
+
         for ((id, markets) in transactionsDao.getAll()) {
             val startMarketIdx = partiallyCompletedMarketIndex(markets)!!
             val initAmount = markets.first().fromAmount(markets, 0)
@@ -120,6 +142,8 @@ class PoloniexTrader(
                 TransactionIntent(id, markets, startMarketIdx, scope).start()
             }
         }
+
+        logger.debug { "Sleeping transactions restored: ${sleepingTransactions.size}" }
     }
 
     private fun partiallyCompletedMarketIndex(markets: Array<TranIntentMarket>): Int? {
@@ -354,20 +378,22 @@ class PoloniexTrader(
     private suspend fun requestBalanceForTransaction(): Tuple2<Currency, Amount>? {
         // TODO: Review requestBalanceForTransaction algorithm
         val usedBalances = transactionsDao.balancesInUse(primaryCurrencies)
+            .groupBy({ it._1 }, { it._2 })
+            .mapValues { it.value.reduce { a, b -> a + b } }
+
         val allBalances = data.balances.awaitFirst()
 
-        val availableBalances = usedBalances.toVavrStream()
-            .map { (currency, balanceInUse) ->
-                allBalances.get(currency)
-                    .map { (available, onOrders) ->
-                        val reservedAmount = onOrders - balanceInUse
-                        val availableAmount =
-                            available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
-                        tuple(currency, availableAmount)
-                    }
+        val availableBalances = allBalances.toVavrStream()
+            .filter { primaryCurrencies.contains(it._1) }
+            .map { currencyAvailableAndOnOrders ->
+                val (currency, availableAndOnOrders) = currencyAvailableAndOnOrders
+                val (available, onOrders) = availableAndOnOrders
+                val balanceInUse = usedBalances.getOrDefault(currency, BigDecimal.ZERO)
+                val reservedAmount = onOrders - balanceInUse
+                val availableAmount =
+                    available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
+                tuple(currency, availableAmount)
             }
-            .filter { it.isDefined }
-            .map { it.get() }
             .filter { it._2 > BigDecimal(2) }
             .firstOrNull()
 

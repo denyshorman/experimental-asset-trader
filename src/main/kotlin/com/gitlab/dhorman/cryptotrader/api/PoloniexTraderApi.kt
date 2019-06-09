@@ -13,6 +13,7 @@ import io.swagger.annotations.ApiOperation
 import io.vavr.Tuple2
 import io.vavr.collection.Array
 import io.vavr.collection.Map
+import io.vavr.collection.TreeSet
 import io.vavr.kotlin.toVavrList
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.http.MediaType
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import reactor.core.scheduler.Schedulers
+import java.math.BigDecimal
 import java.time.Duration
 import java.util.*
 
@@ -63,10 +65,39 @@ class PoloniexTraderApi(
             .awaitSingle()
     }
 
+    @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/paths2"])
+    suspend fun pathsSnapshot2(
+        @RequestParam fromCurrency: Currency,
+        @RequestParam fromAmount: Amount,
+        @RequestParam endCurrencies: List<Currency>
+    ): TreeSet<ExhaustivePath> {
+        return poloniexTrader.indicators.getPaths(
+            fromCurrency,
+            fromAmount,
+            endCurrencies.toVavrList(),
+            fun(p): Boolean {
+                val targetMarket = p.chain.lastOrNull() ?: return false
+                return fromAmount < targetMarket.toAmount
+            },
+            Comparator { p0, p1 ->
+                if (p0.id == p1.id) {
+                    0
+                } else {
+                    p0.waitTime.compareTo(p1.waitTime)
+                }
+            }).take(100)
+    }
+
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active"])
     suspend fun getActiveTransactions(): List<Tuple2<UUID, Array<TranIntentMarket>>> {
         return transactionsDao.getAll()
     }
+
+    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/balances-in-use"])
+    suspend fun getBalancesInUse(@RequestParam primaryCurrencies: List<Currency>): List<Tuple2<Currency, BigDecimal>> {
+        return transactionsDao.balancesInUse(primaryCurrencies.toVavrList())
+    }
+
 
     //@MessageMapping("/tickers")
     @RequestMapping(method = [RequestMethod.GET], value = ["/tickers"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
