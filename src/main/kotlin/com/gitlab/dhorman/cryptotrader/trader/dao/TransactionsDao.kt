@@ -13,7 +13,6 @@ import io.vavr.collection.Array
 import io.vavr.collection.Traversable
 import io.vavr.kotlin.toVavrStream
 import io.vavr.kotlin.tuple
-import kotlinx.coroutines.reactive.awaitFirstOrDefault
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.beans.factory.annotation.Qualifier
@@ -91,7 +90,7 @@ class TransactionsDao(
             .fetch().all()
             .map { it["order_id"] as Long }
             .collectList()
-            .awaitFirstOrDefault(emptyList())
+            .awaitSingle()
     }
 
     suspend fun getTimestampLatestOrderId(tranId: UUID): Instant? {
@@ -131,7 +130,7 @@ class TransactionsDao(
                 )
             }
             .collectList()
-            .awaitFirstOrDefault(emptyList())
+            .awaitSingle()
     }
 
     suspend fun addCompleted(activeTranId: UUID, markets: Array<TranIntentMarket>) {
@@ -173,6 +172,6 @@ class TransactionsDao(
                 )
             }
             .collectList()
-            .awaitFirstOrDefault(emptyList())
+            .awaitSingle()
     }
 }

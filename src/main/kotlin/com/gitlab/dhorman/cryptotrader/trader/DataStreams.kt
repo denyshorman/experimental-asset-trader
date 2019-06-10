@@ -578,7 +578,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                             }
                         }
 
-                        poloniexApi.tickerStream.onBackpressureDrop().collect { ticker ->
+                        poloniexApi.tickerStream.onBackpressureLatest().collect { ticker ->
                             val marketId = markets.awaitFirst()._1.getOrNull(ticker.id)
 
                             if (marketId != null) {

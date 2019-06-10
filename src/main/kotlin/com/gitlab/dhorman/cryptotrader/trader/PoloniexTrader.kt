@@ -65,14 +65,14 @@ class PoloniexTrader(
         logger.info("Start trading")
 
         val tranIntentScope =
-            CoroutineScope(Schedulers.parallel().asCoroutineDispatcher() + SupervisorJob(coroutineContext[Job]))
+            CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
 
         resumeSleepingTransactions(tranIntentScope)
 
         try {
             val tickerFlow = Flux.interval(Duration.ofSeconds(60))
                 .startWith(0)
-                .onBackpressureDrop()
+                .onBackpressureLatest()
 
             tickerFlow.collect {
                 logger.debug { "Trying to find new transaction..." }
@@ -186,7 +186,7 @@ class PoloniexTrader(
             override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
         }).transactional(FlowScope.mono {
             val (available, onOrders) = data.balances.awaitFirst().getOrNull(fromCurrency) ?: return@mono false
-            val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency) ?: return@mono false
+            val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency) ?: tuple(fromCurrency, BigDecimal.ZERO)
             val reservedAmount = onOrders - amountInUse
             val availableAmount = available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
 
@@ -754,6 +754,7 @@ class PoloniexTrader(
             try {
                 // Fetch uncaught trades
                 val predefinedOrderIds = transactionsDao.getOrderIds(id)
+
                 if (predefinedOrderIds.isNotEmpty()) {
                     latestOrderIdsChannel.send(Queue.ofAll(predefinedOrderIds).reverse())
 
