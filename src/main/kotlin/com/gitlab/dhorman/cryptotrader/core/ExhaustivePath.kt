@@ -157,6 +157,15 @@ data class ExhaustivePath(
         avgTime0 + deltaTime
     }
 
+    fun longPathString(): String {
+        return this.chain.iterator().map {
+            when (it) {
+                is InstantOrder -> "${it.market}0"
+                is DelayedOrder -> "${it.market}1"
+            }
+        }.mkString("->")
+    }
+
     override fun hashCode(): Int = id.hashCode()
 
     override fun equals(other: Any?): Boolean = when (other) {

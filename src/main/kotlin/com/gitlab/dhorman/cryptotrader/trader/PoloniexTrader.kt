@@ -26,7 +26,6 @@ import kotlinx.coroutines.reactive.awaitFirst
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.reactive.collect
-import kotlinx.coroutines.reactor.asCoroutineDispatcher
 import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
@@ -35,7 +34,6 @@ import org.springframework.transaction.ReactiveTransactionManager
 import org.springframework.transaction.TransactionDefinition
 import org.springframework.transaction.reactive.TransactionalOperator
 import reactor.core.publisher.Flux
-import reactor.core.scheduler.Schedulers
 import java.io.IOException
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -45,8 +43,6 @@ import java.time.Instant
 import java.util.*
 import kotlin.Comparator
 
-
-//TODO: Add more logging logging and research async logging
 @Service
 class PoloniexTrader(
     private val poloniexApi: PoloniexApi,
@@ -64,13 +60,12 @@ class PoloniexTrader(
     fun start(scope: CoroutineScope) = scope.launch {
         logger.info("Start trading")
 
-        val tranIntentScope =
-            CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
+        val tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
 
         resumeSleepingTransactions(tranIntentScope)
 
         try {
-            val tickerFlow = Flux.interval(Duration.ofSeconds(60))
+            val tickerFlow = Flux.interval(Duration.ofMinutes(120))
                 .startWith(0)
                 .onBackpressureLatest()
 
@@ -87,20 +82,16 @@ class PoloniexTrader(
                 logger.debug {
                     val startAmount = bestPath.chain.head().fromAmount
                     val endAmount = bestPath.chain.last().toAmount
-                    val shortPath = "${bestPath.targetPath._1}->${bestPath.targetPath._2}"
-                    val longPath = bestPath.chain.iterator().map {
-                        when (it) {
-                            is InstantOrder -> "${it.market}0"
-                            is DelayedOrder -> "${it.market}1"
-                        }
-                    }.mkString("->")
+                    val longPath = bestPath.longPathString()
 
-                    "Found optimal path: $shortPath, $longPath, using amount $startAmount with potential profit $endAmount"
+                    "Found optimal path: $longPath, using amount $startAmount with potential profit $endAmount"
                 }
 
                 startPathTransaction(bestPath, tranIntentScope)
             }
         } finally {
+            logger.debug { "Trying to cancel all transactions..." }
+
             tranIntentScope.cancel()
         }
     }
@@ -155,6 +146,12 @@ class PoloniexTrader(
         return if (i == markets.length()) null else i
     }
 
+    private fun Array<TranIntentMarket>.pathString(): String {
+        return this.iterator()
+            .map { "${it.market}${if (it.orderSpeed == OrderSpeed.Instant) "0" else "1"}" }
+            .mkString("->")
+    }
+
     private suspend fun selectBestPath(
         initAmount: Amount,
         fromCurrency: Currency,
@@ -168,7 +165,7 @@ class PoloniexTrader(
             if (p0.id == p1.id) {
                 0
             } else {
-                p0.waitTime.compareTo(p1.waitTime)
+                p1.amountMultiplier.compareTo(p0.amountMultiplier)
             }
         })
 
@@ -413,6 +410,8 @@ class PoloniexTrader(
         private val TranIntentScope: CoroutineScope
     ) {
         fun start(): Job = TranIntentScope.launch {
+            logger.debug { "Starting path traversal for ${markets.pathString()}" }
+
             val currentMarket = markets[marketIdx] as TranIntentMarketPartiallyCompleted
             val orderBookFlow = data.getOrderBookFlowBy(currentMarket.market)
             val feeFlow = data.fee
@@ -476,7 +475,8 @@ class PoloniexTrader(
                 OrderSpeed.Delayed -> run {
                     var updatedMarkets = modifiedMarkets
                     val updatedMarketsChannel = ConflatedBroadcastChannel(updatedMarkets)
-                    val profitMonitoringJob = startProfitMonitoring(updatedMarketsChannel)
+                    val cancelByProfitMonitoringJob = ConflatedBroadcastChannel(false)
+                    val profitMonitoringJob = startProfitMonitoring(updatedMarketsChannel, cancelByProfitMonitoringJob)
 
                     try {
                         while (isActive) {
@@ -537,7 +537,7 @@ class PoloniexTrader(
                     } finally {
                         withContext(NonCancellable) {
                             // Handle unfilled amount
-                            profitMonitoringJob.cancelAndJoin()
+                            if (!cancelByProfitMonitoringJob.value) profitMonitoringJob.cancel()
 
                             val initMarket = updatedMarkets[0]
                             val currMarket = updatedMarkets[marketIdx]
@@ -676,6 +676,8 @@ class PoloniexTrader(
                     }
 
                     val transaction = try {
+                        logger.debug { "Trying to $orderType on market $market with price ${firstSimulatedTrade.price} and amount $expectQuoteAmount" }
+
                         withContext(NonCancellable) {
                             if (orderType == OrderType.Buy) {
                                 poloniexApi.buy(
@@ -723,6 +725,8 @@ class PoloniexTrader(
                         if (logger.isDebugEnabled) logger.error(e.message, e)
                         continue
                     }
+
+                    logger.debug { "Instant $orderType operation was successful. Amount filled with ${transaction.trades.length()} trades" }
 
                     for (trade in transaction.trades) {
                         unfilledAmount -= if (orderType == OrderType.Buy) {
@@ -807,7 +811,7 @@ class PoloniexTrader(
 
                     // Trades monitoring
                     launch {
-                        if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Starting trades consumption...")
+                        logger.debug { "[$market, $orderType] Starting trades consumption..." }
 
                         var unfilledAmount = unfilledAmountChannel.value
 
@@ -815,14 +819,12 @@ class PoloniexTrader(
                             .onBackpressureBuffer().collect { trade ->
                                 if (trade !is TradeNotification) return@collect
 
-                                if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Trade received: $trade")
-
                                 val orderIds = latestOrderIdsChannel.value
 
                                 for (orderId in orderIds.reverseIterator()) {
                                     if (orderId != trade.orderId) continue
 
-                                    if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Trade matched. Sending trade to the client..")
+                                    logger.debug { "[$market, $orderType] Trade matched. Sending trade to the client.." }
 
                                     unfilledAmount -= if (orderType == OrderType.Buy) {
                                         buyBaseAmount(trade.amount, trade.price)
@@ -858,12 +860,15 @@ class PoloniexTrader(
                         }
 
                         suspend fun placeAndHandleOrder() = kotlinx.coroutines.withContext(NonCancellable) {
-                            if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Placing new order with amount ${unfilledAmountChannel.value}...")
+                            logger.debug { "[$market, $orderType] Placing new order with amount ${unfilledAmountChannel.value}..." }
 
                             val placeOrderResult = placeOrder(market, orderBook, orderType, unfilledAmountChannel.value)
+
+                            logger.debug { "[$market, $orderType] Order placed successfully" }
+
                             handlePlaceMoveOrderResult(placeOrderResult)
 
-                            if (logger.isTraceEnabled) logger.trace("[$market, $orderType] New order placed: $lastOrderId, $prevPrice")
+                            logger.debug { "[$market, $orderType] New order placed: $lastOrderId, $prevPrice" }
                         }
 
                         try {
@@ -874,12 +879,23 @@ class PoloniexTrader(
 
                                 while (true) {
                                     try {
+                                        logger.debug { "[$market, $orderType] Checking order status for orderId $lastOrderId" }
+
                                         orderStatus = poloniexApi.orderStatus(lastOrderId!!)
+
+                                        logger.debug {
+                                            if (orderStatus != null) {
+                                                "[$market, $orderType] Order $lastOrderId is still active"
+                                            } else {
+                                                "[$market, $orderType] Order $lastOrderId not found in order book"
+                                            }
+                                        }
+
                                         break
                                     } catch (e: CancellationException) {
                                         throw e
                                     } catch (e: Exception) {
-                                        if (logger.isDebugEnabled) logger.warn("Can't get order status for order id ${lastOrderId!!}: ${e.message}")
+                                        logger.debug { "Can't get order status for order id $lastOrderId: ${e.message}" }
                                         delay(1000)
                                     }
                                 }
@@ -893,7 +909,7 @@ class PoloniexTrader(
 
                             orderBook.onBackpressureLatest().takeWhile { isActive }.collect { book ->
                                 kotlinx.coroutines.withContext(NonCancellable) {
-                                    if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Trying to move order $lastOrderId...")
+                                    logger.debug { "[$market, $orderType] Order book changed" }
 
                                     val resp =
                                         moveOrder(
@@ -907,7 +923,7 @@ class PoloniexTrader(
 
                                     handlePlaceMoveOrderResult(resp)
 
-                                    if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Order $lastOrderId moved to ${resp._1} with price ${resp._2}")
+                                    logger.debug { "[$market, $orderType] Order $lastOrderId moved to ${resp._1} with price ${resp._2}" }
                                 }
                             }
                         } finally {
@@ -915,7 +931,10 @@ class PoloniexTrader(
                                 if (lastOrderId != null) {
                                     while (true) {
                                         try {
+                                            logger.debug { "[$market, $orderType] Cancelling order $lastOrderId" }
+
                                             poloniexApi.cancelOrder(lastOrderId!!)
+
                                             break
                                         } catch (e: OrderCompletedOrNotExistException) {
                                             break
@@ -942,11 +961,11 @@ class PoloniexTrader(
 
                     // Completion monitoring
                     launch {
-                        if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Start monitoring for all trades completion...")
+                        logger.debug { "[$market, $orderType] Start monitoring for all trades completion..." }
 
                         unfilledAmountChannel.consumeEach {
                             if (it.compareTo(BigDecimal.ZERO) == 0) {
-                                if (logger.isTraceEnabled) logger.trace("[$market, $orderType] Amount = 0 => all trades received. Closing...")
+                                logger.debug { "[$market, $orderType] Amount = 0 => all trades received. Closing..." }
                                 tradesJob?.cancel()
                                 return@launch
                             }
@@ -1026,10 +1045,15 @@ class PoloniexTrader(
                         }
                     } ?: return null
 
+                    val quoteAmount = when (orderType) {
+                        OrderType.Buy -> calcQuoteAmount(amountChannel.value, newPrice)
+                        OrderType.Sell -> amountChannel.value
+                    }
+
                     val moveOrderResult = poloniexApi.moveOrder(
                         lastOrderId,
                         newPrice,
-                        amountChannel.value,
+                        quoteAmount,
                         BuyOrderType.PostOnly
                     )
 
@@ -1123,9 +1147,14 @@ class PoloniexTrader(
                         }
                     } ?: throw OrderBookEmptyException(orderType)
 
+                    val quoteAmount = when (orderType) {
+                        OrderType.Buy -> calcQuoteAmount(amountValue, price)
+                        OrderType.Sell -> amountValue
+                    }
+
                     val result = when (orderType) {
-                        OrderType.Buy -> poloniexApi.buy(market, price, amountValue, BuyOrderType.PostOnly)
-                        OrderType.Sell -> poloniexApi.sell(market, price, amountValue, BuyOrderType.PostOnly)
+                        OrderType.Buy -> poloniexApi.buy(market, price, quoteAmount, BuyOrderType.PostOnly)
+                        OrderType.Sell -> poloniexApi.sell(market, price, quoteAmount, BuyOrderType.PostOnly)
                     }
 
                     return tuple(result.orderId, price)
@@ -1212,7 +1241,10 @@ class PoloniexTrader(
             return tuple(unusedFromAmount, trades)
         }
 
-        private fun CoroutineScope.startProfitMonitoring(updatedMarketsChannel: ConflatedBroadcastChannel<Array<TranIntentMarket>>): Job {
+        private fun CoroutineScope.startProfitMonitoring(
+            updatedMarketsChannel: ConflatedBroadcastChannel<Array<TranIntentMarket>>,
+            cancelByProfitMonitoringJob: ConflatedBroadcastChannel<Boolean>
+        ): Job {
             val parentJob = coroutineContext[Job]
 
             return launch(context = Job()) {
@@ -1225,23 +1257,54 @@ class PoloniexTrader(
                     val initAmount = updatedMarkets.first().fromAmount(updatedMarkets, 0)
                     val targetAmount = updatedMarkets.last().targetAmount(updatedMarkets, updatedMarkets.length() - 1)
 
-                    if (initAmount > targetAmount || Duration.between(startTime, Instant.now()).toMinutes() > 40) {
+                    val notProfitable = initAmount > targetAmount
+                    val timeout = Duration.between(startTime, Instant.now()).toMinutes() > 40
+
+                    if (notProfitable || timeout) {
+                        logger.debug {
+                            val path = updatedMarkets.pathString()
+
+                            val reason = if (notProfitable) {
+                                "path is not profitable (${targetAmount - initAmount})"
+                            } else {
+                                "timeout has occurred"
+                            }
+
+                            "Cancelling path $path because $reason"
+                        }
+
+                        cancelByProfitMonitoringJob.send(true)
                         parentJob?.cancelAndJoin()
+
                         updatedMarkets = updatedMarketsChannel.value
                         val currMarket = updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted
                         val fromCurrency = currMarket.fromCurrency
                         val fromCurrencyAmount = currMarket.fromAmount
                         var bestPath: Array<TranIntentMarket>?
+
                         while (true) {
+                            logger.debug { "Trying to find new path for ${updatedMarkets.pathString()}..." }
+
                             bestPath = findNewPath(initAmount, fromCurrency, fromCurrencyAmount, primaryCurrencies)
-                            if (bestPath != null) break
+
+                            if (bestPath != null) {
+                                logger.debug { "New path found ${bestPath.pathString()}" }
+                                break
+                            } else {
+                                logger.debug { "Path not found for ${updatedMarkets.pathString()}" }
+                            }
+
                             delay(60000)
                         }
+
                         val changedMarkets = updateMarketsWithBestPath(updatedMarkets, marketIdx, bestPath!!)
+
                         withContext(NonCancellable) {
                             transactionsDao.update(id, changedMarkets, marketIdx)
                         }
+
                         if (!isActive) break
+
                         TransactionIntent(id, changedMarkets, marketIdx, TranIntentScope).start()
                     }
                 }
