@@ -26,7 +26,8 @@ data class NotEnoughCryptoException(val currency: Currency, override val origina
 data class OrderCompletedOrNotExistException(val orderId: Long, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
-object InvalidOrderNumberException : PoloniexException(InvalidOrderNumberPattern)
-object TransactionFailedException : PoloniexException(TransactionFailedPattern)
-object UnableToFillOrderException : PoloniexException(UnableToFillOrderPattern)
-object UnableToPlacePostOnlyOrderException : PoloniexException(UnableToPlacePostOnlyOrderPattern)
+object InvalidOrderNumberException : PoloniexException(InvalidOrderNumberMsg)
+object TransactionFailedException : PoloniexException(TransactionFailedMsg)
+object UnableToFillOrderException : PoloniexException(UnableToFillOrderMsg)
+object UnableToPlacePostOnlyOrderException : PoloniexException(UnableToPlacePostOnlyOrderMsg)
+object AlreadyCalledMoveOrderException : PoloniexException(AlreadyCalledMoveOrderMsg)

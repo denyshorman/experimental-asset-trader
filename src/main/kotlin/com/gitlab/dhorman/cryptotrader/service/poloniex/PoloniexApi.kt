@@ -41,7 +41,6 @@ import java.math.BigDecimal
 import java.net.URI
 import java.time.Duration
 import java.time.Instant
-import java.util.function.Function.identity
 
 private const val PoloniexPrivatePublicHttpApiUrl = "https://poloniex.com"
 private const val PoloniexWebSocketApiUrl = "wss://api2.poloniex.com"
@@ -397,20 +396,24 @@ class PoloniexApi(
             return NotEnoughCryptoException(currency, msg)
         }
 
-        if (UnableToFillOrderPattern == msg) {
+        if (UnableToFillOrderMsg == msg) {
             return UnableToFillOrderException
         }
 
-        if (UnableToPlacePostOnlyOrderPattern == msg) {
+        if (UnableToPlacePostOnlyOrderMsg == msg) {
             return UnableToPlacePostOnlyOrderException
         }
 
-        if (InvalidOrderNumberPattern == msg) {
+        if (InvalidOrderNumberMsg == msg) {
             return InvalidOrderNumberException
         }
 
-        if (TransactionFailedPattern == msg) {
+        if (TransactionFailedMsg == msg) {
             return TransactionFailedException
+        }
+
+        if (AlreadyCalledMoveOrderMsg == msg) {
+            return AlreadyCalledMoveOrderException
         }
 
         return e

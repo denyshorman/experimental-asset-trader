@@ -13,6 +13,7 @@ import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import io.vavr.Tuple2
+import io.vavr.Tuple3
 import io.vavr.collection.Array
 import io.vavr.collection.List
 import io.vavr.collection.Queue
@@ -41,6 +42,8 @@ import java.net.UnknownHostException
 import java.time.Duration
 import java.time.Instant
 import java.util.*
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.Comparator
 
 @Service
@@ -90,7 +93,7 @@ class PoloniexTrader(
                 startPathTransaction(bestPath, tranIntentScope)
             }
         } finally {
-            logger.debug { "Trying to cancel all transactions..." }
+            logger.debug { "Trying to cancel all Poloniex transactions..." }
 
             tranIntentScope.cancel()
         }
@@ -474,9 +477,9 @@ class PoloniexTrader(
                 }
                 OrderSpeed.Delayed -> run {
                     var updatedMarkets = modifiedMarkets
-                    val updatedMarketsChannel = ConflatedBroadcastChannel(updatedMarkets)
-                    val cancelByProfitMonitoringJob = ConflatedBroadcastChannel(false)
-                    val profitMonitoringJob = startProfitMonitoring(updatedMarketsChannel, cancelByProfitMonitoringJob)
+                    val updatedMarketsRef = AtomicReference(updatedMarkets)
+                    val cancelByProfitMonitoringJob = AtomicBoolean(false)
+                    val profitMonitoringJob = startProfitMonitoring(updatedMarketsRef, cancelByProfitMonitoringJob)
 
                     try {
                         while (isActive) {
@@ -502,7 +505,7 @@ class PoloniexTrader(
                                         withContext(NonCancellable) {
                                             val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
                                             updatedMarkets = marketSplit._1
-                                            updatedMarketsChannel.send(updatedMarkets)
+                                            updatedMarketsRef.set(updatedMarkets)
                                             val committedMarkets = marketSplit._2
 
                                             if (newMarketIdx != modifiedMarkets.length()) {
@@ -537,7 +540,9 @@ class PoloniexTrader(
                     } finally {
                         withContext(NonCancellable) {
                             // Handle unfilled amount
-                            if (!cancelByProfitMonitoringJob.value) profitMonitoringJob.cancel()
+                            if (cancelByProfitMonitoringJob.get()) return@withContext
+
+                            profitMonitoringJob.cancel()
 
                             val initMarket = updatedMarkets[0]
                             val currMarket = updatedMarkets[marketIdx]
@@ -848,7 +853,7 @@ class PoloniexTrader(
                         var lastOrderId: Long? = latestOrderIdsChannel.value.lastOrNull()
                         var prevPrice: Price? = null
 
-                        suspend fun handlePlaceMoveOrderResult(res: Tuple2<Long, Price>) {
+                        suspend fun handlePlaceMoveOrderResult(res: Tuple3<Long, Price, Amount>) {
                             lastOrderId = res._1
                             prevPrice = res._2
 
@@ -864,11 +869,9 @@ class PoloniexTrader(
 
                             val placeOrderResult = placeOrder(market, orderBook, orderType, unfilledAmountChannel.value)
 
-                            logger.debug { "[$market, $orderType] Order placed successfully" }
-
                             handlePlaceMoveOrderResult(placeOrderResult)
 
-                            logger.debug { "[$market, $orderType] New order placed: $lastOrderId, $prevPrice" }
+                            logger.debug { "[$market, $orderType] New order placed: price ${placeOrderResult._2}, amount ${placeOrderResult._3}" }
                         }
 
                         try {
@@ -923,7 +926,7 @@ class PoloniexTrader(
 
                                     handlePlaceMoveOrderResult(resp)
 
-                                    logger.debug { "[$market, $orderType] Order $lastOrderId moved to ${resp._1} with price ${resp._2}" }
+                                    logger.debug { "[$market, $orderType] Moved order with price ${resp._2} and amount ${resp._3}" }
                                 }
                             }
                         } finally {
@@ -931,8 +934,6 @@ class PoloniexTrader(
                                 if (lastOrderId != null) {
                                     while (true) {
                                         try {
-                                            logger.debug { "[$market, $orderType] Cancelling order $lastOrderId" }
-
                                             poloniexApi.cancelOrder(lastOrderId!!)
 
                                             break
@@ -947,6 +948,10 @@ class PoloniexTrader(
                                             delay(2000)
                                         }
                                     }
+
+                                    transactionsDao.deleteAllOrderIds(id)
+
+                                    logger.debug { "[$market, $orderType] Order $lastOrderId cancelled" }
                                 }
                             }
                         }
@@ -983,7 +988,7 @@ class PoloniexTrader(
             lastOrderId: Long,
             myPrice: Price,
             amountChannel: ConflatedBroadcastChannel<Amount>
-        ): Tuple2<Long, Price>? {
+        ): Tuple3<Long, Price, Amount>? {
             var retryCount = 0
 
             while (true) {
@@ -1057,7 +1062,7 @@ class PoloniexTrader(
                         BuyOrderType.PostOnly
                     )
 
-                    return tuple(moveOrderResult.orderId, newPrice)
+                    return tuple(moveOrderResult.orderId, newPrice, quoteAmount)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: UnableToPlacePostOnlyOrderException) {
@@ -1105,7 +1110,7 @@ class PoloniexTrader(
             orderBook: Flux<OrderBookAbstract>,
             orderType: OrderType,
             amountValue: BigDecimal
-        ): Tuple2<Long, Price> {
+        ): Tuple3<Long, Price, Amount> {
             while (true) {
                 try {
                     val primaryBook: SubOrderBook
@@ -1157,7 +1162,7 @@ class PoloniexTrader(
                         OrderType.Sell -> poloniexApi.sell(market, price, quoteAmount, BuyOrderType.PostOnly)
                     }
 
-                    return tuple(result.orderId, price)
+                    return tuple(result.orderId, price, quoteAmount)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: UnableToPlacePostOnlyOrderException) {
@@ -1242,71 +1247,73 @@ class PoloniexTrader(
         }
 
         private fun CoroutineScope.startProfitMonitoring(
-            updatedMarketsChannel: ConflatedBroadcastChannel<Array<TranIntentMarket>>,
-            cancelByProfitMonitoringJob: ConflatedBroadcastChannel<Boolean>
+            updatedMarketsRef: AtomicReference<Array<TranIntentMarket>>,
+            cancelByProfitMonitoringJob: AtomicBoolean
         ): Job {
             val parentJob = coroutineContext[Job]
 
-            return launch(context = Job()) {
+            return TranIntentScope.launch {
                 val startTime = Instant.now()
 
                 while (isActive) {
                     delay(10000)
-                    var updatedMarkets = updatedMarketsChannel.value
+                    var updatedMarkets = updatedMarketsRef.get()
 
                     val initAmount = updatedMarkets.first().fromAmount(updatedMarkets, 0)
                     val targetAmount = updatedMarkets.last().targetAmount(updatedMarkets, updatedMarkets.length() - 1)
 
-                    val notProfitable = initAmount > targetAmount
+                    val profitable = initAmount < targetAmount
                     val timeout = Duration.between(startTime, Instant.now()).toMinutes() > 40
 
-                    if (notProfitable || timeout) {
-                        logger.debug {
-                            val path = updatedMarkets.pathString()
+                    if (profitable && !timeout) continue
 
-                            val reason = if (notProfitable) {
-                                "path is not profitable (${targetAmount - initAmount})"
-                            } else {
-                                "timeout has occurred"
-                            }
+                    logger.debug {
+                        val path = updatedMarkets.pathString()
 
-                            "Cancelling path $path because $reason"
+                        val reason = if (!profitable) {
+                            "path is not profitable (${targetAmount - initAmount})"
+                        } else {
+                            "timeout has occurred"
                         }
 
-                        cancelByProfitMonitoringJob.send(true)
-                        parentJob?.cancelAndJoin()
-
-                        updatedMarkets = updatedMarketsChannel.value
-                        val currMarket = updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted
-                        val fromCurrency = currMarket.fromCurrency
-                        val fromCurrencyAmount = currMarket.fromAmount
-                        var bestPath: Array<TranIntentMarket>?
-
-                        while (true) {
-                            logger.debug { "Trying to find new path for ${updatedMarkets.pathString()}..." }
-
-                            bestPath = findNewPath(initAmount, fromCurrency, fromCurrencyAmount, primaryCurrencies)
-
-                            if (bestPath != null) {
-                                logger.debug { "New path found ${bestPath.pathString()}" }
-                                break
-                            } else {
-                                logger.debug { "Path not found for ${updatedMarkets.pathString()}" }
-                            }
-
-                            delay(60000)
-                        }
-
-                        val changedMarkets = updateMarketsWithBestPath(updatedMarkets, marketIdx, bestPath!!)
-
-                        withContext(NonCancellable) {
-                            transactionsDao.update(id, changedMarkets, marketIdx)
-                        }
-
-                        if (!isActive) break
-
-                        TransactionIntent(id, changedMarkets, marketIdx, TranIntentScope).start()
+                        "Cancelling path $path because $reason"
                     }
+
+                    cancelByProfitMonitoringJob.set(true)
+                    parentJob?.cancelAndJoin()
+
+                    updatedMarkets = updatedMarketsRef.get()
+                    val currMarket = updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted
+                    val fromCurrency = currMarket.fromCurrency
+                    val fromCurrencyAmount = currMarket.fromAmount
+                    var bestPath: Array<TranIntentMarket>?
+
+                    while (true) {
+                        logger.debug { "Trying to find new path for ${updatedMarkets.pathString()}..." }
+
+                        bestPath = findNewPath(initAmount, fromCurrency, fromCurrencyAmount, primaryCurrencies)
+
+                        if (bestPath != null) {
+                            logger.debug { "New path found ${bestPath.pathString()}" }
+                            break
+                        } else {
+                            logger.debug { "Path not found for ${updatedMarkets.pathString()}" }
+                        }
+
+                        delay(60000)
+                    }
+
+                    val changedMarkets = updateMarketsWithBestPath(updatedMarkets, marketIdx, bestPath!!)
+
+                    withContext(NonCancellable) {
+                        transactionsDao.update(id, changedMarkets, marketIdx)
+                    }
+
+                    if (!isActive) break
+
+                    TransactionIntent(id, changedMarkets, marketIdx, TranIntentScope).start()
+
+                    break
                 }
             }
         }

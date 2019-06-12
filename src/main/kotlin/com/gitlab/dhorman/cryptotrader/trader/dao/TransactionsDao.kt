@@ -174,4 +174,11 @@ class TransactionsDao(
             .collectList()
             .awaitSingle()
     }
+
+    suspend fun deleteAllOrderIds(tranId: UUID) {
+        databaseClient.execute().sql("DELETE FROM poloniex_transaction_order_ids WHERE tran_id = $1")
+            .bind(0, tranId)
+            .then()
+            .awaitFirstOrNull()
+    }
 }
