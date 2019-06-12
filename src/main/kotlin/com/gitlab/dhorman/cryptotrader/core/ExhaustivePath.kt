@@ -17,8 +17,8 @@ data class ExhaustivePath(
     val id: String by lazy(LazyThreadSafetyMode.NONE) {
         chain.iterator().map {
             when (it) {
-                is InstantOrder -> "${it.market}0"
-                is DelayedOrder -> "${it.market}1"
+                is InstantOrder -> "${it.market.baseCurrency}${it.market.quoteCurrency}0"
+                is DelayedOrder -> "${it.market.baseCurrency}${it.market.quoteCurrency}1"
             }
         }.mkString("")
     }

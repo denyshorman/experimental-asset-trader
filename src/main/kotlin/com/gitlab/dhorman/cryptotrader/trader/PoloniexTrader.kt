@@ -110,16 +110,28 @@ class PoloniexTrader(
             val targetAmount = markets.last().targetAmount(markets, markets.length() - 1)
 
             if (initAmount > targetAmount) {
+                logger.debug { "Restored path $id is not profitable (${targetAmount - initAmount}). Trying to find new path..." }
+
                 val currMarket = markets[startMarketIdx] as TranIntentMarketPartiallyCompleted
                 val fromCurrency = currMarket.fromCurrency
                 val fromCurrencyAmount = currMarket.fromAmount
                 scope.launch {
                     var bestPath: Array<TranIntentMarket>? = null
+
                     while (isActive) {
                         bestPath = findNewPath(initAmount, fromCurrency, fromCurrencyAmount, primaryCurrencies)
-                        if (bestPath != null) break
+
+                        if (bestPath != null) {
+                            logger.debug { "Found optimal path ${bestPath.pathString()} for $id" }
+
+                            break
+                        } else {
+                            logger.debug { "Optimal path not found for $id. Retrying..." }
+                        }
+
                         delay(60000)
                     }
+
                     val changedMarkets = updateMarketsWithBestPath(markets, startMarketIdx, bestPath!!)
                     val newId = UUID.randomUUID()
 
@@ -399,7 +411,7 @@ class PoloniexTrader(
 
         return availableBalances?.run {
             if (_2 > BigDecimal(5)) {
-                tuple(_1, BigDecimal(5))
+                tuple(_1, BigDecimal(1))
             } else {
                 this
             }
@@ -413,7 +425,7 @@ class PoloniexTrader(
         private val TranIntentScope: CoroutineScope
     ) {
         fun start(): Job = TranIntentScope.launch {
-            logger.debug { "Starting path traversal for ${markets.pathString()}" }
+            logger.debug { "Starting path traversal for ($marketIdx) ${markets.pathString()}" }
 
             val currentMarket = markets[marketIdx] as TranIntentMarketPartiallyCompleted
             val orderBookFlow = data.getOrderBookFlowBy(currentMarket.market)
@@ -484,7 +496,7 @@ class PoloniexTrader(
                     try {
                         while (isActive) {
                             try {
-                                val fromAmount =
+                                var fromAmount =
                                     (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
                                 tradeDelayed(
@@ -505,15 +517,27 @@ class PoloniexTrader(
                                         withContext(NonCancellable) {
                                             val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
                                             updatedMarkets = marketSplit._1
-                                            updatedMarketsRef.set(updatedMarkets)
                                             val committedMarkets = marketSplit._2
+
+                                            fromAmount =
+                                                (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
+
+                                            if (fromAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                                profitMonitoringJob.cancelAndJoin()
+                                                cancelByProfitMonitoringJob.set(false)
+                                            } else {
+                                                updatedMarketsRef.set(updatedMarkets)
+                                            }
 
                                             if (newMarketIdx != modifiedMarkets.length()) {
                                                 val newId = UUID.randomUUID()
 
                                                 TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
-                                                    transactionsDao.removeOrderIds(id, orderIds)
-                                                    transactionsDao.update(id, updatedMarkets, marketIdx)
+                                                    if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
+                                                        transactionsDao.removeOrderIds(id, orderIds)
+                                                        transactionsDao.update(id, updatedMarkets, marketIdx)
+                                                    }
+
                                                     transactionsDao.add(newId, committedMarkets, newMarketIdx)
                                                 }).retry().awaitFirstOrNull()
 
@@ -538,6 +562,8 @@ class PoloniexTrader(
                     } catch (e: Exception) {
                         if (logger.isDebugEnabled) logger.warn(e.message, e)
                     } finally {
+                        val isCancelled = !isActive
+
                         withContext(NonCancellable) {
                             // Handle unfilled amount
                             if (cancelByProfitMonitoringJob.get()) return@withContext
@@ -546,21 +572,20 @@ class PoloniexTrader(
 
                             val initMarket = updatedMarkets[0]
                             val currMarket = updatedMarkets[marketIdx]
+                            val fromAmount = currMarket.fromAmount(updatedMarkets, marketIdx)
 
-                            if (marketIdx != 0 && currMarket.fromAmount(
-                                    updatedMarkets,
-                                    marketIdx
-                                ).compareTo(BigDecimal.ZERO) != 0
-                            ) {
-                                TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
-                                    transactionsDao.delete(id)
-                                    unfilledMarketsDao.add(
-                                        initMarket.fromCurrency,
-                                        initMarket.fromAmount(updatedMarkets, 0),
-                                        currMarket.fromCurrency,
-                                        currMarket.fromAmount(updatedMarkets, marketIdx)
-                                    )
-                                }).retry().awaitFirstOrNull()
+                            if (marketIdx != 0 && fromAmount.compareTo(BigDecimal.ZERO) != 0) {
+                                if (!isCancelled) {
+                                    TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                                        transactionsDao.delete(id)
+                                        unfilledMarketsDao.add(
+                                            initMarket.fromCurrency,
+                                            initMarket.fromAmount(updatedMarkets, 0),
+                                            currMarket.fromCurrency,
+                                            currMarket.fromAmount(updatedMarkets, marketIdx)
+                                        )
+                                    }).retry().awaitFirstOrNull()
+                                }
                             } else {
                                 transactionsDao.delete(id)
                             }
@@ -970,7 +995,7 @@ class PoloniexTrader(
 
                         unfilledAmountChannel.consumeEach {
                             if (it.compareTo(BigDecimal.ZERO) == 0) {
-                                logger.debug { "[$market, $orderType] Amount = 0 => all trades received. Closing..." }
+                                logger.debug { "[$market, $orderType] All trades received" }
                                 tradesJob?.cancel()
                                 return@launch
                             }
@@ -1276,7 +1301,7 @@ class PoloniexTrader(
                             "timeout has occurred"
                         }
 
-                        "Cancelling path $path because $reason"
+                        "Cancelling path ($marketIdx) $path because $reason"
                     }
 
                     cancelByProfitMonitoringJob.set(true)
