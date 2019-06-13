@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.NullNode
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.core.Market
+import com.gitlab.dhorman.cryptotrader.core.Market.Companion.toMarket
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
@@ -132,7 +133,6 @@ class PoloniexApi(
         ).share()
     }
 
-    // TODO: Send notification list because they send atomic operation as list
     fun orderBookStream(marketId: MarketId): Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>> {
         return FlowScope.flux {
             while (isActive) {
@@ -187,6 +187,21 @@ class PoloniexApi(
 
     fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flux<Tuple2<PriceAggregatedBook, OrderBookNotification>>> {
         return marketIds.map { marketId -> tuple(marketId, orderBookStream(marketId)) }.toMap { it }
+    }
+
+    suspend fun dayVolume(): Map<Market, Tuple2<Amount, Amount>> {
+        return callPublicApi("return24hVolume", jacksonTypeRef<Map<String, Any>>())
+            .awaitSingle()
+            .toVavrStream()
+            .filter { it._2 is kotlin.collections.Map<*, *> }
+            .map {
+                val market = it._1.toMarket()
+                val currentAmountMap = it._2 as kotlin.collections.Map<*, *>
+                val baseCurrencyAmount = BigDecimal(currentAmountMap[market.baseCurrency] as String)
+                val quoteCurrencyAmount = BigDecimal(currentAmountMap[market.baseCurrency] as String)
+                tuple(market, tuple(baseCurrencyAmount, quoteCurrencyAmount))
+            }
+            .toMap({ it._1 }, { it._2 })
     }
 
     /**
@@ -264,10 +279,10 @@ class PoloniexApi(
 
         try {
             val res = objectMapper.convertValue<OrderStatusWrapper>(json, jacksonTypeRef<OrderStatusWrapper>())
-            if (res.success) {
-                return res.result.getOrNull(orderId)
+            return if (res.success) {
+                res.result.getOrNull(orderId)
             } else {
-                return null
+                null
             }
         } catch (e: Exception) {
             try {
