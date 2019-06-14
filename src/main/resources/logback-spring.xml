@@ -4,5 +4,6 @@
     <logger name="root" level="info"/>
     <logger name="org.springframework.web" level="info"/>
     <logger name="org.springframework.data.r2dbc" level="info"/>
-    <logger name="com.gitlab.dhorman.cryptotrader" level="debug"/>
+    <springProfile name="dev"><logger name="com.gitlab.dhorman.cryptotrader" level="debug"/></springProfile>
+    <springProfile name="prod"><logger name="com.gitlab.dhorman.cryptotrader" level="info"/></springProfile>
 </configuration>

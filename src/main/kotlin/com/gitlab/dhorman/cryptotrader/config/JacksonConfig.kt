@@ -12,9 +12,10 @@ import com.gitlab.dhorman.cryptotrader.core.Market
 import io.vavr.jackson.datatype.VavrModule
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.core.env.Environment
 
 @Configuration
-class JacksonConfig {
+class JacksonConfig(private val env: Environment) {
     @Bean
     fun defaultObjectMapper(): ObjectMapper {
         val mapper = ObjectMapper()
@@ -26,7 +27,12 @@ class JacksonConfig {
 
         mapper.configure(JsonParser.Feature.ALLOW_COMMENTS, true)
         mapper.configure(JsonParser.Feature.ALLOW_TRAILING_COMMA, true)
-        //mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+        if (env.activeProfiles.contains("prod")) {
+            mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        } else {
+            mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true);
+        }
 
         // TODO: Extract module
         val simpleModule = SimpleModule()
