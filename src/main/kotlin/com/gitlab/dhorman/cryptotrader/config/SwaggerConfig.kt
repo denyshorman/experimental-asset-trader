@@ -2,6 +2,7 @@ package com.gitlab.dhorman.cryptotrader.config
 
 import com.fasterxml.classmate.TypeResolver
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.info.BuildProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.core.Ordered.HIGHEST_PRECEDENCE
@@ -21,7 +22,7 @@ import springfox.documentation.swagger2.annotations.EnableSwagger2WebFlux
 
 @Configuration
 @EnableSwagger2WebFlux
-class SwaggerConfig {
+class SwaggerConfig(private val buildProps: BuildProperties) {
     @Bean
     fun api(): Docket {
         return Docket(DocumentationType.SWAGGER_2)
@@ -38,7 +39,7 @@ class SwaggerConfig {
     fun apiInfo(): ApiInfo {
         return ApiInfoBuilder()
             .title("Trader API")
-            .version("1.0")
+            .version(buildProps.version)
             .build()
     }
 

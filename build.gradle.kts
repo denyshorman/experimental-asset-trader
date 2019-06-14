@@ -1,7 +1,7 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 group = "com.gitlab.dhorman"
-version = "1.0.0-SNAPSHOT"
+version = versioning.info.full
 java.sourceCompatibility = JavaVersion.VERSION_1_8
 
 val kotlinVersion = "1.3.31"
@@ -13,6 +13,7 @@ plugins {
     kotlin("jvm") version "1.3.31"
     kotlin("plugin.spring") version "1.3.31"
     id("org.springframework.boot") version "2.2.0.M3"
+    id("net.nemerosa.versioning") version "2.8.2"
 }
 
 apply(plugin = "io.spring.dependency-management")
@@ -48,6 +49,7 @@ dependencies {
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:$jacksonVersion")
     implementation("org.springframework.boot:spring-boot-starter-webflux")
     implementation("org.springframework.boot:spring-boot-starter-rsocket")
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("io.springfox:springfox-swagger2:$swaggerVersion")
     implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
@@ -64,15 +66,28 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
 
-tasks.withType<KotlinCompile>().all {
-    with(kotlinOptions) {
-        jvmTarget = "1.8"
+tasks {
+    withType<KotlinCompile>().all {
+        with(kotlinOptions) {
+            jvmTarget = "1.8"
 
-        freeCompilerArgs = freeCompilerArgs + listOf(
-            "-Xjsr305=strict",
-            "-Xuse-experimental=kotlinx.coroutines.ExperimentalCoroutinesApi",
-            "-Xuse-experimental=kotlinx.coroutines.ObsoleteCoroutinesApi",
-            "-Xuse-experimental=kotlinx.coroutines.FlowPreview"
-        )
+            freeCompilerArgs = freeCompilerArgs + listOf(
+                "-Xjsr305=strict",
+                "-Xuse-experimental=kotlinx.coroutines.ExperimentalCoroutinesApi",
+                "-Xuse-experimental=kotlinx.coroutines.ObsoleteCoroutinesApi",
+                "-Xuse-experimental=kotlinx.coroutines.FlowPreview"
+            )
+        }
+    }
+}
+
+springBoot {
+    buildInfo {
+        properties {
+            group = rootProject.group as String
+            artifact = rootProject.name
+            version = rootProject.version as String
+            name = rootProject.name
+        }
     }
 }
