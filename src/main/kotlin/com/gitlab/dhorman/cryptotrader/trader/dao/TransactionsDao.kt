@@ -1,5 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.trader.dao
 
+import com.fasterxml.jackson.core.JsonGenerator
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -16,6 +17,7 @@ import io.vavr.kotlin.tuple
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.boot.convert.ApplicationConversionService.configure
 import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
@@ -43,6 +45,7 @@ class TransactionsDao(
 
     suspend fun add(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
         val marketsJson = mapper
+            .configure(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS, true)
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
             .withView(Views.DB::class.java)
             .writeValueAsString(markets)
@@ -68,6 +71,7 @@ class TransactionsDao(
 
     suspend fun update(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
         val marketsJson = mapper
+            .configure(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS, true)
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
             .withView(Views.DB::class.java)
             .writeValueAsString(markets)
@@ -135,6 +139,7 @@ class TransactionsDao(
 
     suspend fun addCompleted(activeTranId: UUID, markets: Array<TranIntentMarket>) {
         val marketsJson = mapper
+            .configure(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS, true)
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
             .withView(Views.DB::class.java)
             .writeValueAsString(markets)

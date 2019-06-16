@@ -5,7 +5,6 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.SubOrderBook
 import io.vavr.Tuple2
 import io.vavr.collection.TreeMap
 import java.math.BigDecimal
-import java.time.Instant
 
 
 abstract class OrderBookAbstract(
@@ -61,31 +60,5 @@ open class BareTrade(
 
     override fun toString(): String {
         return "BareTrade(quoteAmount=$quoteAmount, price=$price, feeMultiplier=$feeMultiplier)"
-    }
-}
-
-class BareTradeWithId(
-    val orderId: Long,
-    override val quoteAmount: BigDecimal,
-    override val price: BigDecimal,
-    override val feeMultiplier: BigDecimal
-) : BareTrade(quoteAmount, price, feeMultiplier) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-
-        other as BareTradeWithId
-
-        if (orderId != other.orderId) return false
-
-        return true
-    }
-
-    override fun hashCode(): Int {
-        return orderId.hashCode()
-    }
-
-    override fun toString(): String {
-        return "BareTradeWithId(orderId=$orderId, quoteAmount=$quoteAmount, price=$price, feeMultiplier=$feeMultiplier)"
     }
 }

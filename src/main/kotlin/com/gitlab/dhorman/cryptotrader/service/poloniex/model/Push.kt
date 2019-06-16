@@ -68,7 +68,8 @@ data class LimitOrderCreated(
 @JsonDeserialize(using = OrderUpdateJsonCodec.Decoder::class)
 data class OrderUpdate(
     val orderId: Long,
-    val newAmount: Amount
+    val newAmount: Amount,
+    val orderType: String // TODO: Migrate to enum
 ) : AccountNotification()
 
 @JsonDeserialize(using = TradeNotificationJsonCodec.Decoder::class)

@@ -71,7 +71,11 @@ object Orders {
             orderMultiplierSimple = (price * takerFeeMultiplier).setScale(8, RoundingMode.DOWN)
         }
 
-        orderMultiplierAmount = targetCurrencyAmount.divide(initCurrencyAmount, 8, RoundingMode.DOWN)
+        orderMultiplierAmount = if (initCurrencyAmount.compareTo(BigDecimal.ZERO) != 0) {
+            targetCurrencyAmount.divide(initCurrencyAmount, 8, RoundingMode.DOWN)
+        } else {
+            BigDecimal.ONE // TODO: Fix orderMultiplierAmount
+        }
 
         return InstantOrder(
             market,
@@ -113,7 +117,6 @@ object Orders {
 
             quoteAmount = calcQuoteAmount(fromAmount, basePrice)
             toAmount = buyQuoteAmount(quoteAmount, makerFeeMultiplier)
-            orderMultiplier = toAmount.divide(fromAmount, 8, RoundingMode.DOWN)
         } else {
             if (orderBook.asks.length() == 0) return null
 
@@ -123,7 +126,12 @@ object Orders {
 
             quoteAmount = fromAmount
             toAmount = sellBaseAmount(quoteAmount, basePrice, makerFeeMultiplier)
-            orderMultiplier = toAmount.divide(fromAmount, 8, RoundingMode.DOWN)
+        }
+
+        orderMultiplier = if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
+            toAmount.divide(fromAmount, 8, RoundingMode.DOWN)
+        } else {
+            BigDecimal.ONE // TODO: Fix orderMultiplier
         }
 
         return DelayedOrder(

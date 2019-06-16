@@ -51,13 +51,14 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val currencies: Flux<Tuple2<Map<Currency, CurrencyDetails>, Map<Int, Currency>>> = run {
         FlowScope.flux {
-            while (isActive) {
+            while (true) {
                 try {
                     val currencies = poloniexApi.currencies().awaitSingle()
                     send(tuple(currencies, currencies.map { k, v -> tuple(v.id, k) }))
                     delay(10 * 60 * 1000)
                 } catch (e: CancellationException) {
-                    throw e
+                    if (!isActive) throw e
+                    delay(1000)
                 } catch (e: Exception) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch currencies from Poloniex because ${e.message}")
                     delay(2000)
@@ -68,7 +69,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val balances: Flux<Map<Currency, Tuple2<Amount, Amount>>> = run {
         FlowScope.flux {
-            mainLoop@ while (isActive) {
+            mainLoop@ while (true) {
                 try {
                     val rawApiBalances = poloniexApi.completeBalances()
 
@@ -113,7 +114,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     var balanceUpdateDeltaJob: Job? = null
 
                     fun CoroutineScope.balanceDeltaUpdateJob() = this.launch {
-                        poloniexApi.accountNotificationStream.onBackpressureBuffer().collect { deltaUpdates ->
+                        poloniexApi.accountNotificationStream.collect { deltaUpdates ->
                             var notifySubscribers = false
 
                             for (delta in deltaUpdates) {
@@ -264,9 +265,11 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                         }
                     }
                 } catch (e: CancellationException) {
-                    throw e
+                    if (!isActive) throw e
+                    delay(1000)
+                    continue
                 } catch (e: Exception) {
-                    if (logger.isDebugEnabled) logger.warn(e.message, e)
+                    if (logger.isDebugEnabled) logger.warn(e.message)
                     delay(1000)
                     continue
                 }
@@ -278,7 +281,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         FlowScope.flux {
             var prevMarketsSet = mutableSetOf<Int>()
 
-            while (isActive) {
+            while (true) {
                 try {
                     val tickers = poloniexApi.ticker().awaitSingle()
                     var marketIntStringMap: Map<MarketId, Market> = HashMap.empty()
@@ -300,7 +303,8 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                     delay(10 * 60 * 1000)
                 } catch (e: CancellationException) {
-                    throw e
+                    if (!isActive) throw e
+                    delay(1000)
                 } catch (e: Exception) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch markets from Poloniex: ${e.message}")
                     delay(2000)
@@ -311,20 +315,23 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val tradesStat: Flux<Map<MarketId, Flux<TradeStat>>> = run {
         FlowScope.flux {
-            dayVolume.collect {dayVolumeMap ->
+            dayVolume.collect { dayVolumeMap ->
                 val marketsMap = markets.awaitFirst()._2
-                val map = dayVolumeMap.map {market, amount ->
-                    val marketId = marketsMap.getOrNull(market)
-                    val amountBase = amount._1.divide(BigDecimal(2), 8, RoundingMode.DOWN)
-                    val amountQuote = amount._2.divide(BigDecimal(2), 8, RoundingMode.DOWN)
+                val map = marketsMap.map { market, marketId ->
+                    val amount = dayVolumeMap.getOrNull(market)
+                    val amountBase = amount?._1?.divide(BigDecimal(2), 8, RoundingMode.DOWN)
+                    val amountQuote = amount?._2?.divide(BigDecimal(2), 8, RoundingMode.DOWN)
                     val buySellStat = TradeStatOrder(
-                        baseQuoteAvgAmount = tuple(amountBase, amountQuote)
+                        baseQuoteAvgAmount = tuple(
+                            amountBase ?: BigDecimal.ZERO,
+                            amountQuote ?: BigDecimal.ZERO
+                        )
                     )
                     val tradeStat = TradeStat(
                         sell = buySellStat,
                         buy = buySellStat
                     )
-                    tuple(marketId!!, Flux.just(tradeStat))
+                    tuple(marketId, Flux.just(tradeStat))
                 }
 
                 send(map)
@@ -335,7 +342,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val openOrders: Flux<Map<Long, OpenOrderWithMarket>> = run {
         FlowScope.flux {
-            while (isActive) {
+            while (true) {
                 try {
                     var allOpenOrders = poloniexApi.allOpenOrders().awaitSingle()
                     send(allOpenOrders)
@@ -347,7 +354,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                             }
                         }
 
-                        poloniexApi.accountNotificationStream.onBackpressureBuffer().collect { notifications ->
+                        poloniexApi.accountNotificationStream.collect { notifications ->
                             for (update in notifications) {
                                 when (update) {
                                     is LimitOrderCreated -> run {
@@ -405,7 +412,9 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                         }
                     }
                 } catch (e: CancellationException) {
-                    throw e
+                    if (!isActive) throw e
+                    delay(1000)
+                    continue
                 } catch (e: Exception) {
                     if (logger.isDebugEnabled) logger.warn("Can't update open order: ${e.message}")
                     delay(1000)
@@ -452,7 +461,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         }
 
         FlowScope.flux {
-            while (isActive) {
+            while (true) {
                 try {
                     var allTickers = poloniexApi.ticker().awaitSingle().map(::mapTicker)
                     send(allTickers)
@@ -476,7 +485,9 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                         }
                     }
                 } catch (e: CancellationException) {
-                    throw e
+                    if (!isActive) throw e
+                    delay(1000)
+                    continue
                 } catch (e: Exception) {
                     delay(1000)
                     continue
@@ -509,12 +520,13 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         }
 
         FlowScope.flux {
-            while (isActive) {
+            while (true) {
                 try {
                     send(fetchFee())
                     break
                 } catch (e: CancellationException) {
-                    throw e
+                    if (!isActive) throw e
+                    delay(1000)
                 } catch (e: Exception) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
                     delay(2000)
@@ -522,14 +534,15 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
             }
 
             // TODO: How to get fee instantly without pooling ?
-            while (isActive) {
+            while (true) {
                 delay(10 * 60 * 1000)
 
                 try {
                     send(fetchFee())
                     break
                 } catch (e: CancellationException) {
-                    throw e
+                    if (!isActive) throw e
+                    delay(1000)
                 } catch (e: Exception) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
                 }
@@ -539,14 +552,15 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val dayVolume: Flux<Map<Market, Tuple2<Amount, Amount>>> = run {
         FlowScope.flux {
-            while (isActive) {
+            while (true) {
                 try {
                     send(poloniexApi.dayVolume())
                     delay(3 * 60 * 1000)
                 } catch (e: CancellationException) {
-                    throw e
+                    if (!isActive) throw e
+                    delay(1000)
                 } catch (e: Exception) {
-                    logger.debug{ "Can't fetch day volume from Poloniex because ${e.message}" }
+                    logger.debug { "Can't fetch day volume from Poloniex because ${e.message}" }
                     delay(2000)
                 }
             }

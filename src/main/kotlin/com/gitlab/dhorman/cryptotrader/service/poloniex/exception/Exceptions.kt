@@ -2,32 +2,39 @@ package com.gitlab.dhorman.cryptotrader.service.poloniex.exception
 
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
+import java.math.BigDecimal
 
 open class PoloniexException(open val originalMsg: String) : Throwable(originalMsg, null, true, false)
 
-data class IncorrectNonceException(val providedNonce: Long, val requiredNonce: Long, override val originalMsg: String) :
+class IncorrectNonceException(val providedNonce: Long, val requiredNonce: Long, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
-data class ApiCallLimitException(val maxRequestPerSecond: Int, override val originalMsg: String) :
+class ApiCallLimitException(val maxRequestPerSecond: Int, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
-data class TotalMustBeAtLeastException(val totalAmount: Amount, override val originalMsg: String) :
+open class AmountMustBeAtLeastException(val quoteAmount: Amount, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
-data class RateMustBeLessThanException(val maxRate: Amount, override val originalMsg: String) :
+class TotalMustBeAtLeastException(val totalAmount: Amount, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
-data class MaxOrdersExceededException(val maxOrders: Int, override val originalMsg: String) :
+class RateMustBeLessThanException(val maxRate: Amount, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
-data class NotEnoughCryptoException(val currency: Currency, override val originalMsg: String) :
+class MaxOrdersExceededException(val maxOrders: Int, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
-data class OrderCompletedOrNotExistException(val orderId: Long, override val originalMsg: String) :
+class NotEnoughCryptoException(val currency: Currency, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
+class OrderCompletedOrNotExistException(val orderId: Long, override val originalMsg: String) :
+    PoloniexException(originalMsg)
+
+object SubscribeErrorException : PoloniexException("")
 object InvalidOrderNumberException : PoloniexException(InvalidOrderNumberMsg)
 object TransactionFailedException : PoloniexException(TransactionFailedMsg)
 object UnableToFillOrderException : PoloniexException(UnableToFillOrderMsg)
 object UnableToPlacePostOnlyOrderException : PoloniexException(UnableToPlacePostOnlyOrderMsg)
 object AlreadyCalledMoveOrderException : PoloniexException(AlreadyCalledMoveOrderMsg)
+object PermissionDeniedException : PoloniexException(PermissionDeniedMsg)
+object AmountIsZeroException : AmountMustBeAtLeastException(BigDecimal.ZERO, "Quote amount is zero")

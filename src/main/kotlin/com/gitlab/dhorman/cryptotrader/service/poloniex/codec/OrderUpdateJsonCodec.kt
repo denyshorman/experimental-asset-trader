@@ -15,7 +15,8 @@ object OrderUpdateJsonCodec {
             val codec = p.codec as ObjectMapper
             return OrderUpdate(
                 arrayNode[1].asLong(),
-                codec.treeToValue(arrayNode[2])
+                codec.treeToValue(arrayNode[2]),
+                arrayNode[3].asText()
             )
         }
     }
