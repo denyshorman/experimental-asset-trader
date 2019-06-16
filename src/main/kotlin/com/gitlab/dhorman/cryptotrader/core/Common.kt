@@ -1,6 +1,8 @@
 package com.gitlab.dhorman.cryptotrader.core
 
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.SubOrderBook
+import io.vavr.Tuple2
 import io.vavr.collection.TreeMap
 import java.math.BigDecimal
 import java.time.Instant
@@ -24,16 +26,7 @@ data class TradeStat(
 )
 
 data class TradeStatOrder(
-    val ttwAvgMs: Long,
-    val ttwVariance: Long,
-    val ttwStdDev: Long,
-    val minAmount: BigDecimal,
-    val maxAmount: BigDecimal,
-    val avgAmount: BigDecimal,
-    val varianceAmount: BigDecimal,
-    val stdDevAmount: BigDecimal,
-    val firstTranTs: Instant,
-    val lastTranTs: Instant
+    val baseQuoteAvgAmount: Tuple2<Amount, Amount>
 )
 
 enum class OrderSpeed {

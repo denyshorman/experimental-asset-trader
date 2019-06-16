@@ -180,7 +180,7 @@ class PoloniexTrader(
             if (p0.id == p1.id) {
                 0
             } else {
-                p1.amountMultiplier.compareTo(p0.amountMultiplier)
+                p1.profitability.compareTo(p0.profitability)
             }
         })
 

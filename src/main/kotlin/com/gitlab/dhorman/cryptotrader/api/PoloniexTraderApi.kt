@@ -83,7 +83,7 @@ class PoloniexTraderApi(
                 if (p0.id == p1.id) {
                     0
                 } else {
-                    p0.waitTime.compareTo(p1.waitTime)
+                    p0.profitability.compareTo(p1.profitability)
                 }
             }).take(100)
     }

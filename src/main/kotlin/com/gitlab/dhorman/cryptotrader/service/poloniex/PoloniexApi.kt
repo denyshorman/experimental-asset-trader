@@ -198,7 +198,7 @@ class PoloniexApi(
                 val market = it._1.toMarket()
                 val currentAmountMap = it._2 as kotlin.collections.Map<*, *>
                 val baseCurrencyAmount = BigDecimal(currentAmountMap[market.baseCurrency] as String)
-                val quoteCurrencyAmount = BigDecimal(currentAmountMap[market.baseCurrency] as String)
+                val quoteCurrencyAmount = BigDecimal(currentAmountMap[market.quoteCurrency] as String)
                 tuple(market, tuple(baseCurrencyAmount, quoteCurrencyAmount))
             }
             .toMap({ it._1 }, { it._2 })

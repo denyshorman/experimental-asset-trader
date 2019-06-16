@@ -4,12 +4,10 @@ import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.buyBaseAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
-import com.gitlab.dhorman.cryptotrader.trader.data.tradestat.*
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import io.vavr.Tuple2
 import io.vavr.collection.HashMap
 import io.vavr.collection.Map
-import io.vavr.collection.Queue
 import io.vavr.collection.Set
 import io.vavr.kotlin.component1
 import io.vavr.kotlin.component2
@@ -24,8 +22,8 @@ import mu.KotlinLogging
 import org.springframework.stereotype.Component
 import reactor.core.publisher.Flux
 import java.math.BigDecimal
+import java.math.RoundingMode
 import java.time.*
-import java.time.temporal.ChronoUnit
 
 typealias MarketIntMap = Map<MarketId, Market>
 typealias MarketStringMap = Map<Market, MarketId>
@@ -312,139 +310,27 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
     }
 
     val tradesStat: Flux<Map<MarketId, Flux<TradeStat>>> = run {
-        val bufferLimit = 100
-
-        markets.map { (_, marketStringMap) ->
-            marketStringMap.map { market, marketId ->
-                val tradesFlow = FlowScope.flux {
-                    while (isActive) {
-                        try {
-                            val tradeFromDate = Instant.now().minus(90, ChronoUnit.MINUTES)
-                            var trade1 = poloniexApi.tradeHistoryPublic(market, tradeFromDate).awaitSingle().run {
-                                var sellTrades = Queue.empty<SimpleTrade>()
-                                var buyTrades = Queue.empty<SimpleTrade>()
-
-                                for (trade in this) {
-                                    val trade0 =
-                                        SimpleTrade(trade.price, trade.amount, trade.date.toInstant(ZoneOffset.UTC))
-
-                                    if (trade.type == OrderType.Sell) {
-                                        sellTrades = sellTrades.append(trade0)
-                                    } else {
-                                        buyTrades = buyTrades.append(trade0)
-                                    }
-                                }
-
-                                if (sellTrades.length() > bufferLimit)
-                                    sellTrades = sellTrades.dropRight(sellTrades.length() - bufferLimit)
-
-                                if (buyTrades.length() > bufferLimit)
-                                    buyTrades = buyTrades.dropRight(buyTrades.length() - bufferLimit)
-
-                                Trade1(
-                                    sellOld = sellTrades,
-                                    sellNew = sellTrades,
-                                    buyOld = buyTrades,
-                                    buyNew = buyTrades,
-                                    sellStatus = Trade1Status.Init,
-                                    buyStatus = Trade1Status.Init
-                                )
-                            }
-                            var trade2 = Trade2.DEFAULT
-
-                            val orderBookTradesFlow = orderBooks.awaitFirst().getOrNull(marketId)
-                                ?.handle<OrderBookTrade> { orderBookData, sink ->
-                                    val trade = orderBookData.notification as? OrderBookTrade
-                                    if (trade != null) sink.next(trade)
-                                }
-                                ?: throw Exception("Can't find order book by specified market")
-
-                            fun calcTrade1(bookTrade: OrderBookTrade) {
-                                val newTrade = SimpleTrade(bookTrade.price, bookTrade.amount, bookTrade.timestamp)
-                                val sellOld: Queue<SimpleTrade>
-                                val sellNew: Queue<SimpleTrade>
-                                val buyOld: Queue<SimpleTrade>
-                                val buyNew: Queue<SimpleTrade>
-                                val sellStatus: Trade1Status
-                                val buyStatus: Trade1Status
-
-                                if (bookTrade.orderType == OrderType.Sell) {
-                                    sellOld = trade1.sellNew
-                                    sellNew = Trade1.newTrades(newTrade, trade1.sellNew, bufferLimit)
-                                    buyOld = trade1.buyOld
-                                    buyNew = trade1.buyNew
-                                    sellStatus = Trade1Status.Changed
-                                    buyStatus = Trade1Status.NotChanged
-                                } else {
-                                    buyOld = trade1.buyNew
-                                    buyNew = Trade1.newTrades(newTrade, trade1.buyNew, bufferLimit)
-                                    sellOld = trade1.sellOld
-                                    sellNew = trade1.sellNew
-                                    buyStatus = Trade1Status.Changed
-                                    sellStatus = Trade1Status.NotChanged
-                                }
-
-                                trade1 = Trade1(sellOld, sellNew, buyOld, buyNew, sellStatus, buyStatus)
-                            }
-
-                            fun calcTrade2() {
-                                val sell = when (trade1.sellStatus) {
-                                    Trade1Status.Changed -> Trade2State.calc(
-                                        trade2.sell,
-                                        trade1.sellOld,
-                                        trade1.sellNew
-                                    )
-                                    Trade1Status.NotChanged -> trade2.sell
-                                    Trade1Status.Init -> Trade2State.calcFull(trade1.sellNew)
-                                }
-
-                                val buy = when (trade1.buyStatus) {
-                                    Trade1Status.Changed -> Trade2State.calc(
-                                        trade2.buy,
-                                        trade1.buyOld,
-                                        trade1.buyNew
-                                    )
-                                    Trade1Status.NotChanged -> trade2.buy
-                                    Trade1Status.Init -> Trade2State.calcFull(trade1.buyNew)
-                                }
-
-                                trade2 = Trade2(sell, buy)
-                            }
-
-                            suspend fun sendStat() {
-                                send(TradeStat(Trade2State.map(trade2.sell), Trade2State.map(trade2.buy)))
-                            }
-
-                            calcTrade2()
-                            sendStat()
-
-                            coroutineScope {
-                                launch {
-                                    poloniexApi.connection.collect { connected ->
-                                        if (!connected) throw Exception("Connection lost")
-                                    }
-                                }
-
-                                orderBookTradesFlow.onBackpressureBuffer().collect { bookTrade ->
-                                    calcTrade1(bookTrade)
-                                    calcTrade2()
-                                    sendStat()
-                                }
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            if (logger.isDebugEnabled) logger.warn(e.message)
-                            delay(1000)
-                        }
-                    }
+        FlowScope.flux {
+            dayVolume.collect {dayVolumeMap ->
+                val marketsMap = markets.awaitFirst()._2
+                val map = dayVolumeMap.map {market, amount ->
+                    val marketId = marketsMap.getOrNull(market)
+                    val amountBase = amount._1.divide(BigDecimal(2), 8, RoundingMode.DOWN)
+                    val amountQuote = amount._2.divide(BigDecimal(2), 8, RoundingMode.DOWN)
+                    val buySellStat = TradeStatOrder(
+                        baseQuoteAvgAmount = tuple(amountBase, amountQuote)
+                    )
+                    val tradeStat = TradeStat(
+                        sell = buySellStat,
+                        buy = buySellStat
+                    )
+                    tuple(marketId!!, Flux.just(tradeStat))
                 }
-                    .replay(1)
-                    .refCount(1, Duration.ofMinutes(2))
 
-                tuple(marketId, tradesFlow)
+                send(map)
             }
-        }.cache(1)
+
+        }.replay(1).refCount(1, Duration.ofMinutes(20))
     }
 
     val openOrders: Flux<Map<Long, OpenOrderWithMarket>> = run {
@@ -649,6 +535,22 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                 }
             }
         }.cache(1)
+    }
+
+    val dayVolume: Flux<Map<Market, Tuple2<Amount, Amount>>> = run {
+        FlowScope.flux {
+            while (isActive) {
+                try {
+                    send(poloniexApi.dayVolume())
+                    delay(3 * 60 * 1000)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.debug{ "Can't fetch day volume from Poloniex because ${e.message}" }
+                    delay(2000)
+                }
+            }
+        }.replay(1).refCount(1, Duration.ofMinutes(20))
     }
 
     suspend fun getMarketId(market: Market): MarketId? {
