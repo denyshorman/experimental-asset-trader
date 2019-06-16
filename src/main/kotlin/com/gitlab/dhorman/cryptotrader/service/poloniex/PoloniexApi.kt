@@ -484,7 +484,12 @@ class PoloniexApi(
             .toMap { it }
 
         try {
-            return callPrivateApi(command, jacksonTypeRef<MoveOrderWrapper>(), params.merge(optParams)).awaitSingle()
+            return callPrivateApi(
+                command,
+                jacksonTypeRef<MoveOrderWrapper>(),
+                params.merge(optParams),
+                false
+            ).awaitSingle()
                 .run {
                     val r = this
                     if (r.success) {
@@ -519,9 +524,10 @@ class PoloniexApi(
     private fun <T : Any> callPublicApi(
         command: String,
         type: TypeReference<T>,
-        queryParams: Map<String, String> = HashMap.empty()
+        queryParams: Map<String, String> = HashMap.empty(),
+        limitRate: Boolean = true
     ): Mono<T> = FlowScope.mono {
-        convertBodyToJsonAndHandleKnownErrors(type) {
+        convertBodyToJsonAndHandleKnownErrors(type, limitRate) {
             val qParams = hashMap("command" to command)
                 .merge(queryParams)
                 .iterator()
@@ -537,9 +543,10 @@ class PoloniexApi(
     private fun <T : Any> callPrivateApi(
         methodName: String,
         type: TypeReference<T>,
-        postArgs: Map<String, String> = HashMap.empty()
+        postArgs: Map<String, String> = HashMap.empty(),
+        limitRate: Boolean = true
     ): Mono<T> = FlowScope.mono {
-        convertBodyToJsonAndHandleKnownErrors(type) {
+        convertBodyToJsonAndHandleKnownErrors(type, limitRate) {
             val postParamsPrivate = hashMap(
                 "command" to methodName,
                 "nonce" to System.currentTimeMillis().toString()
@@ -561,13 +568,14 @@ class PoloniexApi(
 
     private suspend fun <T : Any> convertBodyToJsonAndHandleKnownErrors(
         type: TypeReference<T>,
+        limitRate: Boolean = true,
         block: suspend () -> ClientResponse
     ): T {
         var data: T?
 
         while (true) {
             try {
-                delay(reqLimiter.get().toMillis()) // TODO: Investigate delay for public and private API calls
+                if (limitRate) delay(reqLimiter.get().toMillis())
                 val resp = block()
                 data = bodyToJson(resp, type)
                 break
