@@ -181,4 +181,12 @@ class TransactionsDao(
             .then()
             .awaitFirstOrNull()
     }
+
+    suspend fun deleteOldOrderIds(tranId: UUID, count: Int) {
+        databaseClient.execute().sql("DELETE FROM poloniex_transaction_order_ids WHERE order_id IN (SELECT order_id FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY added_ts LIMIT $2)")
+            .bind(0, tranId)
+            .bind(1, count)
+            .then()
+            .awaitFirstOrNull()
+    }
 }

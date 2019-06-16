@@ -948,6 +948,8 @@ class PoloniexTrader(
                                 }
                             }
 
+                            var moveCount = 0
+
                             orderBook.onBackpressureLatest().takeWhile { isActive }.collect { book ->
                                 kotlinx.coroutines.withContext(NonCancellable) {
                                     logger.debug { "[$market, $orderType] Order book changed" }
@@ -965,6 +967,11 @@ class PoloniexTrader(
                                     handlePlaceMoveOrderResult(resp)
 
                                     logger.debug { "[$market, $orderType] Moved order with price ${resp._2} and amount ${resp._3}" }
+
+                                    if (moveCount++ > 150) {
+                                        transactionsDao.deleteOldOrderIds(id, 100)
+                                        moveCount = 0
+                                    }
                                 }
                             }
                         } finally {
