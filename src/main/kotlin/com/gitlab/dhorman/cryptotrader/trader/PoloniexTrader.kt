@@ -167,15 +167,24 @@ class PoloniexTrader(
             .mkString("->")
     }
 
+    private fun Array<TranIntentMarket>.id(): String {
+        return this.iterator().map {
+            val speed = if (it.orderSpeed == OrderSpeed.Instant) "0" else "1"
+            "${it.market.baseCurrency}${it.market.quoteCurrency}$speed"
+        }.mkString("")
+    }
+
     private suspend fun selectBestPath(
         initAmount: Amount,
         fromCurrency: Currency,
         fromAmount: Amount,
         endCurrencies: List<Currency>
     ): ExhaustivePath? {
+        val activeTransactionIds = transactionsDao.getAll().map { it._2.id() }
+
         val allPaths = indicators.getPaths(fromCurrency, fromAmount, endCurrencies, fun(p): Boolean {
             val targetMarket = p.chain.lastOrNull() ?: return false
-            return initAmount < targetMarket.toAmount
+            return initAmount < targetMarket.toAmount && !activeTransactionIds.contains(p.id)
         }, Comparator { p0, p1 ->
             if (p0.id == p1.id) {
                 0
