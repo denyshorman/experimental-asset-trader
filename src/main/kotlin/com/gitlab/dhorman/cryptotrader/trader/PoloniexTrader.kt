@@ -60,6 +60,9 @@ class PoloniexTrader(
     @Volatile
     var primaryCurrencies: List<Currency> = list("USDT", "USDC")
 
+    @Volatile
+    var fixedAmount: Amount = BigDecimal("100")
+
     fun start(scope: CoroutineScope) = scope.launch {
         logger.info("Start trading")
 
@@ -68,7 +71,7 @@ class PoloniexTrader(
         resumeSleepingTransactions(tranIntentScope)
 
         try {
-            val tickerFlow = Flux.interval(Duration.ofMinutes(120))
+            val tickerFlow = Flux.interval(Duration.ofSeconds(30))
                 .startWith(0)
                 .onBackpressureLatest()
 
@@ -404,26 +407,27 @@ class PoloniexTrader(
 
         val allBalances = data.balances.awaitFirst()
 
-        val availableBalances = allBalances.toVavrStream()
+        val availableBalance = allBalances.toVavrStream()
             .filter { primaryCurrencies.contains(it._1) }
             .map { currencyAvailableAndOnOrders ->
                 val (currency, availableAndOnOrders) = currencyAvailableAndOnOrders
                 val (available, onOrders) = availableAndOnOrders
                 val balanceInUse = usedBalances.getOrDefault(currency, BigDecimal.ZERO)
                 val reservedAmount = onOrders - balanceInUse
-                val availableAmount =
-                    available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
+                var availableAmount =
+                    available - fixedAmount + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
+                if (availableAmount < BigDecimal.ZERO) availableAmount = BigDecimal.ZERO
                 tuple(currency, availableAmount)
             }
             .filter { it._2 > BigDecimal(2) }
-            .firstOrNull()
+            .firstOrNull() ?: return null
 
-        return availableBalances?.run {
-            if (_2 > BigDecimal(5)) {
-                tuple(_1, BigDecimal(1))
-            } else {
-                this
-            }
+        val (currency, amount) = availableBalance
+
+        return if (amount > BigDecimal(5)) {
+            tuple(currency, BigDecimal(5))
+        } else {
+            availableBalance
         }
     }
 
