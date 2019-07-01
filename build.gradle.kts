@@ -63,7 +63,9 @@ dependencies {
     testImplementation("org.mockito:mockito-core:2.26.0")
     testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.1.0")
     testImplementation("io.projectreactor:reactor-test")
-    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-test") {
+        exclude("junit:junit")
+    }
 }
 
 tasks {

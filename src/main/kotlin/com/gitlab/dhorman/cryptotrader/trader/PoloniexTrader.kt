@@ -94,7 +94,7 @@ class PoloniexTrader(
                     val endAmount = bestPath.chain.last().toAmount
                     val longPath = bestPath.longPathString()
 
-                    "Found optimal path: $longPath, using amount $startAmount with potential profit $endAmount"
+                    "Found optimal path: $longPath, using amount $startAmount with potential profit ${endAmount - startAmount}"
                 }
 
                 startPathTransaction(bestPath, tranIntentScope)
@@ -109,7 +109,7 @@ class PoloniexTrader(
     private suspend fun resumeSleepingTransactions(scope: CoroutineScope) {
         logger.debug { "Trying to resume sleeping transactions..." }
 
-        val sleepingTransactions = transactionsDao.getAll()
+        val sleepingTransactions = transactionsDao.getActive()
 
         for ((id, markets) in sleepingTransactions) {
             val startMarketIdx = partiallyCompletedMarketIndex(markets)!!
@@ -144,8 +144,8 @@ class PoloniexTrader(
 
                     withContext(NonCancellable) {
                         TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
-                            transactionsDao.add(newId, changedMarkets, startMarketIdx)
-                            transactionsDao.delete(id)
+                            transactionsDao.addActive(newId, changedMarkets, startMarketIdx)
+                            transactionsDao.deleteActive(id)
                         }).retry().awaitFirstOrNull()
                     }
 
@@ -187,7 +187,7 @@ class PoloniexTrader(
         fromAmount: Amount,
         endCurrencies: List<Currency>
     ): ExhaustivePath? {
-        val activeTransactionIds = transactionsDao.getAll().map { it._2.id() }
+        val activeTransactionIds = transactionsDao.getActive().map { it._2.id() }
 
         val allPaths = indicators.getPaths(fromCurrency, fromAmount, endCurrencies, fun(p): Boolean {
             val targetMarket = p.chain.lastOrNull() ?: return false
@@ -219,7 +219,7 @@ class PoloniexTrader(
             val availableAmount = available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
 
             if (availableAmount >= requestedAmount) {
-                transactionsDao.add(id, markets, marketIdx)
+                transactionsDao.addActive(id, markets, marketIdx)
                 true
             } else {
                 false
@@ -460,7 +460,7 @@ class PoloniexTrader(
                     val modifiedMarkets = mergeMarkets(markets, unfilledMarkets)
 
                     if (unfilledMarkets.length() != 0) {
-                        transactionsDao.update(id, modifiedMarkets, marketIdx)
+                        transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
                         unfilledMarketsDao.remove(markets[0].fromCurrency, currentMarket.fromCurrency)
                     }
 
@@ -479,9 +479,11 @@ class PoloniexTrader(
                     feeFlow
                 )
 
+                logger.debug { "Instant ${currentMarket.orderType} has been completed. Trades: $trades" }
+
                 withContext(NonCancellable) {
                     if (trades.length() == 0) {
-                        if (marketIdx == 0) transactionsDao.delete(id)
+                        if (marketIdx == 0) transactionsDao.deleteActive(id)
                         return@withContext
                     }
 
@@ -491,21 +493,31 @@ class PoloniexTrader(
                         unfilledTradeMarkets[marketIdx].fromAmount(unfilledTradeMarkets, marketIdx)
 
                     if (unfilledFromAmount.compareTo(BigDecimal.ZERO) != 0 && marketIdx != 0) {
-                        unfilledMarketsDao.add(
-                            unfilledTradeMarkets[0].fromCurrency,
-                            unfilledTradeMarkets[0].fromAmount(unfilledTradeMarkets, 0),
-                            unfilledTradeMarkets[marketIdx].fromCurrency,
-                            unfilledFromAmount
-                        )
+                        val fromCurrencyInit = unfilledTradeMarkets[0].fromCurrency
+                        val fromCurrencyInitAmount = unfilledTradeMarkets[0].fromAmount(unfilledTradeMarkets, 0)
+                        val fromCurrencyCurrent = unfilledTradeMarkets[marketIdx].fromCurrency
+
+                        val primaryCurrencyUnfilled = primaryCurrencies.contains(fromCurrencyCurrent)
+                                && primaryCurrencies.contains(fromCurrencyInit)
+                                && fromCurrencyInitAmount <= unfilledFromAmount
+
+                        if (!primaryCurrencyUnfilled) {
+                            unfilledMarketsDao.add(
+                                fromCurrencyInit,
+                                fromCurrencyInitAmount,
+                                fromCurrencyCurrent,
+                                unfilledFromAmount
+                            )
+                        }
                     }
 
                     if (newMarketIdx != modifiedMarkets.length()) {
-                        transactionsDao.update(id, committedMarkets, newMarketIdx)
+                        transactionsDao.updateActive(id, committedMarkets, newMarketIdx)
                         TransactionIntent(id, committedMarkets, newMarketIdx, TranIntentScope).start()
                     } else {
                         TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
                             transactionsDao.addCompleted(id, committedMarkets)
-                            transactionsDao.delete(id)
+                            transactionsDao.deleteActive(id)
                         }).retry().awaitFirstOrNull()
                     }
                 }
@@ -527,16 +539,17 @@ class PoloniexTrader(
                                 fromAmount,
                                 orderBookFlow
                             )
-                                .collect { (orderId, trade) ->
+                                .collect { tradesAndOrderIds ->
                                     withContext(NonCancellable) {
-                                        val orderIds = list(orderId)
-                                        val trades = Array.of(trade)
+                                        val trades = Array.ofAll(tradesAndOrderIds.map { it._2 })
                                         val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
                                         updatedMarkets = marketSplit._1
                                         val committedMarkets = marketSplit._2
 
                                         fromAmount =
                                             (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
+
+                                        logger.debug { "[${currentMarket.market}, ${currentMarket.orderType}] Received delayed trades: $trades" }
 
                                         if (fromAmount.compareTo(BigDecimal.ZERO) == 0) {
                                             profitMonitoringJob.cancelAndJoin()
@@ -547,14 +560,15 @@ class PoloniexTrader(
 
                                         if (newMarketIdx != modifiedMarkets.length()) {
                                             val newId = UUID.randomUUID()
+                                            val orderIds = tradesAndOrderIds.map { it._1 }.toVavrList()
 
                                             TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
                                                 if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
                                                     transactionsDao.removeOrderIds(id, orderIds)
-                                                    transactionsDao.update(id, updatedMarkets, marketIdx)
+                                                    transactionsDao.updateActive(id, updatedMarkets, marketIdx)
                                                 }
 
-                                                transactionsDao.add(newId, committedMarkets, newMarketIdx)
+                                                transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
                                             }).retry().awaitFirstOrNull()
 
                                             TransactionIntent(
@@ -592,18 +606,29 @@ class PoloniexTrader(
 
                         if (marketIdx != 0 && fromAmount.compareTo(BigDecimal.ZERO) != 0) {
                             if (!isCancelled) {
+                                val fromCurrencyInit = initMarket.fromCurrency
+                                val fromCurrencyInitAmount = initMarket.fromAmount(updatedMarkets, 0)
+                                val fromCurrencyCurrent = currMarket.fromCurrency
+                                val fromCurrencyCurrentAmount = currMarket.fromAmount(updatedMarkets, marketIdx)
+
+                                val primaryCurrencyUnfilled = primaryCurrencies.contains(fromCurrencyCurrent)
+                                        && primaryCurrencies.contains(fromCurrencyInit)
+                                        && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
+
                                 TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
-                                    transactionsDao.delete(id)
-                                    unfilledMarketsDao.add(
-                                        initMarket.fromCurrency,
-                                        initMarket.fromAmount(updatedMarkets, 0),
-                                        currMarket.fromCurrency,
-                                        currMarket.fromAmount(updatedMarkets, marketIdx)
-                                    )
+                                    transactionsDao.deleteActive(id)
+                                    if (!primaryCurrencyUnfilled) {
+                                        unfilledMarketsDao.add(
+                                            fromCurrencyInit,
+                                            fromCurrencyInitAmount,
+                                            fromCurrencyCurrent,
+                                            fromCurrencyCurrentAmount
+                                        )
+                                    }
                                 }).retry().awaitFirstOrNull()
                             }
                         } else {
-                            transactionsDao.delete(id)
+                            transactionsDao.deleteActive(id)
                         }
                     }
                 }
@@ -704,6 +729,8 @@ class PoloniexTrader(
             }
 
             try {
+                var retryCount = 0
+
                 while (unfilledAmount.compareTo(BigDecimal.ZERO) != 0) {
                     val simulatedTrades = simulateInstantTrades(unfilledAmount, orderType, orderBookFlow, feeFlow)
 
@@ -743,16 +770,24 @@ class PoloniexTrader(
                             }
                         }
                     } catch (e: UnableToFillOrderException) {
+                        retryCount = 0
                         logger.debug(e.originalMsg)
                         delay(100)
                         continue
                     } catch (e: TransactionFailedException) {
+                        retryCount = 0
                         logger.debug(e.originalMsg)
                         delay(500)
                         continue
                     } catch (e: NotEnoughCryptoException) {
                         logger.error(e.originalMsg)
-                        break
+
+                        if (retryCount++ == 3) {
+                            break
+                        } else {
+                            delay(1000)
+                            continue
+                        }
                     } catch (e: AmountMustBeAtLeastException) {
                         logger.debug(e.originalMsg)
                         break
@@ -763,22 +798,24 @@ class PoloniexTrader(
                         logger.debug(e.originalMsg)
                         break
                     } catch (e: MaxOrdersExceededException) {
+                        retryCount = 0
                         logger.warn(e.originalMsg)
                         delay(1500)
                         continue
                     } catch (e: UnknownHostException) {
+                        retryCount = 0
                         delay(2000)
                         continue
                     } catch (e: IOException) {
+                        retryCount = 0
                         delay(2000)
                         continue
                     } catch (e: Exception) {
+                        retryCount = 0
                         delay(2000)
                         if (logger.isDebugEnabled) logger.error(e.message)
                         continue
                     }
-
-                    logger.debug { "Instant $orderType operation was successful. Amount filled with ${transaction.trades.length()} trades" }
 
                     for (trade in transaction.trades) {
                         unfilledAmount -= if (orderType == OrderType.Buy) {
@@ -787,7 +824,11 @@ class PoloniexTrader(
                             sellQuoteAmount(trade.amount)
                         }
 
-                        // TODO: Replace with transaction.feeMultiplier when Poloniex will fix the bug with sell fee
+                        // TODO: Replace with transaction.feeMultiplier when Poloniex fix the bug with sell fee
+                        if (transaction.feeMultiplier.compareTo(feeMultiplier.taker) != 0) {
+                            logger.warn("Poloniex still has a bug with fees. Expected: ${feeMultiplier.taker}. Actual: ${transaction.feeMultiplier}")
+                        }
+
                         trades.addLast(BareTrade(trade.amount, trade.price, feeMultiplier.taker))
                     }
                 }
@@ -802,8 +843,8 @@ class PoloniexTrader(
             market: Market,
             fromCurrencyAmount: Amount,
             orderBook: Flux<OrderBookAbstract>
-        ): Flow<Tuple2<Long, BareTrade>> = flow {
-            val tradesChannel: FlowCollector<Tuple2<Long, BareTrade>> = this
+        ): Flow<kotlin.collections.List<Tuple2<Long, BareTrade>>> = flow {
+            val tradesChannel: FlowCollector<kotlin.collections.List<Tuple2<Long, BareTrade>>> = this
             val unfilledAmountChannel = ConflatedBroadcastChannel(fromCurrencyAmount)
             val latestOrderIdsRef = AtomicReference(Queue.empty<Long>())
 
@@ -819,8 +860,9 @@ class PoloniexTrader(
                     while (true) {
                         try {
                             var unfilledAmount = fromCurrencyAmount
+                            val tradeList = LinkedList<Tuple2<Long, BareTrade>>()
 
-                            poloniexApi.tradeHistory(market, latestOrderTs, limit = 50).getOrNull(market)?.run {
+                            poloniexApi.tradeHistory(market, latestOrderTs, limit = 75).getOrNull(market)?.run {
                                 for (trade in this) {
                                     if (predefinedOrderIds.contains(trade.orderId)) {
                                         unfilledAmount -= if (orderType == OrderType.Buy) {
@@ -830,13 +872,13 @@ class PoloniexTrader(
                                         }
 
                                         val trade0 = BareTrade(trade.amount, trade.price, trade.feeMultiplier)
-
-                                        tradesChannel.emit(tuple(trade.orderId, trade0))
+                                        tradeList.add(tuple(trade.orderId, trade0))
                                     }
                                 }
                             }
 
                             unfilledAmountChannel.send(unfilledAmount)
+                            if (tradeList.size != 0) tradesChannel.emit(tradeList)
 
                             if (unfilledAmount.compareTo(BigDecimal.ZERO) == 0) {
                                 return@flow
@@ -856,34 +898,43 @@ class PoloniexTrader(
                     val tradesJob = coroutineContext[Job]
 
                     // Trades monitoring
-                    launch {
+                    val tradeMonitoringJob = launch {
                         logger.debug { "[$market, $orderType] Starting trades consumption..." }
 
                         var unfilledAmount = unfilledAmountChannel.value
 
-                        poloniexApi.accountNotificationStream.flatMapIterable({ it }, Int.MAX_VALUE).collect { trade ->
-                            if (trade !is TradeNotification) return@collect
-
+                        poloniexApi.accountNotificationStream.collect { trades ->
                             val orderIds = latestOrderIdsRef.get()
+                            val tradeList = LinkedList<Tuple2<Long, BareTrade>>()
 
-                            for (orderId in orderIds.reverseIterator()) {
-                                if (orderId != trade.orderId) continue
+                            for (trade in trades) {
+                                if (trade !is TradeNotification) continue
 
-                                logger.debug { "[$market, $orderType] Sending trade #${trade.tradeId} to the client.." }
+                                for (orderId in orderIds.reverseIterator()) {
+                                    if (orderId != trade.orderId) continue
 
-                                unfilledAmount -= if (orderType == OrderType.Buy) {
-                                    buyBaseAmount(trade.amount, trade.price)
-                                } else {
-                                    sellQuoteAmount(trade.amount)
+                                    unfilledAmount -= if (orderType == OrderType.Buy) {
+                                        buyBaseAmount(trade.amount, trade.price)
+                                    } else {
+                                        sellQuoteAmount(trade.amount)
+                                    }
+
+                                    tradeList.add(
+                                        tuple(
+                                            orderId,
+                                            BareTrade(trade.amount, trade.price, trade.feeMultiplier)
+                                        )
+                                    )
+
+                                    break
                                 }
+                            }
 
+                            if (tradeList.size == 0) return@collect
+
+                            kotlinx.coroutines.withContext(NonCancellable) {
                                 unfilledAmountChannel.send(unfilledAmount)
-
-                                tradesChannel.emit(
-                                    tuple(trade.orderId, BareTrade(trade.amount, trade.price, trade.feeMultiplier))
-                                )
-
-                                break
+                                tradesChannel.emit(tradeList)
                             }
                         }
                     }
@@ -907,7 +958,7 @@ class PoloniexTrader(
                         }
 
                         suspend fun placeAndHandleOrder() = kotlinx.coroutines.withContext(NonCancellable) {
-                            logger.debug { "[$market, $orderType] Placing new order with amount ${unfilledAmountChannel.value}..." }
+                            logger.debug { "[$market, $orderType] Placing new order with amount ${unfilledAmountChannel.value.toPlainString()}..." }
 
                             val placeOrderResult = placeOrder(market, orderBook, orderType, unfilledAmountChannel.value)
 
@@ -946,6 +997,7 @@ class PoloniexTrader(
                                 }
 
                                 if (orderStatus == null) {
+                                    // TODO: Add more advanced handler to check for existing trades
                                     placeAndHandleOrder()
                                 } else {
                                     prevPrice = orderStatus.price
@@ -978,6 +1030,8 @@ class PoloniexTrader(
                             }
                         } finally {
                             kotlinx.coroutines.withContext(NonCancellable) {
+                                tradeMonitoringJob.cancelAndJoin()
+
                                 if (lastOrderId != null) {
                                     while (true) {
                                         try {
@@ -995,8 +1049,6 @@ class PoloniexTrader(
                                             delay(2000)
                                         }
                                     }
-
-                                    transactionsDao.deleteAllOrderIds(id)
 
                                     logger.debug { "[$market, $orderType] Order $lastOrderId cancelled" }
                                 }
@@ -1127,16 +1179,21 @@ class PoloniexTrader(
                 } catch (e: InvalidOrderNumberException) {
                     throw e
                 } catch (e: NotEnoughCryptoException) {
+                    logger.debug(e.originalMsg)
+
                     if (retryCount++ == 3) {
                         throw e
                     } else {
                         delay(1000)
                     }
                 } catch (e: AmountMustBeAtLeastException) {
+                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: TotalMustBeAtLeastException) {
+                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: RateMustBeLessThanException) {
+                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: OrderBookEmptyException) {
                     retryCount = 0
@@ -1231,12 +1288,16 @@ class PoloniexTrader(
                     delay(500)
                     continue
                 } catch (e: NotEnoughCryptoException) {
+                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: AmountMustBeAtLeastException) {
+                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: TotalMustBeAtLeastException) {
+                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: RateMustBeLessThanException) {
+                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: OrderBookEmptyException) {
                     logger.warn(e.message)
@@ -1367,7 +1428,7 @@ class PoloniexTrader(
                     val changedMarkets = updateMarketsWithBestPath(updatedMarkets, marketIdx, bestPath!!)
 
                     withContext(NonCancellable) {
-                        transactionsDao.update(id, changedMarkets, marketIdx)
+                        transactionsDao.updateActive(id, changedMarkets, marketIdx)
                     }
 
                     if (!isActive) break

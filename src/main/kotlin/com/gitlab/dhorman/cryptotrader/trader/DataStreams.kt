@@ -119,6 +119,8 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                             for (delta in deltaUpdates) {
                                 if (delta is BalanceUpdate) {
+                                    logger.debug { delta.toString() }
+
                                     if (delta.walletType == WalletType.Exchange) {
                                         val currencyId = delta.currencyId
                                         val currency = currenciesSnapshot._2.getOrNull(currencyId)

@@ -17,7 +17,6 @@ import io.vavr.kotlin.tuple
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.beans.factory.annotation.Qualifier
-import org.springframework.boot.convert.ApplicationConversionService.configure
 import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
@@ -30,7 +29,7 @@ class TransactionsDao(
     @Qualifier("pg_client") private val databaseClient: DatabaseClient,
     private val mapper: ObjectMapper
 ) {
-    suspend fun getAll(): List<Tuple2<UUID, Array<TranIntentMarket>>> {
+    suspend fun getActive(): List<Tuple2<UUID, Array<TranIntentMarket>>> {
         return databaseClient.execute().sql("SELECT id, markets FROM poloniex_active_transactions")
             .fetch().all()
             .map {
@@ -43,7 +42,7 @@ class TransactionsDao(
             .awaitSingle()
     }
 
-    suspend fun add(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
+    suspend fun addActive(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
         val marketsJson = mapper
             .configure(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS, true)
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
@@ -62,14 +61,14 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun delete(id: UUID) {
+    suspend fun deleteActive(id: UUID) {
         databaseClient.execute().sql("DELETE FROM poloniex_active_transactions WHERE id = $1")
             .bind(0, id)
             .then()
             .awaitFirstOrNull()
     }
 
-    suspend fun update(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
+    suspend fun updateActive(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
         val marketsJson = mapper
             .configure(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS, true)
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
@@ -88,9 +87,10 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun getOrderIds(tranId: UUID): List<Long> {
-        return databaseClient.execute().sql("SELECT order_id FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY order_id DESC LIMIT 32")
+    suspend fun getOrderIds(tranId: UUID, count: Int = 32): List<Long> {
+        return databaseClient.execute().sql("SELECT order_id FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY order_id DESC LIMIT $2")
             .bind(0, tranId)
+            .bind(1, count)
             .fetch().all()
             .map { it["order_id"] as Long }
             .collectList()
@@ -105,7 +105,6 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    // TODO: Implement deletion of old records
     suspend fun addOrderId(tranId: UUID, orderId: Long) {
         databaseClient.execute().sql("INSERT INTO poloniex_transaction_order_ids(tran_id, order_id) VALUES($1, $2)")
             .bind(0, tranId)
@@ -122,15 +121,15 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun getCompleted(): List<Tuple4<Long, Array<TranIntentMarket>, LocalDateTime, LocalDateTime>> {
-        return databaseClient.execute().sql("SELECT * FROM poloniex_completed_transactions")
+    suspend fun getCompleted(): List<Tuple4<Long, Array<TranIntentMarket>, Instant, Instant>> {
+        return databaseClient.execute().sql("SELECT * FROM poloniex_completed_transactions ORDER BY completed_ts DESC")
             .fetch().all()
             .map {
                 tuple(
                     it["id"] as Long,
                     mapper.readValue<Array<TranIntentMarket>>(it["markets"] as String),
-                    it["created_ts"] as LocalDateTime,
-                    it["completed_ts"] as LocalDateTime
+                    it["created_ts"] as Instant,
+                    it["completed_ts"] as Instant
                 )
             }
             .collectList()

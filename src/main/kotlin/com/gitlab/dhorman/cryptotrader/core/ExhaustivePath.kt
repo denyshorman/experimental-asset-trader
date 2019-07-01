@@ -85,6 +85,12 @@ data class ExhaustivePath(
         amount ?: BigDecimalMax
     }
 
+    val instantCount: Int by lazy(LazyThreadSafetyMode.NONE) {
+        var count = 0
+        for (order in chain) if (order is InstantOrder) count++
+        count
+    }
+
     fun longPathString(): String {
         return this.chain.iterator().map {
             when (it) {

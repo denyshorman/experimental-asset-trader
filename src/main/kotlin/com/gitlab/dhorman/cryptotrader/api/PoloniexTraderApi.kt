@@ -11,6 +11,7 @@ import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import io.swagger.annotations.ApiOperation
 import io.vavr.Tuple2
+import io.vavr.Tuple4
 import io.vavr.collection.Array
 import io.vavr.collection.Map
 import io.vavr.collection.TreeSet
@@ -25,6 +26,7 @@ import reactor.core.publisher.Flux
 import reactor.core.scheduler.Schedulers
 import java.math.BigDecimal
 import java.time.Duration
+import java.time.Instant
 import java.util.*
 
 @RestController
@@ -90,7 +92,12 @@ class PoloniexTraderApi(
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active"])
     suspend fun getActiveTransactions(): List<Tuple2<UUID, Array<TranIntentMarket>>> {
-        return transactionsDao.getAll()
+        return transactionsDao.getActive()
+    }
+
+    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/completed"])
+    suspend fun getCompletedTransactions(): List<Tuple4<Long, Array<TranIntentMarket>, Instant, Instant>> {
+        return transactionsDao.getCompleted()
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/balances-in-use"])

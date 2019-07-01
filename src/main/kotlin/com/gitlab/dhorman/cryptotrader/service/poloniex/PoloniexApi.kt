@@ -44,6 +44,7 @@ import java.net.URI
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val PoloniexPrivatePublicHttpApiUrl = "https://poloniex.com"
 private const val PoloniexWebSocketApiUrl = "wss://api2.poloniex.com"
@@ -538,8 +539,7 @@ class PoloniexApi(
             return callPrivateApi(
                 command,
                 jacksonTypeRef<MoveOrderWrapper>(),
-                params.merge(optParams),
-                false
+                params.merge(optParams)
             ).awaitSingle()
                 .run {
                     val r = this
@@ -707,6 +707,7 @@ class PoloniexApi(
     ): Flux<T> = FlowScope.flux {
         val main = this
         var messagesConsumptionJob: Job? = null
+        val shouldUnsubscribe = AtomicBoolean(true)
 
         fun CoroutineScope.startMessagesConsumption() = this.launch {
             connectionInput.onBackpressureBuffer(Int.MAX_VALUE).collect { msg ->
@@ -762,6 +763,8 @@ class PoloniexApi(
         }
 
         suspend fun unsubscribeFromChannel() {
+            if (!shouldUnsubscribe.get()) return
+
             val command = Command(CommandType.Unsubscribe, channel)
             val json = objectMapper.writeValueAsString(command)
 
@@ -796,6 +799,8 @@ class PoloniexApi(
         }
 
         connection.collect { connected ->
+            shouldUnsubscribe.set(connected)
+
             if (messagesConsumptionJob != null) {
                 messagesConsumptionJob!!.cancelAndJoin()
                 messagesConsumptionJob = null
