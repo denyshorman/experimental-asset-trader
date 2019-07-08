@@ -1,5 +1,8 @@
 package com.gitlab.dhorman.cryptotrader.util
 
+import io.vavr.Tuple2
+import io.vavr.collection.Map
+import io.vavr.collection.HashMap
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.channels.Channel
@@ -108,7 +111,6 @@ fun <T> Flow<T>.share(replayCount: Int = 0, gracePeriod: Duration? = null): Flow
     return ShareOperator(this, replayCount, gracePeriod)
 }
 
-
 fun <T> Flow<T>.buffer(timespan: Duration): Flow<List<T>> = flow {
     coroutineScope {
         var events = LinkedList<T>()
@@ -137,4 +139,18 @@ fun <T> Flow<T>.buffer(timespan: Duration): Flow<List<T>> = flow {
             }
         }
     }
+}
+
+fun <K, V> flowFromMap(map: Map<K, V>): Flow<Tuple2<K, V>> = flow {
+    map.forEach { emit(it) }
+}
+
+suspend fun <K, V> Flow<Tuple2<K, V>>.collectMap(): Map<K, V> = coroutineScope {
+    var map = HashMap.empty<K, V>()
+
+    collect {
+        map = map.put(it)
+    }
+
+    map
 }

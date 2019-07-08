@@ -87,7 +87,7 @@ class PoloniexApi(
                                     msg.payload.read(payloadBytes)
 
                                     if (logger.isTraceEnabled) {
-                                        val payloadStr = String(payloadBytes, StandardCharsets.UTF_8);
+                                        val payloadStr = String(payloadBytes, StandardCharsets.UTF_8)
                                         logger.trace("Received: $payloadStr")
                                     }
 
@@ -792,7 +792,7 @@ class PoloniexApi(
                         logger.debug("Can't subscribe to channel $channel. Retrying...")
                         delay(100)
                     } catch (e: CancellationException) {
-                        kotlinx.coroutines.withContext(NonCancellable) {
+                        withContext(NonCancellable) {
                             unsubscribeFromChannel()
                         }
                         throw e

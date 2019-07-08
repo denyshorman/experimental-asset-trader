@@ -10,7 +10,8 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.ExhaustivePathOrdering
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsUtil
-import io.vavr.collection.HashMap
+import com.gitlab.dhorman.cryptotrader.util.collectMap
+import com.gitlab.dhorman.cryptotrader.util.flowFromMap
 import io.vavr.collection.Map
 import io.vavr.collection.Traversable
 import io.vavr.collection.TreeSet
@@ -18,10 +19,7 @@ import io.vavr.kotlin.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.flow.asPublisher
 import kotlinx.coroutines.withContext
 import mu.KotlinLogging
@@ -129,32 +127,26 @@ class IndicatorStreams(private val data: DataStreams) {
         val uniqueMarkets = PathsUtil.uniqueMarkets(paths).map { markets[it].get() }
 
         val booksMapDeferrable = async {
-            var booksMap = HashMap.empty<MarketId, OrderBookData>()
-            data.orderBooks.first()
-                .filter { marketId, _ -> uniqueMarkets.contains(marketId) }
-                .map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
-                .map { async { it.first() } }
-                .forEach {
-                    booksMap = booksMap.put(it.await())
-                }
-            booksMap
+            val orderBookMap = data.orderBooks.first()
+
+            flowFromMap(orderBookMap)
+                .filter { uniqueMarkets.contains(it._1) }
+                .flatMapMerge(orderBookMap.length()) { it._2.map { book -> tuple(it._1, book) }.take(1) }
+                .collectMap()
         }
 
         val statsMapDeferrable = async {
-            var statsMap = HashMap.empty<MarketId, TradeStat>()
-            data.tradesStat.first()
-                .filter { marketId, _ -> uniqueMarkets.contains(marketId) }
-                .map { kv -> kv._2.map { x -> tuple(kv._1, x) }.take(1) }
-                .map { async { it.first() } }
-                .forEach {
-                    statsMap = statsMap.put(it.await())
-                }
-            statsMap
+            val stats = data.tradesStat.first()
+
+            flowFromMap(stats)
+                .filter { uniqueMarkets.contains(it._1) }
+                .flatMapMerge(stats.length()) { it._2.map { stat -> tuple(it._1, stat) }.take(1) }
+                .collectMap()
         }
 
-        var availablePaths = TreeSet.empty(pathComparator)
-
         withContext(Dispatchers.IO) {
+            var availablePaths = TreeSet.empty(pathComparator)
+
             val exhaustivePaths = PathsUtil.map(
                 paths,
                 booksMapDeferrable.await(),
@@ -169,8 +161,8 @@ class IndicatorStreams(private val data: DataStreams) {
                     availablePaths = availablePaths.add(exhaustivePath)
                 }
             }
-        }
 
-        availablePaths
+            availablePaths
+        }
     }
 }
