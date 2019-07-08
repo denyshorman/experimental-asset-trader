@@ -185,7 +185,8 @@ class PoloniexTrader(
         initAmount: Amount,
         fromCurrency: Currency,
         fromAmount: Amount,
-        endCurrencies: List<Currency>
+        endCurrencies: List<Currency>,
+        recommendedChainCount: Int? = null
     ): ExhaustivePath? {
         val activeTransactionIds = transactionsDao.getActive().map { it._2.id() }
 
@@ -196,7 +197,28 @@ class PoloniexTrader(
             if (p0.id == p1.id) {
                 0
             } else {
-                p1.profitability.compareTo(p0.profitability)
+                if (recommendedChainCount == null) {
+                    p1.profitability.compareTo(p0.profitability)
+                } else {
+                    val c0 = p0.chain.length()
+                    val c1 = p1.chain.length()
+
+                    if (c0 <= recommendedChainCount && c1 <= recommendedChainCount) {
+                        p1.profitability.compareTo(p0.profitability)
+                    } else if (c0 <= recommendedChainCount) {
+                        -1
+                    } else if (c1 <= recommendedChainCount) {
+                        1
+                    } else {
+                        val c = c0.compareTo(c1)
+
+                        if (c == 0) {
+                            p1.profitability.compareTo(p0.profitability)
+                        } else {
+                            c
+                        }
+                    }
+                }
             }
         })
 
@@ -276,9 +298,11 @@ class PoloniexTrader(
         initAmount: Amount,
         fromCurrency: Currency,
         fromAmount: Amount,
-        endCurrencies: List<Currency>
+        endCurrencies: List<Currency>,
+        recommendedChainCount: Int? = null
     ): Array<TranIntentMarket>? {
-        val bestPath = selectBestPath(initAmount, fromCurrency, fromAmount, endCurrencies) ?: return null
+        val bestPath =
+            selectBestPath(initAmount, fromCurrency, fromAmount, endCurrencies, recommendedChainCount) ?: return null
         return prepareMarketsForIntent(bestPath)
     }
 
@@ -1415,7 +1439,13 @@ class PoloniexTrader(
                     while (true) {
                         logger.debug { "Trying to find new path for ${updatedMarkets.pathString()}..." }
 
-                        bestPath = findNewPath(initAmount, fromCurrency, fromCurrencyAmount, primaryCurrencies)
+                        bestPath = findNewPath(
+                            initAmount,
+                            fromCurrency,
+                            fromCurrencyAmount,
+                            primaryCurrencies,
+                            updatedMarkets.length() - marketIdx
+                        )
 
                         if (bestPath != null) {
                             logger.debug { "New path found ${bestPath.pathString()}" }
