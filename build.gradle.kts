@@ -4,14 +4,14 @@ group = "com.gitlab.dhorman"
 version = versioning.info.full
 java.sourceCompatibility = JavaVersion.VERSION_1_8
 
-val kotlinVersion = "1.3.40"
-val kotlinCoroutinesVersion = "1.2.2"
+val kotlinVersion = "1.3.41"
+val kotlinCoroutinesVersion = "1.3.0-M2"
 val jacksonVersion = "2.9.9"
 val swaggerVersion = "3.0.0-SNAPSHOT"
 
 plugins {
-    kotlin("jvm") version "1.3.40"
-    kotlin("plugin.spring") version "1.3.40"
+    kotlin("jvm") version "1.3.41"
+    kotlin("plugin.spring") version "1.3.41"
     id("org.springframework.boot") version "2.2.0.M3"
     id("net.nemerosa.versioning") version "2.8.2"
 }

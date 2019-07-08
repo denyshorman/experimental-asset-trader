@@ -3,7 +3,6 @@ package com.gitlab.dhorman.cryptotrader.service.poloniex
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.calcQuoteAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.BuyOrderType
-import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.Ignore
@@ -24,7 +23,7 @@ class PoloniexApiTest {
     @Test
     @Ignore
     fun `Get open orders for market USDC_ATOM`() = runBlocking {
-        val openOrders = poloniexApi.openOrders(Market("USDC", "ATOM")).awaitSingle()
+        val openOrders = poloniexApi.openOrders(Market("USDC", "ATOM"))
         logger.info("Open orders received: $openOrders")
     }
 

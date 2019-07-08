@@ -12,6 +12,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
+import com.gitlab.dhorman.cryptotrader.util.buffer
 import io.vavr.Tuple2
 import io.vavr.Tuple3
 import io.vavr.collection.Array
@@ -26,7 +27,6 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.awaitFirst
 import kotlinx.coroutines.reactive.awaitFirstOrNull
-import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.reactive.collect
 import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
@@ -77,7 +77,7 @@ class PoloniexTrader(
         try {
             val tickerFlow = Flux.interval(Duration.ofSeconds(30))
                 .startWith(0)
-                .onBackpressureLatest()
+                .onBackpressureDrop()
 
             tickerFlow.collect {
                 logger.debug { "Trying to find new transaction..." }
@@ -213,7 +213,7 @@ class PoloniexTrader(
         val canStartTransaction = TransactionalOperator.create(tranManager, object : TransactionDefinition {
             override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
         }).transactional(FlowScope.mono {
-            val (available, onOrders) = data.balances.awaitFirst().getOrNull(fromCurrency) ?: return@mono false
+            val (available, onOrders) = data.balances.first().getOrNull(fromCurrency) ?: return@mono false
             val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency) ?: tuple(fromCurrency, BigDecimal.ZERO)
             val reservedAmount = onOrders - amountInUse
             val availableAmount = available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
@@ -365,8 +365,8 @@ class PoloniexTrader(
         markets: Array<TranIntentMarket>,
         idx: Int
     ): Amount {
-        val fee = data.fee.awaitFirst()
-        val orderBook = data.getOrderBookFlowBy(market).awaitFirst()
+        val fee = data.fee.first()
+        val orderBook = data.getOrderBookFlowBy(market).first()
         val fromAmount = predictedFromAmount(markets, idx)
 
         return if (orderSpeed == OrderSpeed.Instant) {
@@ -377,8 +377,8 @@ class PoloniexTrader(
     }
 
     private suspend fun TranIntentMarketPartiallyCompleted.predictedTargetAmount(): Amount {
-        val fee = data.fee.awaitFirst()
-        val orderBook = data.getOrderBookFlowBy(market).awaitFirst()
+        val fee = data.fee.first()
+        val orderBook = data.getOrderBookFlowBy(market).first()
 
         return if (orderSpeed == OrderSpeed.Instant) {
             getInstantOrderTargetAmount(orderType, fromAmount, fee.taker, orderBook)
@@ -409,7 +409,7 @@ class PoloniexTrader(
             .groupBy({ it._1 }, { it._2 })
             .mapValues { it.value.reduce { a, b -> a + b } }
 
-        val allBalances = data.balances.awaitFirst()
+        val allBalances = data.balances.first()
 
         val availableBalance = allBalances.toVavrStream()
             .filter { primaryCurrencies.contains(it._1) }
@@ -539,6 +539,8 @@ class PoloniexTrader(
                                 fromAmount,
                                 orderBookFlow
                             )
+                                .buffer(Duration.ofSeconds(5))
+                                .map { it.flatten() }
                                 .collect { tradesAndOrderIds ->
                                     withContext(NonCancellable) {
                                         val trades = Array.ofAll(tradesAndOrderIds.map { it._2 })
@@ -585,7 +587,7 @@ class PoloniexTrader(
 
                             break
                         } catch (e: DisconnectedException) {
-                            poloniexApi.connection.filter { it }.take(1).awaitSingle()
+                            poloniexApi.connection.filter { it }.first()
                         }
                     }
                 } catch (e: CancellationException) {
@@ -715,11 +717,11 @@ class PoloniexTrader(
             market: Market,
             fromCurrency: Currency,
             fromCurrencyAmount: Amount,
-            orderBookFlow: Flux<OrderBookAbstract>,
-            feeFlow: Flux<FeeMultiplier>
+            orderBookFlow: Flow<OrderBookAbstract>,
+            feeFlow: Flow<FeeMultiplier>
         ): Array<BareTrade> {
             val trades = LinkedList<BareTrade>()
-            val feeMultiplier = feeFlow.awaitFirst() // TODO: Remove when Poloniex will fix the bug with fee
+            val feeMultiplier = feeFlow.first() // TODO: Remove when Poloniex will fix the bug with fee
             var unfilledAmount = fromCurrencyAmount
 
             val orderType = if (market.baseCurrency == fromCurrency) {
@@ -842,7 +844,7 @@ class PoloniexTrader(
             orderType: OrderType,
             market: Market,
             fromCurrencyAmount: Amount,
-            orderBook: Flux<OrderBookAbstract>
+            orderBook: Flow<OrderBookAbstract>
         ): Flow<kotlin.collections.List<Tuple2<Long, BareTrade>>> = flow {
             val tradesChannel: FlowCollector<kotlin.collections.List<Tuple2<Long, BareTrade>>> = this
             val unfilledAmountChannel = ConflatedBroadcastChannel(fromCurrencyAmount)
@@ -1006,7 +1008,7 @@ class PoloniexTrader(
 
                             var moveCount = 0
 
-                            orderBook.onBackpressureLatest().takeWhile { isActive }.collect { book ->
+                            orderBook.conflate().collect { book ->
                                 kotlinx.coroutines.withContext(NonCancellable) {
                                     val resp =
                                         moveOrder(
@@ -1131,7 +1133,7 @@ class PoloniexTrader(
 
                         if (myPositionInBook == 1) {
                             // I am on second position
-                            val anotherWorkerOnTheSameMarket = data.orderBookOrders.awaitFirst()
+                            val anotherWorkerOnTheSameMarket = data.orderBookOrders.first()
                                 .contains(BookOrder(market, bookPrice1, orderType))
 
                             if (anotherWorkerOnTheSameMarket) {
@@ -1219,7 +1221,7 @@ class PoloniexTrader(
 
         private suspend fun placeOrder(
             market: Market,
-            orderBook: Flux<OrderBookAbstract>,
+            orderBook: Flow<OrderBookAbstract>,
             orderType: OrderType,
             amountValue: BigDecimal
         ): Tuple3<Long, Price, Amount> {
@@ -1229,8 +1231,8 @@ class PoloniexTrader(
                     val secondaryBook: SubOrderBook
                     val moveToOnePoint: (Price) -> Price
 
-                    val book = orderBook.awaitFirst()
-                    val bookOrders = data.orderBookOrders.awaitFirst()
+                    val book = orderBook.first()
+                    val bookOrders = data.orderBookOrders.first()
 
                     when (orderType) {
                         OrderType.Buy -> run {
@@ -1325,11 +1327,11 @@ class PoloniexTrader(
         private suspend fun simulateInstantTrades(
             fromAmount: Amount,
             orderType: OrderType,
-            orderBookFlow: Flux<OrderBookAbstract>,
-            feeFlow: Flux<FeeMultiplier>
+            orderBookFlow: Flow<OrderBookAbstract>,
+            feeFlow: Flow<FeeMultiplier>
         ): Tuple2<Amount, Vector<BareTrade>> {
-            val orderBook = orderBookFlow.awaitFirst()
-            val fee = feeFlow.awaitFirst()
+            val orderBook = orderBookFlow.first()
+            val fee = feeFlow.first()
 
             var trades = Vector.empty<BareTrade>()
             var unusedFromAmount = fromAmount

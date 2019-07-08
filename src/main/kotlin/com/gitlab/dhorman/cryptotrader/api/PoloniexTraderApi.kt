@@ -16,6 +16,8 @@ import io.vavr.collection.Array
 import io.vavr.collection.Map
 import io.vavr.collection.TreeSet
 import io.vavr.kotlin.toVavrList
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.RequestMapping
@@ -41,7 +43,7 @@ class PoloniexTraderApi(
     )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/tickers"])
     suspend fun tickersSnapshot(): Map<Market, Ticker> {
-        return poloniexTrader.data.tickers.take(1).awaitSingle()
+        return poloniexTrader.data.tickers.first()
     }
 
     @ApiOperation(
@@ -50,7 +52,7 @@ class PoloniexTraderApi(
     )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/balances"])
     suspend fun balancesSnapshot(): Map<Currency, Tuple2<Amount, Amount>> {
-        return poloniexTrader.data.balances.take(1).awaitSingle()
+        return poloniexTrader.data.balances.first()
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/paths"])
@@ -109,7 +111,7 @@ class PoloniexTraderApi(
     //@MessageMapping("/tickers")
     @RequestMapping(method = [RequestMethod.GET], value = ["/tickers"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun tickers() = run {
-        poloniexTrader.data.tickers.sample(Duration.ofSeconds(1))
+        poloniexTrader.data.tickers.sample(Duration.ofSeconds(1).toMillis())
     }
 
     //@MessageMapping("/paths")
