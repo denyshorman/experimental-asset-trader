@@ -73,12 +73,12 @@ class PoloniexApi(
     private val pushNotificationJsonReader = objectMapper.readerFor(PushNotification::class.java)
 
     val connection = run {
-        flow {
+        channelFlow {
             while (true) {
                 try {
                     val session = webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
                         FlowScope.mono {
-                            emit(true)
+                            send(true)
                             logger.info("Connection established with $PoloniexWebSocketApiUrl")
 
                             val receive = async {
@@ -133,17 +133,17 @@ class PoloniexApi(
 
                     session.awaitFirstOrNull()
                 } catch (e: CancellationException) {
-                    emit(false)
+                    send(false)
                     logger.debug("Connection closed because internal job was cancelled")
                 } catch (e: TimeoutException) {
-                    emit(false)
+                    send(false)
                     logger.debug("Haven't received any value from $PoloniexWebSocketApiUrl within specified interval")
                     delay(1000)
                 } catch (e: PermissionDeniedException) {
-                    emit(false)
+                    send(false)
                     logger.debug("WebSocket private channel sent permission denied message")
                 } catch (e: Throwable) {
-                    emit(false)
+                    send(false)
                     logger.error(e.message)
                     delay(1000)
                 }
@@ -173,7 +173,7 @@ class PoloniexApi(
     }
 
     fun orderBookStream(marketId: MarketId): Flow<Tuple2<PriceAggregatedBook, OrderBookNotification>> {
-        return flow {
+        return channelFlow {
             while (true) {
                 try {
                     coroutineScope {
@@ -210,7 +210,7 @@ class PoloniexApi(
                                         is OrderBookTrade -> book
                                     }
 
-                                    emit(tuple(book, notification))
+                                    send(tuple(book, notification))
                                 }
                             }
                     }
@@ -705,7 +705,7 @@ class PoloniexApi(
         channel: Int,
         respClass: TypeReference<T>,
         privateApi: Boolean = false
-    ): Flow<T> = flow {
+    ): Flow<T> = channelFlow {
         val main = this
         var messagesConsumptionJob: Job? = null
         val shouldUnsubscribe = AtomicBoolean(true)
@@ -715,7 +715,7 @@ class PoloniexApi(
                 if (msg.data != null && msg.data != NullNode.instance) {
                     try {
                         val data = objectMapper.convertValue<T>(msg.data, respClass)
-                        main.emit(data)
+                        main.send(data)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {

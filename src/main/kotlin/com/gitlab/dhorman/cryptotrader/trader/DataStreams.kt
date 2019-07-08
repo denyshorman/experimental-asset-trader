@@ -49,11 +49,11 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
     private val logger = KotlinLogging.logger {}
 
     val currencies: Flow<Tuple2<Map<Currency, CurrencyDetails>, Map<Int, Currency>>> = run {
-        flow {
+        channelFlow {
             while (true) {
                 try {
                     val currencies = poloniexApi.currencies()
-                    emit(tuple(currencies, currencies.map { k, v -> tuple(v.id, k) }))
+                    send(tuple(currencies, currencies.map { k, v -> tuple(v.id, k) }))
                     delay(10 * 60 * 1000)
                 } catch (e: CancellationException) {
                     delay(1000)
@@ -66,7 +66,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
     }
 
     val balances: Flow<Map<Currency, Tuple2<Amount, Amount>>> = run {
-        flow {
+        channelFlow {
             mainLoop@ while (true) {
                 try {
                     val rawApiBalances = poloniexApi.completeBalances()
@@ -105,7 +105,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                             )
                         }
 
-                    emit(availableAndOnOrderBalances)
+                    send(availableAndOnOrderBalances)
 
                     val currenciesSnapshot = currencies.first()
 
@@ -248,7 +248,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                                 }
                             }
 
-                            if (notifySubscribers) this@flow.emit(availableAndOnOrderBalances)
+                            if (notifySubscribers) this@channelFlow.send(availableAndOnOrderBalances)
                         }
                     }
 
@@ -275,7 +275,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
     }
 
     val markets: Flow<MarketData> = run {
-        flow {
+        channelFlow {
             var prevMarketsSet = mutableSetOf<Int>()
 
             while (true) {
@@ -295,7 +295,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                     if (!prevMarketsSet.containsAll(currentMarketsSet)) {
                         prevMarketsSet = currentMarketsSet
-                        emit(tuple(marketIntStringMap, marketStringIntMap))
+                        send(tuple(marketIntStringMap, marketStringIntMap))
                     }
 
                     delay(10 * 60 * 1000)
@@ -310,7 +310,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
     }
 
     val tradesStat: Flow<Map<MarketId, Flow<TradeStat>>> = run {
-        flow {
+        channelFlow {
             dayVolume.collect { dayVolumeMap ->
                 val marketsMap = markets.first()._2
                 val map = marketsMap.map { market, marketId ->
@@ -330,17 +330,17 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     tuple(marketId, flowOf(tradeStat))
                 }
 
-                emit(map)
+                send(map)
             }
         }.share(1, Duration.ofMinutes(20))
     }
 
     val openOrders: Flow<Map<Long, OpenOrderWithMarket>> = run {
-        flow {
+        channelFlow {
             while (true) {
                 try {
                     var allOpenOrders = poloniexApi.allOpenOrders()
-                    emit(allOpenOrders)
+                    send(allOpenOrders)
 
                     coroutineScope {
                         launch {
@@ -369,7 +369,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                                             )
 
                                             allOpenOrders = allOpenOrders.put(newOrder.orderId, newOrder)
-                                            emit(allOpenOrders)
+                                            send(allOpenOrders)
                                         } else {
                                             throw Exception("Market id not found in local cache")
                                         }
@@ -377,7 +377,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                                     is OrderUpdate -> run {
                                         if (update.newAmount.compareTo(BigDecimal.ZERO) == 0) {
                                             allOpenOrders = allOpenOrders.remove(update.orderId)
-                                            emit(allOpenOrders)
+                                            send(allOpenOrders)
                                         } else {
                                             val order = allOpenOrders.getOrNull(update.orderId)
 
@@ -395,7 +395,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                                                 )
 
                                                 allOpenOrders = allOpenOrders.put(order.orderId, newOrder)
-                                                emit(allOpenOrders)
+                                                send(allOpenOrders)
                                             } else {
                                                 throw Exception("Order not found in local cache")
                                             }
@@ -418,7 +418,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     // TODO: Optimize calculation
     val orderBookOrders: Flow<Set<BookOrder>> = run {
-        flow {
+        channelFlow {
             openOrders.collect { openOrdersMap ->
                 val orderBookOrdersSet = openOrdersMap.map { openOrder ->
                     BookOrder(
@@ -428,7 +428,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     )
                 }.toSet()
 
-                emit(orderBookOrdersSet)
+                send(orderBookOrdersSet)
             }
         }.share(1)
     }
@@ -452,11 +452,11 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
             )
         }
 
-        flow {
+        channelFlow {
             while (true) {
                 try {
                     var allTickers = poloniexApi.ticker().map(::mapTicker)
-                    emit(allTickers)
+                    send(allTickers)
 
                     coroutineScope {
                         launch {
@@ -470,7 +470,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                             if (marketId != null) {
                                 allTickers = allTickers.put(marketId, ticker)
-                                emit(allTickers)
+                                send(allTickers)
                             } else {
                                 throw Exception("Market for ticker not found in local cache.")
                             }
@@ -506,10 +506,10 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
             return FeeMultiplier(fee.makerFee.oneMinus, fee.takerFee.oneMinus)
         }
 
-        flow {
+        channelFlow {
             while (true) {
                 try {
-                    emit(fetchFee())
+                    send(fetchFee())
                     break
                 } catch (e: CancellationException) {
                     delay(1000)
@@ -524,7 +524,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                 delay(10 * 60 * 1000)
 
                 try {
-                    emit(fetchFee())
+                    send(fetchFee())
                     break
                 } catch (e: CancellationException) {
                     delay(1000)
@@ -536,10 +536,10 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
     }
 
     val dayVolume: Flow<Map<Market, Tuple2<Amount, Amount>>> = run {
-        flow {
+        channelFlow {
             while (true) {
                 try {
-                    emit(poloniexApi.dayVolume())
+                    send(poloniexApi.dayVolume())
                     delay(3 * 60 * 1000)
                 } catch (e: CancellationException) {
                     delay(1000)

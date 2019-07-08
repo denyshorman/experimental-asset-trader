@@ -23,6 +23,7 @@ import io.vavr.collection.Map
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
+import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.awaitFirst
@@ -869,8 +870,8 @@ class PoloniexTrader(
             market: Market,
             fromCurrencyAmount: Amount,
             orderBook: Flow<OrderBookAbstract>
-        ): Flow<kotlin.collections.List<Tuple2<Long, BareTrade>>> = flow {
-            val tradesChannel: FlowCollector<kotlin.collections.List<Tuple2<Long, BareTrade>>> = this
+        ): Flow<kotlin.collections.List<Tuple2<Long, BareTrade>>> = channelFlow {
+            val tradesChannel: ProducerScope<kotlin.collections.List<Tuple2<Long, BareTrade>>> = this
             val unfilledAmountChannel = ConflatedBroadcastChannel(fromCurrencyAmount)
             val latestOrderIdsRef = AtomicReference(Queue.empty<Long>())
 
@@ -904,10 +905,10 @@ class PoloniexTrader(
                             }
 
                             unfilledAmountChannel.send(unfilledAmount)
-                            if (tradeList.size != 0) tradesChannel.emit(tradeList)
+                            if (tradeList.size != 0) tradesChannel.send(tradeList)
 
                             if (unfilledAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                return@flow
+                                return@channelFlow
                             }
 
                             break
@@ -958,9 +959,9 @@ class PoloniexTrader(
 
                             if (tradeList.size == 0) return@collect
 
-                            kotlinx.coroutines.withContext(NonCancellable) {
+                            withContext(NonCancellable) {
                                 unfilledAmountChannel.send(unfilledAmount)
-                                tradesChannel.emit(tradeList)
+                                tradesChannel.send(tradeList)
                             }
                         }
                     }
@@ -983,7 +984,7 @@ class PoloniexTrader(
                             transactionsDao.addOrderId(id, lastOrderId!!) // TODO: Send to db asynchronously ?
                         }
 
-                        suspend fun placeAndHandleOrder() = kotlinx.coroutines.withContext(NonCancellable) {
+                        suspend fun placeAndHandleOrder() = withContext(NonCancellable) {
                             logger.debug { "[$market, $orderType] Placing new order with amount ${unfilledAmountChannel.value.toPlainString()}..." }
 
                             val placeOrderResult = placeOrder(market, orderBook, orderType, unfilledAmountChannel.value)
@@ -1055,7 +1056,7 @@ class PoloniexTrader(
                                 }
                             }
                         } finally {
-                            kotlinx.coroutines.withContext(NonCancellable) {
+                            withContext(NonCancellable) {
                                 tradeMonitoringJob.cancelAndJoin()
 
                                 if (lastOrderId != null) {
