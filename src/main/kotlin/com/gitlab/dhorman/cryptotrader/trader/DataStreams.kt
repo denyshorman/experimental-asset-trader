@@ -8,7 +8,6 @@ import com.gitlab.dhorman.cryptotrader.util.share
 import io.vavr.Tuple2
 import io.vavr.collection.HashMap
 import io.vavr.collection.Map
-import io.vavr.collection.Set
 import io.vavr.kotlin.component1
 import io.vavr.kotlin.component2
 import io.vavr.kotlin.getOrNull
@@ -36,12 +35,6 @@ data class OrderBookData(
 )
 typealias OrderBookDataMap = Map<MarketId, Flow<OrderBookData>>
 
-data class BookOrder(
-    val market: Market,
-    val price: Price,
-    val orderType: OrderType
-)
-
 private object BalancesAndCurrenciesNotInSync : Exception("", null, true, false)
 
 @Component
@@ -62,7 +55,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(2000)
                 }
             }
-        }.share(1)
+        }.share(1, Duration.ofMinutes(30))
     }
 
     val balances: Flow<Map<Currency, Tuple2<Amount, Amount>>> = run {
@@ -271,7 +264,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(1000)
                 }
             }
-        }.share(1)
+        }.share(1, Duration.ofDays(1024))
     }
 
     val markets: Flow<MarketData> = run {
@@ -306,7 +299,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(2000)
                 }
             }
-        }.share(1)
+        }.share(1, Duration.ofMinutes(30))
     }
 
     val tradesStat: Flow<Map<MarketId, Flow<TradeStat>>> = run {
@@ -413,24 +406,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(1000)
                 }
             }
-        }.share(1)
-    }
-
-    // TODO: Optimize calculation
-    val orderBookOrders: Flow<Set<BookOrder>> = run {
-        channelFlow {
-            openOrders.collect { openOrdersMap ->
-                val orderBookOrdersSet = openOrdersMap.map { openOrder ->
-                    BookOrder(
-                        openOrder._2.market,
-                        openOrder._2.price,
-                        openOrder._2.type
-                    )
-                }.toSet()
-
-                send(orderBookOrdersSet)
-            }
-        }.share(1)
+        }.share(1, Duration.ofDays(1024))
     }
 
     val tickers: Flow<Map<Market, Ticker>> = run {
@@ -497,7 +473,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                 Tuple2(marketId, newBookStream)
             }
-        }.share(1)
+        }.share(1, Duration.ofMinutes(30))
     }
 
     val fee: Flow<FeeMultiplier> = run {
@@ -532,7 +508,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
                 }
             }
-        }.share(1)
+        }.share(1, Duration.ofDays(1024))
     }
 
     val dayVolume: Flow<Map<Market, Tuple2<Amount, Amount>>> = run {
@@ -561,7 +537,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     suspend fun getOrderBookFlowBy(market: Market): Flow<OrderBookAbstract> {
         val marketId = getMarketId(market) ?: throw Exception("Market not found")
-        return (orderBooks.first().getOrNull(marketId)
-            ?: throw Exception("Order book for $marketId not found")).map { it.book as OrderBookAbstract }
+        val data = orderBooks.first().getOrNull(marketId) ?: throw Exception("Order book for $marketId not found")
+        return data.map { it.book }
     }
 }

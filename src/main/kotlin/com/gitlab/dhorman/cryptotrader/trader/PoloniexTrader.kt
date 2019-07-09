@@ -69,7 +69,9 @@ class PoloniexTrader(
     )
 
     fun start(scope: CoroutineScope) = scope.launch {
-        logger.info("Start trading")
+        logger.info("Start trading on Poloniex")
+
+        subscribeToRequiredTopicsBeforeTrading()
 
         val tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
 
@@ -104,6 +106,18 @@ class PoloniexTrader(
             logger.debug { "Trying to cancel all Poloniex transactions..." }
 
             tranIntentScope.cancel()
+        }
+    }
+
+    private suspend fun subscribeToRequiredTopicsBeforeTrading() {
+        coroutineScope {
+            launch {
+                data.balances.first()
+            }
+
+            launch {
+                data.openOrders.first()
+            }
         }
     }
 
@@ -1034,7 +1048,7 @@ class PoloniexTrader(
                             var moveCount = 0
 
                             orderBook.conflate().collect { book ->
-                                kotlinx.coroutines.withContext(NonCancellable) {
+                                withContext(NonCancellable) {
                                     val resp =
                                         moveOrder(
                                             market,
@@ -1158,10 +1172,7 @@ class PoloniexTrader(
 
                         if (myPositionInBook == 1) {
                             // I am on second position
-                            val anotherWorkerOnTheSameMarket = data.orderBookOrders.first()
-                                .contains(BookOrder(market, bookPrice1, orderType))
-
-                            if (anotherWorkerOnTheSameMarket) {
+                            if (isAnotherWorkerOnTheSameMarket(market, bookPrice1, orderType)) {
                                 bookPrice1
                             } else {
                                 var price = moveToOnePoint(bookPrice1)
@@ -1257,7 +1268,6 @@ class PoloniexTrader(
                     val moveToOnePoint: (Price) -> Price
 
                     val book = orderBook.first()
-                    val bookOrders = data.orderBookOrders.first()
 
                     when (orderType) {
                         OrderType.Buy -> run {
@@ -1275,10 +1285,7 @@ class PoloniexTrader(
                     val price = run {
                         val topPricePrimary = primaryBook.headOption().map { it._1 }.orNull ?: return@run null
 
-                        val anotherWorkerOnTheSameMarket =
-                            bookOrders.contains(BookOrder(market, topPricePrimary, orderType))
-
-                        if (anotherWorkerOnTheSameMarket) {
+                        if (isAnotherWorkerOnTheSameMarket(market, topPricePrimary, orderType)) {
                             topPricePrimary
                         } else {
                             val newPrice = moveToOnePoint(topPricePrimary)
@@ -1646,6 +1653,16 @@ class PoloniexTrader(
                 .map { it._1 }
                 .max()
                 .getOrElseThrow { Exception("Can't find quote amount that matches target price") }
+        }
+
+        private suspend fun isAnotherWorkerOnTheSameMarket(
+            market: Market,
+            price: Price,
+            orderType: OrderType
+        ): Boolean {
+            return data.openOrders.first().any {
+                it._2.market == market && it._2.price == price && it._2.type == orderType
+            }
         }
     }
 }

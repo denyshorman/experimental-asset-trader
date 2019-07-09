@@ -34,7 +34,8 @@ class CryptoTraderApplication(
         logger.info("Trying to stop all jobs...")
 
         runBlocking {
-            for (job in traderJobs) job.cancelAndJoin()
+            for (job in traderJobs) job.cancel()
+            for (job in traderJobs) job.join()
             traderJobs.clear()
         }
 
