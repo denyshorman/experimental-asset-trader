@@ -1,7 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.api
 
-import com.gitlab.dhorman.cryptotrader.core.ExhaustivePath
-import com.gitlab.dhorman.cryptotrader.core.Market
+import com.gitlab.dhorman.cryptotrader.core.*
+import com.gitlab.dhorman.cryptotrader.core.Market.Companion.toMarket
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Ticker
@@ -9,21 +9,18 @@ import com.gitlab.dhorman.cryptotrader.trader.PoloniexTrader
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
-import io.swagger.annotations.ApiOperation
+import io.swagger.annotations.*
 import io.vavr.Tuple2
 import io.vavr.Tuple4
 import io.vavr.collection.Array
 import io.vavr.collection.Map
 import io.vavr.collection.TreeSet
-import io.vavr.kotlin.toVavrList
+import io.vavr.kotlin.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.http.MediaType
-import org.springframework.web.bind.annotation.RequestMapping
-import org.springframework.web.bind.annotation.RequestMethod
-import org.springframework.web.bind.annotation.RequestParam
-import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.bind.annotation.*
 import reactor.core.publisher.Flux
 import reactor.core.scheduler.Schedulers
 import java.math.BigDecimal
@@ -37,6 +34,14 @@ class PoloniexTraderApi(
     private val poloniexTrader: PoloniexTrader,
     private val transactionsDao: TransactionsDao
 ) {
+    // Example: USDT USDC 40.00 USDT_BTC1BTC_USDC0
+    private val execTranBodyPattern =
+        """^([a-z]+)\s+([a-z]+)\s+(\d+(?:\.\d+)?)\s+((?:[a-z]+_[a-z]+(?:0|1))+)$""".toRegex(RegexOption.IGNORE_CASE)
+
+    private val execTranPathPattern =
+        """([a-z]+_[a-z]+)(0|1)""".toRegex(RegexOption.IGNORE_CASE)
+
+
     @ApiOperation(
         value = "Retrieve ticker snapshot",
         notes = "Use this resource to retrieve ticker snapshot"
@@ -90,6 +95,81 @@ class PoloniexTraderApi(
                     p0.profitability.compareTo(p1.profitability)
                 }
             }).take(100)
+    }
+
+    @RequestMapping(
+        method = [RequestMethod.POST],
+        value = ["/transactions/dsl/execute"],
+        consumes = [MediaType.TEXT_PLAIN_VALUE]
+    )
+    @ApiImplicitParams(
+        ApiImplicitParam(
+            name = "dslFormattedBody",
+            example = "USDT USDC 40.00 USDT_BTC1BTC_USDC0"
+        )
+    )
+    suspend fun executeTransaction(@RequestBody dslFormattedBody: String) {
+        val res = execTranBodyPattern.matchEntire(dslFormattedBody) ?: throw Exception("Not correct input")
+        val (fromCurrency, targetCurrency, fromCurrencyAmountStr, pathDsl) = res.destructured
+        val fromCurrencyAmount = BigDecimal(fromCurrencyAmountStr)
+
+        val markets = execTranPathPattern.findAll(pathDsl).map {
+            val (marketStr, speedTypeStr) = it.destructured
+            val market = marketStr.toMarket()
+            val speedType = if (speedTypeStr == "0") {
+                OrderSpeed.Instant
+            } else {
+                OrderSpeed.Delayed
+            }
+            tuple(market, speedType)
+        }.toVavrStream()
+
+        var i = 0
+        var fromCurrencyIt = fromCurrency
+
+        val chain = markets.map {
+            val (market, speed) = it
+            val targetCurrencyIt = market.other(fromCurrencyIt)!!
+
+            val order = if (speed == OrderSpeed.Instant) {
+                InstantOrder(
+                    market,
+                    fromCurrencyIt,
+                    targetCurrencyIt,
+                    if (i == 0) fromCurrencyAmount else BigDecimal.ONE,
+                    BigDecimal.ONE,
+                    market.orderType(targetCurrencyIt)!!,
+                    BigDecimal.ONE,
+                    BigDecimal.ONE,
+                    BigDecimal.ONE,
+                    BigDecimal.ONE,
+                    list()
+                )
+            } else {
+                DelayedOrder(
+                    market,
+                    fromCurrencyIt,
+                    targetCurrencyIt,
+                    if (i == 0) fromCurrencyAmount else BigDecimal.ONE,
+                    BigDecimal.ONE,
+                    BigDecimal.ONE,
+                    BigDecimal.ONE,
+                    BigDecimal.ONE,
+                    market.orderType(targetCurrencyIt)!!,
+                    BigDecimal.ONE,
+                    TradeStatOrder(tuple(BigDecimal.ONE, BigDecimal.ONE))
+                )
+            }
+
+            i++
+            fromCurrencyIt = targetCurrencyIt
+
+            order
+        }
+
+        val path = ExhaustivePath(tuple(fromCurrency, targetCurrency), chain.toVavrList())
+
+        poloniexTrader.tranRequests.send(path)
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active"])

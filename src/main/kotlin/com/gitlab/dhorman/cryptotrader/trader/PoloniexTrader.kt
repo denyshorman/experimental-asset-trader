@@ -23,6 +23,7 @@ import io.vavr.collection.Queue
 import io.vavr.collection.Vector
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.channels.consumeEach
@@ -69,6 +70,9 @@ class PoloniexTrader(
         "USDC" to BigDecimal(30)
     )
 
+    val tranRequests = Channel<ExhaustivePath>(Channel.RENDEZVOUS)
+
+
     fun start(scope: CoroutineScope) = scope.launch {
         logger.info("Start trading on Poloniex")
 
@@ -76,6 +80,7 @@ class PoloniexTrader(
 
         val tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
 
+        startMonitoringForTranRequests(tranIntentScope)
         resumeSleepingTransactions(tranIntentScope)
 
         try {
@@ -107,6 +112,12 @@ class PoloniexTrader(
             logger.debug { "Trying to cancel all Poloniex transactions..." }
 
             tranIntentScope.cancel()
+        }
+    }
+
+    private fun CoroutineScope.startMonitoringForTranRequests(scope: CoroutineScope): Job = this.launch {
+        tranRequests.consumeEach {
+            startPathTransaction(it, scope)
         }
     }
 
