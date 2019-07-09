@@ -108,6 +108,7 @@ class PoloniexApi(
 
                                         if (error.msg != null) {
                                             if (error.msg == PermissionDeniedMsg) throw PermissionDeniedException
+                                            if (error.msg == InvalidChannelMsg) throw InvalidChannelException
                                             throw e
                                         } else {
                                             throw e
@@ -138,6 +139,10 @@ class PoloniexApi(
                 } catch (e: TimeoutException) {
                     send(false)
                     logger.debug("Haven't received any value from $PoloniexWebSocketApiUrl within specified interval")
+                    delay(1000)
+                } catch (e: InvalidChannelException) {
+                    send(false)
+                    logger.error(e.message)
                     delay(1000)
                 } catch (e: PermissionDeniedException) {
                     send(false)

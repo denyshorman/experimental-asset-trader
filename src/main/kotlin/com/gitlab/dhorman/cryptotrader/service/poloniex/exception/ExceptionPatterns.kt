@@ -14,4 +14,5 @@ const val UnableToFillOrderMsg = """Unable to fill order completely."""
 const val UnableToPlacePostOnlyOrderMsg = """Unable to place post-only order at this price."""
 const val AlreadyCalledMoveOrderMsg = """You have already called cancelOrder or moveOrder on this order. Please wait for that call's response."""
 const val PermissionDeniedMsg = """Permission denied."""
+const val InvalidChannelMsg = """Invalid channel."""
 val OrderCompletedOrNotExistPattern = """Order (\d+) is either completed or does not exist\.""".toRegex()
