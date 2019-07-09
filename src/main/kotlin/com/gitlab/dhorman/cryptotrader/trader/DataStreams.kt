@@ -4,6 +4,10 @@ import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.buyBaseAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
+import com.gitlab.dhorman.cryptotrader.trader.exception.BalancesAndCurrenciesNotInSync
+import com.gitlab.dhorman.cryptotrader.trader.model.MarketData
+import com.gitlab.dhorman.cryptotrader.trader.model.OrderBookData
+import com.gitlab.dhorman.cryptotrader.trader.model.OrderBookDataMap
 import com.gitlab.dhorman.cryptotrader.util.share
 import io.vavr.Tuple2
 import io.vavr.collection.HashMap
@@ -22,20 +26,6 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
-
-typealias MarketIntMap = Map<MarketId, Market>
-typealias MarketStringMap = Map<Market, MarketId>
-typealias MarketData = Tuple2<MarketIntMap, MarketStringMap>
-
-data class OrderBookData(
-    val market: Market,
-    val marketId: MarketId,
-    val book: PriceAggregatedBook,
-    val notification: OrderBookNotification
-)
-typealias OrderBookDataMap = Map<MarketId, Flow<OrderBookData>>
-
-private object BalancesAndCurrenciesNotInSync : Exception("", null, true, false)
 
 @Component
 class DataStreams(private val poloniexApi: PoloniexApi) {

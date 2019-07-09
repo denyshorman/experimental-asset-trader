@@ -5,8 +5,8 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
-import com.gitlab.dhorman.cryptotrader.trader.MarketStringMap
-import com.gitlab.dhorman.cryptotrader.trader.OrderBookData
+import com.gitlab.dhorman.cryptotrader.trader.model.MarketStringMap
+import com.gitlab.dhorman.cryptotrader.trader.model.OrderBookData
 import io.vavr.Tuple2
 import io.vavr.collection.*
 import io.vavr.collection.List

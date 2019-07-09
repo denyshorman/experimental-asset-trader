@@ -6,7 +6,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Ticker
 import com.gitlab.dhorman.cryptotrader.trader.PoloniexTrader
-import com.gitlab.dhorman.cryptotrader.trader.TranIntentMarket
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import io.swagger.annotations.ApiOperation

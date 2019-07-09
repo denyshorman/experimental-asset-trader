@@ -5,9 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
-import com.gitlab.dhorman.cryptotrader.trader.TranIntentMarket
-import com.gitlab.dhorman.cryptotrader.trader.TranIntentMarketPartiallyCompleted
-import com.gitlab.dhorman.cryptotrader.trader.Views
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
+import com.gitlab.dhorman.cryptotrader.trader.model.Views
 import io.vavr.Tuple2
 import io.vavr.Tuple4
 import io.vavr.collection.Array
@@ -21,7 +21,6 @@ import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
 import java.time.Instant
-import java.time.LocalDateTime
 import java.util.*
 
 @Repository

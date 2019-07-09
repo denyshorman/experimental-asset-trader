@@ -10,6 +10,8 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.ExhaustivePathOrdering
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsUtil
+import com.gitlab.dhorman.cryptotrader.trader.model.MarketData
+import com.gitlab.dhorman.cryptotrader.trader.model.OrderBookDataMap
 import com.gitlab.dhorman.cryptotrader.util.collectMap
 import com.gitlab.dhorman.cryptotrader.util.flowFromMap
 import io.vavr.collection.Map

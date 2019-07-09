@@ -1,8 +1,5 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.fasterxml.jackson.annotation.JsonSubTypes
-import com.fasterxml.jackson.annotation.JsonTypeInfo
-import com.fasterxml.jackson.annotation.JsonView
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.*
@@ -11,15 +8,19 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPredicted
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import com.gitlab.dhorman.cryptotrader.util.buffer
 import io.vavr.Tuple2
 import io.vavr.Tuple3
 import io.vavr.collection.Array
 import io.vavr.collection.List
+import io.vavr.collection.Map
 import io.vavr.collection.Queue
 import io.vavr.collection.Vector
-import io.vavr.collection.Map
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
@@ -1665,88 +1666,4 @@ class PoloniexTrader(
             }
         }
     }
-}
-
-@JsonTypeInfo(
-    use = JsonTypeInfo.Id.NAME,
-    include = JsonTypeInfo.As.PROPERTY,
-    property = "tpe"
-)
-@JsonSubTypes(
-    JsonSubTypes.Type(value = TranIntentMarketCompleted::class, name = "c"),
-    JsonSubTypes.Type(value = TranIntentMarketPartiallyCompleted::class, name = "pc"),
-    JsonSubTypes.Type(value = TranIntentMarketPredicted::class, name = "p")
-)
-sealed class TranIntentMarket(
-    open val market: Market,
-    open val orderSpeed: OrderSpeed,
-    open val fromCurrencyType: CurrencyType
-) {
-    @get:JsonView(Views.UI::class)
-    val fromCurrency: Currency by lazy(LazyThreadSafetyMode.NONE) { market.currency(fromCurrencyType) }
-
-    @get:JsonView(Views.UI::class)
-    val targetCurrency: Currency by lazy(LazyThreadSafetyMode.NONE) { market.currency(fromCurrencyType.inverse()) }
-
-    @get:JsonView(Views.UI::class)
-    val orderType: OrderType by lazy(LazyThreadSafetyMode.NONE) { market.orderType(fromCurrencyType.inverse()) }
-}
-
-data class TranIntentMarketCompleted(
-    override val market: Market,
-    override val orderSpeed: OrderSpeed,
-    override val fromCurrencyType: CurrencyType,
-    val trades: Array<BareTrade>
-) : TranIntentMarket(market, orderSpeed, fromCurrencyType) {
-    @get:JsonView(Views.UI::class)
-    val fromAmount: Amount by lazy(LazyThreadSafetyMode.NONE) {
-        var amount = BigDecimal.ZERO
-        for (trade in trades) {
-            amount += if (fromCurrencyType == CurrencyType.Base) {
-                buyBaseAmount(trade.quoteAmount, trade.price)
-            } else {
-                if (trade.price.compareTo(BigDecimal.ZERO) == 0 && trade.feeMultiplier.compareTo(BigDecimal.ZERO) == 0) {
-                    BigDecimal.ZERO
-                } else {
-                    sellQuoteAmount(trade.quoteAmount)
-                }
-            }
-        }
-        amount
-    }
-
-    @get:JsonView(Views.UI::class)
-    val targetAmount: Amount by lazy(LazyThreadSafetyMode.NONE) {
-        var amount = BigDecimal.ZERO
-        for (trade in trades) {
-            amount += if (fromCurrencyType == CurrencyType.Base) {
-                buyQuoteAmount(trade.quoteAmount, trade.feeMultiplier)
-            } else {
-                if (trade.price.compareTo(BigDecimal.ZERO) == 0 && trade.feeMultiplier.compareTo(BigDecimal.ZERO) == 0) {
-                    trade.quoteAmount
-                } else {
-                    sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
-                }
-            }
-        }
-        amount
-    }
-}
-
-data class TranIntentMarketPartiallyCompleted(
-    override val market: Market,
-    override val orderSpeed: OrderSpeed,
-    override val fromCurrencyType: CurrencyType,
-    val fromAmount: Amount
-) : TranIntentMarket(market, orderSpeed, fromCurrencyType)
-
-data class TranIntentMarketPredicted(
-    override val market: Market,
-    override val orderSpeed: OrderSpeed,
-    override val fromCurrencyType: CurrencyType
-) : TranIntentMarket(market, orderSpeed, fromCurrencyType)
-
-object Views {
-    open class DB
-    open class UI : DB()
 }
