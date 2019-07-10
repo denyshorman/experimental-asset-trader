@@ -76,9 +76,9 @@ class PoloniexTraderApi(
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/paths2"])
     suspend fun pathsSnapshot2(
-        @RequestParam fromCurrency: Currency,
-        @RequestParam fromAmount: Amount,
-        @RequestParam endCurrencies: List<Currency>
+        @RequestParam(defaultValue = "USDT") fromCurrency: Currency,
+        @RequestParam(defaultValue = "40") fromAmount: Amount,
+        @RequestParam(defaultValue = "USDT, USDC") endCurrencies: List<Currency>
     ): TreeSet<ExhaustivePath> {
         return poloniexTrader.indicators.getPaths(
             fromCurrency,
