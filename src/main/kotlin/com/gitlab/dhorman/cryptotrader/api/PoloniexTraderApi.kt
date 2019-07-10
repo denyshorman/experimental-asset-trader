@@ -1,7 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.api
 
 import com.gitlab.dhorman.cryptotrader.core.*
-import com.gitlab.dhorman.cryptotrader.core.Market.Companion.toMarket
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Ticker

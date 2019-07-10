@@ -24,7 +24,7 @@ object Orders {
         val fromCurrency = market.other(targetCurrency) ?: return null
         val orderTpe = market.orderType(targetCurrency) ?: return null
 
-        var trades: List<InstantOrder.Companion.Trade> = List.empty()
+        var trades: List<BareTrade> = List.empty()
         var unusedFromCurrencyAmount: Amount = initCurrencyAmount
         var targetCurrencyAmount = BigDecimal.ZERO
         val orderMultiplierSimple: BigDecimal
@@ -39,13 +39,13 @@ object Orders {
                 if (unusedFromCurrencyAmount <= availableFromAmount) {
                     val tradeQuoteAmount = calcQuoteAmount(unusedFromCurrencyAmount, basePrice)
                     targetCurrencyAmount += buyQuoteAmount(tradeQuoteAmount, takerFeeMultiplier)
-                    trades = trades.prepend(InstantOrder.Companion.Trade(basePrice, tradeQuoteAmount))
+                    trades = trades.prepend(BareTrade(tradeQuoteAmount, basePrice, takerFeeMultiplier))
                     unusedFromCurrencyAmount = BigDecimal.ZERO
                     break
                 } else {
                     unusedFromCurrencyAmount -= availableFromAmount
                     targetCurrencyAmount += buyQuoteAmount(quoteAmount, takerFeeMultiplier)
-                    trades = trades.prepend(InstantOrder.Companion.Trade(basePrice, quoteAmount))
+                    trades = trades.prepend(BareTrade(quoteAmount, basePrice, takerFeeMultiplier))
                 }
             }
 
@@ -57,13 +57,13 @@ object Orders {
             for ((basePrice, quoteAmount) in orderBook.bids) {
                 if (unusedFromCurrencyAmount <= quoteAmount) {
                     targetCurrencyAmount += sellBaseAmount(unusedFromCurrencyAmount, basePrice, takerFeeMultiplier)
-                    trades = trades.prepend(InstantOrder.Companion.Trade(basePrice, unusedFromCurrencyAmount))
+                    trades = trades.prepend(BareTrade(unusedFromCurrencyAmount, basePrice, takerFeeMultiplier))
                     unusedFromCurrencyAmount = BigDecimal.ZERO
                     break
                 } else {
                     unusedFromCurrencyAmount -= sellQuoteAmount(quoteAmount)
                     targetCurrencyAmount += sellBaseAmount(quoteAmount, basePrice, takerFeeMultiplier)
-                    trades = trades.prepend(InstantOrder.Companion.Trade(basePrice, quoteAmount))
+                    trades = trades.prepend(BareTrade(quoteAmount, basePrice, takerFeeMultiplier))
                 }
             }
 
@@ -74,7 +74,7 @@ object Orders {
         orderMultiplierAmount = if (initCurrencyAmount.compareTo(BigDecimal.ZERO) != 0) {
             targetCurrencyAmount.divide(initCurrencyAmount, 8, RoundingMode.DOWN)
         } else {
-            BigDecimal.ONE // TODO: Fix orderMultiplierAmount
+            BigDecimal.ONE
         }
 
         return InstantOrder(
@@ -131,7 +131,7 @@ object Orders {
         orderMultiplier = if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
             toAmount.divide(fromAmount, 8, RoundingMode.DOWN)
         } else {
-            BigDecimal.ONE // TODO: Fix orderMultiplier
+            BigDecimal.ONE
         }
 
         return DelayedOrder(
@@ -180,16 +180,8 @@ data class InstantOrder(
     val orderMultiplierAmount: BigDecimal,
     val unusedFromCurrencyAmount: Amount,
     override val feeMultiplier: BigDecimal,
-    val trades: List<InstantOrder.Companion.Trade> // TODO: Change to BareTrade
-) : InstantDelayedOrder(market, fromCurrency, targetCurrency, fromAmount, toAmount, orderType, feeMultiplier) {
-    companion object {
-        // TODO: Replace with BareTrade
-        data class Trade(
-            val price: Price,
-            val amount: Amount
-        )
-    }
-}
+    val trades: List<BareTrade>
+) : InstantDelayedOrder(market, fromCurrency, targetCurrency, fromAmount, toAmount, orderType, feeMultiplier)
 
 data class DelayedOrder(
     override val market: Market,

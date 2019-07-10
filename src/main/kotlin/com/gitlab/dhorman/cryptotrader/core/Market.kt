@@ -91,15 +91,15 @@ data class Market(val baseCurrency: Currency, val quoteCurrency: Currency) {
                 return key?.toMarket() ?: throw Exception("Key can't be null")
             }
         }
+    }
+}
 
-        fun String.toMarket(): Market {
-            val currencies = this.split('_')
+fun String.toMarket(): Market {
+    val currencies = this.split('_')
 
-            if (currencies.size == 2) {
-                return Market(currencies[0], currencies[1])
-            } else {
-                throw Exception("""Market "$this" not recognized""")
-            }
-        }
+    if (currencies.size == 2) {
+        return Market(currencies[0], currencies[1])
+    } else {
+        throw Exception("""Market "$this" not recognized""")
     }
 }

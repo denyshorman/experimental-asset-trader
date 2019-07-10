@@ -12,11 +12,6 @@ abstract class OrderBookAbstract(
     open val bids: SubOrderBook = TreeMap.empty(compareByDescending { it })
 )
 
-data class OrderBook(
-    override val asks: SubOrderBook = TreeMap.empty(),
-    override val bids: SubOrderBook = TreeMap.empty(compareByDescending { it })
-) : OrderBookAbstract(asks, bids)
-
 data class FeeMultiplier(val maker: BigDecimal, val taker: BigDecimal)
 
 data class TradeStat(

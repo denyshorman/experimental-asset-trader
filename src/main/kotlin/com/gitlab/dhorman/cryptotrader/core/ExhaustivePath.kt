@@ -4,11 +4,9 @@ import io.vavr.collection.List
 import java.math.BigDecimal
 import java.math.RoundingMode
 
-typealias InstantDelayedOrderChain = List<InstantDelayedOrder>
-
 data class ExhaustivePath(
     val targetPath: TargetPath,
-    val chain: InstantDelayedOrderChain
+    val chain: List<InstantDelayedOrder>
 ) {
     val id: String by lazy(LazyThreadSafetyMode.NONE) {
         chain.iterator().map {

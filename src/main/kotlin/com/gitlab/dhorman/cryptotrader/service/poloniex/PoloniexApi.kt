@@ -8,7 +8,7 @@ import com.fasterxml.jackson.databind.node.NullNode
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.core.Market
-import com.gitlab.dhorman.cryptotrader.core.Market.Companion.toMarket
+import com.gitlab.dhorman.cryptotrader.core.toMarket
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
