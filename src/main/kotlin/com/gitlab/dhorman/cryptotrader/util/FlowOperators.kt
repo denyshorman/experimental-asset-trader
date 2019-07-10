@@ -145,12 +145,27 @@ fun <K, V> flowFromMap(map: Map<K, V>): Flow<Tuple2<K, V>> = flow {
     map.forEach { emit(it) }
 }
 
-suspend fun <K, V> Flow<Tuple2<K, V>>.collectMap(): Map<K, V> = coroutineScope {
+suspend fun <K, V> Flow<Tuple2<K, V>>.collectMap(): Map<K, V> {
     var map = HashMap.empty<K, V>()
 
     collect {
         map = map.put(it)
     }
 
-    map
+    return map
+}
+
+suspend fun <T> Flow<T>.firstOrNull(): T? {
+    var result: T? = null
+
+    try {
+        collect {
+            result = it
+            throw CancellationException()
+        }
+    } catch (e: CancellationException) {
+        // Ignore
+    }
+
+    return result
 }

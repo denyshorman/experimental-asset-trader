@@ -14,13 +14,13 @@ import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCom
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPredicted
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import com.gitlab.dhorman.cryptotrader.util.buffer
+import com.gitlab.dhorman.cryptotrader.util.firstOrNull
 import io.vavr.Tuple2
 import io.vavr.Tuple3
 import io.vavr.collection.Array
 import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.collection.Queue
-import io.vavr.collection.Vector
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -785,9 +785,8 @@ class PoloniexTrader(
                 var retryCount = 0
 
                 while (unfilledAmount.compareTo(BigDecimal.ZERO) != 0) {
-                    val simulatedTrades = simulateInstantTrades(unfilledAmount, orderType, orderBookFlow, feeFlow)
-
-                    val firstSimulatedTrade = simulatedTrades._2.headOption().orNull
+                    val firstSimulatedTrade =
+                        simulateInstantTrades(unfilledAmount, orderType, orderBookFlow, feeFlow).firstOrNull()?._2
 
                     if (firstSimulatedTrade == null) {
                         delay(2000)
@@ -1367,17 +1366,15 @@ class PoloniexTrader(
             }
         }
 
-        // TODO: Replace with sequence
         private suspend fun simulateInstantTrades(
             fromAmount: Amount,
             orderType: OrderType,
             orderBookFlow: Flow<OrderBookAbstract>,
             feeFlow: Flow<FeeMultiplier>
-        ): Tuple2<Amount, Vector<BareTrade>> {
+        ): Flow<Tuple2<Amount, BareTrade>> = flow {
             val orderBook = orderBookFlow.first()
             val fee = feeFlow.first()
 
-            var trades = Vector.empty<BareTrade>()
             var unusedFromAmount = fromAmount
 
             if (orderType == OrderType.Buy) {
@@ -1388,12 +1385,14 @@ class PoloniexTrader(
 
                     if (unusedFromAmount <= availableFromAmount) {
                         val tradeQuoteAmount = calcQuoteAmount(unusedFromAmount, basePrice)
-                        trades = trades.append(BareTrade(tradeQuoteAmount, basePrice, fee.taker))
+                        val trade = BareTrade(tradeQuoteAmount, basePrice, fee.taker)
                         unusedFromAmount = BigDecimal.ZERO
+                        emit(tuple(unusedFromAmount, trade))
                         break
                     } else {
                         unusedFromAmount -= availableFromAmount
-                        trades = trades.append(BareTrade(quoteAmount, basePrice, fee.taker))
+                        val trade = BareTrade(quoteAmount, basePrice, fee.taker)
+                        emit(tuple(unusedFromAmount, trade))
                     }
                 }
             } else {
@@ -1401,17 +1400,17 @@ class PoloniexTrader(
 
                 for ((basePrice, quoteAmount) in orderBook.bids) {
                     if (unusedFromAmount <= quoteAmount) {
-                        trades = trades.append(BareTrade(unusedFromAmount, basePrice, fee.taker))
+                        val trade = BareTrade(unusedFromAmount, basePrice, fee.taker)
                         unusedFromAmount = BigDecimal.ZERO
+                        emit(tuple(unusedFromAmount, trade))
                         break
                     } else {
                         unusedFromAmount -= sellQuoteAmount(quoteAmount)
-                        trades = trades.append(BareTrade(quoteAmount, basePrice, fee.taker))
+                        val trade = BareTrade(quoteAmount, basePrice, fee.taker)
+                        emit(tuple(unusedFromAmount, trade))
                     }
                 }
             }
-
-            return tuple(unusedFromAmount, trades)
         }
 
         private fun CoroutineScope.startProfitMonitoring(
