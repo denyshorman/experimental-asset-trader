@@ -111,7 +111,7 @@ fun <T> Flow<T>.share(replayCount: Int = 0, gracePeriod: Duration? = null): Flow
     return ShareOperator(this, replayCount, gracePeriod)
 }
 
-fun <T> Flow<T>.buffer(timespan: Duration): Flow<List<T>> = flow {
+fun <T> Flow<T>.buffer(timespan: Duration): Flow<List<T>> = channelFlow {
     coroutineScope {
         var events = LinkedList<T>()
         var timerJob: Job? = null
@@ -124,9 +124,7 @@ fun <T> Flow<T>.buffer(timespan: Duration): Flow<List<T>> = flow {
                         delay(timespan.toMillis())
 
                         lock.withLock {
-                            kotlinx.coroutines.withContext(this@coroutineScope.coroutineContext) {
-                                emit(events)
-                            }
+                            send(events)
 
                             events = LinkedList()
                             timerJob = null
@@ -134,10 +132,12 @@ fun <T> Flow<T>.buffer(timespan: Duration): Flow<List<T>> = flow {
                     }
                 }
 
-
                 events.add(it)
             }
         }
+
+        timerJob?.cancelAndJoin()
+        if (events.size != 0) send(events)
     }
 }
 
@@ -168,4 +168,8 @@ suspend fun <T> Flow<T>.firstOrNull(): T? {
     }
 
     return result
+}
+
+fun <T> Channel<T>.asFlow(): Flow<T> = flow {
+    consumeEach { emit(it) }
 }

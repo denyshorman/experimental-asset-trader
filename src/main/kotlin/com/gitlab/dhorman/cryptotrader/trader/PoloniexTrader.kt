@@ -13,6 +13,7 @@ import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPredicted
 import com.gitlab.dhorman.cryptotrader.util.FlowScope
+import com.gitlab.dhorman.cryptotrader.util.asFlow
 import com.gitlab.dhorman.cryptotrader.util.buffer
 import com.gitlab.dhorman.cryptotrader.util.firstOrNull
 import io.vavr.Tuple2
@@ -25,7 +26,6 @@ import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
-import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.awaitFirst
@@ -584,16 +584,23 @@ class PoloniexTrader(
                             var fromAmount =
                                 (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
+                            val tradesChannel =
+                                Channel<kotlin.collections.List<Tuple2<Long, BareTrade>>>(Channel.RENDEZVOUS)
+
                             tradeDelayed(
                                 currentMarket.orderType,
                                 currentMarket.market,
                                 fromAmount,
-                                orderBookFlow
+                                orderBookFlow,
+                                tradesChannel
                             )
-                                .buffer(Duration.ofSeconds(5))
-                                .map { it.flatten() }
-                                .collect { tradesAndOrderIds ->
-                                    withContext(NonCancellable) {
+
+                            withContext(NonCancellable) {
+                                tradesChannel
+                                    .asFlow()
+                                    .buffer(Duration.ofSeconds(5))
+                                    .map { it.flatten() }
+                                    .collect { tradesAndOrderIds ->
                                         val trades = Array.ofAll(tradesAndOrderIds.map { it._2 })
                                         val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
                                         updatedMarkets = marketSplit._1
@@ -634,7 +641,7 @@ class PoloniexTrader(
                                             transactionsDao.addCompleted(id, committedMarkets)
                                         }
                                     }
-                                }
+                            }
 
                             break
                         } catch (e: DisconnectedException) {
@@ -890,13 +897,13 @@ class PoloniexTrader(
             return Array.ofAll(trades)
         }
 
-        private fun tradeDelayed(
+        private fun CoroutineScope.tradeDelayed(
             orderType: OrderType,
             market: Market,
             fromCurrencyAmount: Amount,
-            orderBook: Flow<OrderBookAbstract>
-        ): Flow<kotlin.collections.List<Tuple2<Long, BareTrade>>> = channelFlow {
-            val tradesChannel: ProducerScope<kotlin.collections.List<Tuple2<Long, BareTrade>>> = this
+            orderBook: Flow<OrderBookAbstract>,
+            tradesChannel: Channel<kotlin.collections.List<Tuple2<Long, BareTrade>>>
+        ): Job = this.launch {
             val unfilledAmountChannel = ConflatedBroadcastChannel(fromCurrencyAmount)
             val latestOrderIdsRef = AtomicReference(Queue.empty<Long>())
 
@@ -933,7 +940,7 @@ class PoloniexTrader(
                             if (tradeList.size != 0) tradesChannel.send(tradeList)
 
                             if (unfilledAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                return@channelFlow
+                                return@launch
                             }
 
                             break
@@ -985,8 +992,8 @@ class PoloniexTrader(
                             if (tradeList.size == 0) return@collect
 
                             withContext(NonCancellable) {
-                                unfilledAmountChannel.send(unfilledAmount)
                                 tradesChannel.send(tradeList)
+                                unfilledAmountChannel.send(unfilledAmount)
                             }
                         }
                     }
@@ -1123,12 +1130,16 @@ class PoloniexTrader(
                             if (it.compareTo(BigDecimal.ZERO) == 0) {
                                 logger.debug { "[$market, $orderType] All trades received" }
                                 tradesJob?.cancel()
-                                return@launch
                             }
                         }
                     }
                 }
             } catch (e: CancellationException) {
+                tradesChannel.close()
+            } catch (e: Exception) {
+                tradesChannel.close(e)
+            } finally {
+                tradesChannel.close()
             }
         }
 
