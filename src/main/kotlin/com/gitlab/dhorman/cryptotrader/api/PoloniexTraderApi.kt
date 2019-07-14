@@ -35,10 +35,10 @@ class PoloniexTraderApi(
 ) {
     // Example: USDT USDC 40.00 USDT_BTC1BTC_USDC0
     private val execTranBodyPattern =
-        """^([a-z]+)\s+([a-z]+)\s+(\d+(?:\.\d+)?)\s+((?:[a-z]+_[a-z]+(?:0|1))+)$""".toRegex(RegexOption.IGNORE_CASE)
+        """^([a-z]+)\s+([a-z]+)\s+(\d+(?:\.\d+)?)\s+((?:[a-z]+_[a-z]+[01])+)$""".toRegex(RegexOption.IGNORE_CASE)
 
     private val execTranPathPattern =
-        """([a-z]+_[a-z]+)(0|1)""".toRegex(RegexOption.IGNORE_CASE)
+        """([a-z]+_[a-z]+)([01])""".toRegex(RegexOption.IGNORE_CASE)
 
 
     @ApiOperation(
@@ -94,6 +94,12 @@ class PoloniexTraderApi(
                     p0.profitability.compareTo(p1.profitability)
                 }
             }).take(100)
+    }
+
+
+    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/unfilled/{id}/execute"])
+    suspend fun executeFullTransaction(@PathVariable id: Long) {
+        poloniexTrader.startPathTranFromUnfilledTrans(id)
     }
 
     @RequestMapping(

@@ -3,6 +3,7 @@ package com.gitlab.dhorman.cryptotrader.trader.dao
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import io.vavr.Tuple2
+import io.vavr.Tuple4
 import io.vavr.collection.List
 import io.vavr.kotlin.toVavrList
 import io.vavr.kotlin.tuple
@@ -15,6 +16,27 @@ import java.math.BigDecimal
 
 @Repository
 class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: DatabaseClient) {
+    suspend fun get(id: Long): Tuple4<Currency, Amount, Currency, Amount>? {
+        return databaseClient.execute().sql(
+            """
+            SELECT init_currency, init_currency_amount, current_currency, current_currency_amount
+            FROM poloniex_unfilled_markets
+            WHERE id = $1
+            """.trimIndent()
+        )
+            .bind(0, id)
+            .fetch().first()
+            .map {
+                tuple(
+                    it["init_currency"] as Currency,
+                    it["init_currency_amount"] as Amount,
+                    it["current_currency"] as Currency,
+                    it["current_currency_amount"] as Amount
+                )
+            }
+            .awaitFirstOrNull()
+    }
+
     suspend fun get(initFromCurrency: Currency, fromCurrency: Currency): List<Tuple2<Amount, Amount>> {
         return databaseClient.execute().sql(
             """
@@ -41,6 +63,13 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
         databaseClient.execute().sql("DELETE FROM poloniex_unfilled_markets WHERE init_currency = $1 AND current_currency = $2")
             .bind(0, initFromCurrency)
             .bind(1, fromCurrency)
+            .then()
+            .awaitFirstOrNull()
+    }
+
+    suspend fun remove(id: Long) {
+        databaseClient.execute().sql("DELETE FROM poloniex_unfilled_markets WHERE id = $1")
+            .bind(0, id)
             .then()
             .awaitFirstOrNull()
     }

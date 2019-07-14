@@ -72,16 +72,18 @@ class PoloniexTrader(
 
     val tranRequests = Channel<ExhaustivePath>(Channel.RENDEZVOUS)
 
+    @Volatile
+    private var tranIntentScope: CoroutineScope? = null
 
     fun start(scope: CoroutineScope) = scope.launch {
         logger.info("Start trading on Poloniex")
 
         subscribeToRequiredTopicsBeforeTrading()
 
-        val tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
+        tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
 
-        startMonitoringForTranRequests(tranIntentScope)
-        resumeSleepingTransactions(tranIntentScope)
+        startMonitoringForTranRequests(tranIntentScope!!)
+        resumeSleepingTransactions(tranIntentScope!!)
 
         try {
             val tickerFlow = Flux.interval(Duration.ofSeconds(30))
@@ -106,12 +108,12 @@ class PoloniexTrader(
                     "Found optimal path: $longPath, using amount $startAmount with potential profit ${endAmount - startAmount}"
                 }
 
-                startPathTransaction(bestPath, tranIntentScope)
+                startPathTransaction(bestPath, tranIntentScope!!)
             }
         } finally {
             logger.debug { "Trying to cancel all Poloniex transactions..." }
 
-            tranIntentScope.cancel()
+            tranIntentScope!!.cancel()
         }
     }
 
@@ -278,6 +280,60 @@ class PoloniexTrader(
         if (canStartTransaction) {
             TransactionIntent(id, markets, marketIdx, scope).start()
         }
+    }
+
+    suspend fun startPathTranFromUnfilledTrans(id: Long) {
+        val (initCurrency, initCurrencyAmount, currentCurrency, currentCurrencyAmount) = unfilledMarketsDao.get(id)
+            ?: run {
+                logger.warn("Unfilled amount not found for id $id")
+                return
+            }
+
+        val updatedMarkets = Array.of<TranIntentMarket>(
+            TranIntentMarketCompleted(
+                Market(initCurrency, currentCurrency),
+                OrderSpeed.Instant,
+                CurrencyType.Base,
+                Array.of(
+                    BareTrade(initCurrencyAmount, BigDecimal.ONE, BigDecimal.ZERO),
+                    BareTrade(currentCurrencyAmount, BigDecimal.ZERO, BigDecimal.ONE)
+                )
+            ),
+            TranIntentMarketPartiallyCompleted(
+                Market(initCurrency, currentCurrency),
+                OrderSpeed.Instant,
+                CurrencyType.Quote,
+                currentCurrencyAmount
+            )
+        )
+
+        val activeMarketId = updatedMarkets.length() - 1
+
+        val bestPath = findNewPath(
+            initCurrencyAmount,
+            currentCurrency,
+            currentCurrencyAmount,
+            primaryCurrencies
+        )
+
+        if (bestPath == null) {
+            logger.debug { "Path not found for ${updatedMarkets.pathString()}" }
+            return
+        }
+
+        val changedMarkets = updateMarketsWithBestPath(updatedMarkets, activeMarketId, bestPath)
+        val tranId = UUID.randomUUID()
+
+        withContext(NonCancellable) {
+            TransactionalOperator.create(tranManager, object : TransactionDefinition {
+                override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
+            }).transactional(FlowScope.mono {
+                unfilledMarketsDao.remove(id)
+                transactionsDao.addActive(tranId, changedMarkets, activeMarketId)
+            }).retry().awaitFirst()
+        }
+
+        TransactionIntent(tranId, changedMarkets, activeMarketId, tranIntentScope!!).start()
     }
 
     private fun prepareMarketsForIntent(bestPath: ExhaustivePath): Array<TranIntentMarket> {
@@ -534,7 +590,28 @@ class PoloniexTrader(
 
                 withContext(NonCancellable) {
                     if (trades.length() == 0) {
-                        if (marketIdx == 0) transactionsDao.deleteActive(id)
+                        if (marketIdx == 0) {
+                            transactionsDao.deleteActive(id)
+                        } else {
+                            val fromCurrencyInit = modifiedMarkets[0].fromCurrency
+                            val fromCurrencyInitAmount = modifiedMarkets[0].fromAmount(modifiedMarkets, 0)
+                            val fromCurrencyCurrent = modifiedMarkets[marketIdx].fromCurrency
+                            val fromCurrencyCurrentAmount = modifiedMarkets[marketIdx].fromAmount(modifiedMarkets, marketIdx)
+
+                            val primaryCurrencyUnfilled = primaryCurrencies.contains(fromCurrencyCurrent)
+                                    && primaryCurrencies.contains(fromCurrencyInit)
+                                    && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
+
+                            if (!primaryCurrencyUnfilled) {
+                                unfilledMarketsDao.add(
+                                    fromCurrencyInit,
+                                    fromCurrencyInitAmount,
+                                    fromCurrencyCurrent,
+                                    fromCurrencyCurrentAmount
+                                )
+                            }
+                        }
+
                         return@withContext
                     }
 
