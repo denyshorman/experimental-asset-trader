@@ -40,7 +40,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(10 * 60 * 1000)
                 } catch (e: CancellationException) {
                     delay(1000)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch currencies from Poloniex because ${e.message}")
                     delay(2000)
                 }
@@ -249,7 +249,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     }
                 } catch (e: CancellationException) {
                     delay(1000)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn(e.message)
                     delay(1000)
                 }
@@ -284,7 +284,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(10 * 60 * 1000)
                 } catch (e: CancellationException) {
                     delay(1000)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch markets from Poloniex: ${e.message}")
                     delay(2000)
                 }
@@ -391,7 +391,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     }
                 } catch (e: CancellationException) {
                     delay(1000)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn("Can't update open order: ${e.message}")
                     delay(1000)
                 }
@@ -444,7 +444,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     }
                 } catch (e: CancellationException) {
                     delay(1000)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     delay(1000)
                 }
             }
@@ -479,7 +479,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     break
                 } catch (e: CancellationException) {
                     delay(1000)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
                     delay(2000)
                 }
@@ -494,7 +494,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     break
                 } catch (e: CancellationException) {
                     delay(1000)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
                 }
             }
@@ -509,7 +509,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(3 * 60 * 1000)
                 } catch (e: CancellationException) {
                     delay(1000)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     logger.debug { "Can't fetch day volume from Poloniex because ${e.message}" }
                     delay(2000)
                 }

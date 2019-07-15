@@ -733,9 +733,9 @@ class PoloniexTrader(
                         }
                     }
                 } catch (e: CancellationException) {
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     finishedWithError = true
-                    if (logger.isDebugEnabled) logger.warn(e.message)
+                    if (logger.isDebugEnabled) logger.debug(e.message)
                 } finally {
                     val isCancelled = !isActive
 
@@ -954,7 +954,7 @@ class PoloniexTrader(
                         retryCount = 0
                         delay(2000)
                         continue
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         retryCount = 0
                         delay(2000)
                         if (logger.isDebugEnabled) logger.error(e.message)
@@ -1031,8 +1031,8 @@ class PoloniexTrader(
                             break
                         } catch (e: CancellationException) {
                             throw e
-                        } catch (e: Exception) {
-                            if (logger.isDebugEnabled) logger.warn(e.message)
+                        } catch (e: Throwable) {
+                            if (logger.isDebugEnabled) logger.debug(e.message)
                             delay(1000)
                         }
                     }
@@ -1134,7 +1134,7 @@ class PoloniexTrader(
                                         break
                                     } catch (e: CancellationException) {
                                         throw e
-                                    } catch (e: Exception) {
+                                    } catch (e: Throwable) {
                                         logger.debug { "Can't get order status for order id $lastOrderId: ${e.message}" }
                                         delay(1000)
                                     }
@@ -1188,7 +1188,7 @@ class PoloniexTrader(
                                             delay(2000)
                                         } catch (e: IOException) {
                                             delay(2000)
-                                        } catch (e: Exception) {
+                                        } catch (e: Throwable) {
                                             logger.error(e.message)
                                             delay(2000)
                                         }
@@ -1221,7 +1221,7 @@ class PoloniexTrader(
                 }
             } catch (e: CancellationException) {
                 tradesChannel.close()
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 tradesChannel.close(e)
             } finally {
                 tradesChannel.close()
@@ -1324,21 +1324,17 @@ class PoloniexTrader(
                 } catch (e: InvalidOrderNumberException) {
                     throw e
                 } catch (e: NotEnoughCryptoException) {
-                    logger.debug(e.originalMsg)
-
                     if (retryCount++ == 3) {
                         throw e
                     } else {
+                        logger.debug(e.originalMsg)
                         delay(1000)
                     }
                 } catch (e: AmountMustBeAtLeastException) {
-                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: TotalMustBeAtLeastException) {
-                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: RateMustBeLessThanException) {
-                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: OrderBookEmptyException) {
                     retryCount = 0
@@ -1354,7 +1350,7 @@ class PoloniexTrader(
                 } catch (e: IOException) {
                     retryCount = 0
                     delay(2000)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     retryCount = 0
                     delay(2000)
                     if (logger.isDebugEnabled) logger.error(e.message)
@@ -1429,16 +1425,12 @@ class PoloniexTrader(
                     delay(500)
                     continue
                 } catch (e: NotEnoughCryptoException) {
-                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: AmountMustBeAtLeastException) {
-                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: TotalMustBeAtLeastException) {
-                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: RateMustBeLessThanException) {
-                    logger.debug(e.originalMsg)
                     throw e
                 } catch (e: OrderBookEmptyException) {
                     logger.warn(e.message)
@@ -1454,7 +1446,7 @@ class PoloniexTrader(
                 } catch (e: IOException) {
                     delay(2000)
                     continue
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     delay(2000)
                     if (logger.isDebugEnabled) logger.error(e.message)
                     continue

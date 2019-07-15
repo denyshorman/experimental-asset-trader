@@ -102,7 +102,7 @@ class PoloniexApi(
                                         val error: Error
                                         try {
                                             error = objectMapper.readValue(payloadBytes)
-                                        } catch (e: Exception) {
+                                        } catch (e: Throwable) {
                                             throw e
                                         }
 
@@ -113,7 +113,7 @@ class PoloniexApi(
                                         } else {
                                             throw e
                                         }
-                                    } catch (e: Exception) {
+                                    } catch (e: Throwable) {
                                         logger.error("Can't parse websocket message: ${e.message}")
                                     }
                                 }
@@ -221,7 +221,7 @@ class PoloniexApi(
                     }
                 } catch (e: CancellationException) {
                     delay(500)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     delay(1000)
                 }
             }
@@ -327,14 +327,14 @@ class PoloniexApi(
             } else {
                 null
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             try {
                 val res =
                     objectMapper.convertValue<OrderStatusErrorWrapper>(json, jacksonTypeRef<OrderStatusErrorWrapper>())
                 val errorMsg = res.result.getOrNull("error")
                 if (logger.isTraceEnabled && errorMsg != null) logger.trace("Can't get order status: $errorMsg")
                 return null
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 throw e
             }
         }
@@ -371,7 +371,7 @@ class PoloniexApi(
         val params = hashMap("orderNumber" to orderNumber.toString())
         return try {
             callPrivateApi(command, jacksonTypeRef(), params)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (e.message == OrderNotFoundPattern) {
                 List.empty()
             } else {
@@ -499,7 +499,7 @@ class PoloniexApi(
             val res = callPrivateApi(command, jacksonTypeRef<CancelOrderWrapper>(), params)
             if (!res.success) throw Exception(res.message)
             return CancelOrder(res.amount, res.fee, res.market)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (e.message == null) throw e
 
             val msg = e.message!!
@@ -641,7 +641,7 @@ class PoloniexApi(
             } catch (e: ApiCallLimitException) {
                 logger.warn(e.message)
                 continue
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 throw e
             }
         }
@@ -676,7 +676,7 @@ class PoloniexApi(
             val error: Error
             try {
                 error = objectMapper.readValue(jsonString)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 throw Exception("Error response not recognized: ${e.message}")
             }
 
@@ -723,7 +723,7 @@ class PoloniexApi(
                         main.send(data)
                     } catch (e: CancellationException) {
                         throw e
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         logger.error("Can't parse websocket message: ${e.message}")
                     }
                     // TODO: Investigate websocket error responses in details
@@ -755,7 +755,7 @@ class PoloniexApi(
                     connectionOutput.send(payload)
                 } catch (e: CancellationException) {
                     throw e
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     logger.warn("Can't send message over websocket channel: ${e.message}. Retry in 1 sec...")
                     delay(1000)
                     continue
@@ -779,7 +779,7 @@ class PoloniexApi(
                 if (logger.isDebugEnabled) logger.debug("Unsubscribe from $channel channel")
             } catch (_: TimeoutCancellationException) {
                 if (logger.isDebugEnabled) logger.debug("Can't unsubscribe from $channel channel. Connection closed ?")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 if (logger.isDebugEnabled) logger.debug("Can't unsubscribe from $channel channel: ${e.message}")
             }
         }
