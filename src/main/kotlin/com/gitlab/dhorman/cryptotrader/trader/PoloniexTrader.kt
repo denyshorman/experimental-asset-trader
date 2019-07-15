@@ -891,7 +891,15 @@ class PoloniexTrader(
                         firstSimulatedTrade.quoteAmount
                     }
 
-                    if (expectQuoteAmount.compareTo(BigDecimal.ZERO) == 0) return null
+                    if (expectQuoteAmount.compareTo(BigDecimal.ZERO) == 0) {
+                        logger.debug("Quote amount for trade is equal to zero. Unfilled amount: $unfilledAmount")
+
+                        if (trades.size == 0) {
+                            return null
+                        } else {
+                            break
+                        }
+                    }
 
                     val transaction = try {
                         logger.debug { "Trying to $orderType on market $market with price ${firstSimulatedTrade.price} and amount $expectQuoteAmount" }
@@ -960,6 +968,8 @@ class PoloniexTrader(
                         if (logger.isDebugEnabled) logger.error(e.message)
                         continue
                     }
+
+                    logger.debug { "Instant $orderType trades received: ${transaction.trades}" }
 
                     for (trade in transaction.trades) {
                         unfilledAmount -= if (orderType == OrderType.Buy) {
