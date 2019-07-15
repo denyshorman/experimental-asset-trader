@@ -586,21 +586,22 @@ class PoloniexTrader(
                     feeFlow
                 )
 
-                logger.debug { "Instant ${currentMarket.orderType} has been completed. Trades: $trades" }
+                logger.debug { "Instant ${currentMarket.orderType} has been completed ${if (trades == null) "with error." else ". Trades: $trades"}" }
 
                 withContext(NonCancellable) {
-                    if (trades.length() == 0) {
-                        if (marketIdx == 0) {
-                            transactionsDao.deleteActive(id)
-                        } else {
-                            val fromCurrencyInit = modifiedMarkets[0].fromCurrency
-                            val fromCurrencyInitAmount = modifiedMarkets[0].fromAmount(modifiedMarkets, 0)
-                            val fromCurrencyCurrent = modifiedMarkets[marketIdx].fromCurrency
-                            val fromCurrencyCurrentAmount = modifiedMarkets[marketIdx].fromAmount(modifiedMarkets, marketIdx)
+                    if (trades == null) {
+                        val fromCurrencyInit = modifiedMarkets[0].fromCurrency
+                        val fromCurrencyInitAmount = modifiedMarkets[0].fromAmount(modifiedMarkets, 0)
+                        val fromCurrencyCurrent = modifiedMarkets[marketIdx].fromCurrency
+                        val fromCurrencyCurrentAmount =
+                            modifiedMarkets[marketIdx].fromAmount(modifiedMarkets, marketIdx)
 
-                            val primaryCurrencyUnfilled = primaryCurrencies.contains(fromCurrencyCurrent)
-                                    && primaryCurrencies.contains(fromCurrencyInit)
-                                    && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
+                        val primaryCurrencyUnfilled = primaryCurrencies.contains(fromCurrencyCurrent)
+                                && primaryCurrencies.contains(fromCurrencyInit)
+                                && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
+
+                        TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                            transactionsDao.deleteActive(id)
 
                             if (!primaryCurrencyUnfilled) {
                                 unfilledMarketsDao.add(
@@ -610,8 +611,13 @@ class PoloniexTrader(
                                     fromCurrencyCurrentAmount
                                 )
                             }
-                        }
+                        }).retry().awaitFirstOrNull()
 
+                        return@withContext
+                    }
+
+                    if (trades.length() == 0) {
+                        if (marketIdx == 0) transactionsDao.deleteActive(id)
                         return@withContext
                     }
 
@@ -654,6 +660,7 @@ class PoloniexTrader(
                 val updatedMarketsRef = AtomicReference(updatedMarkets)
                 val cancelByProfitMonitoringJob = AtomicBoolean(false)
                 val profitMonitoringJob = startProfitMonitoring(updatedMarketsRef, cancelByProfitMonitoringJob)
+                var finishedWithError = false
 
                 try {
                     while (isActive) {
@@ -727,6 +734,7 @@ class PoloniexTrader(
                     }
                 } catch (e: CancellationException) {
                 } catch (e: Exception) {
+                    finishedWithError = true
                     if (logger.isDebugEnabled) logger.warn(e.message)
                 } finally {
                     val isCancelled = !isActive
@@ -742,7 +750,7 @@ class PoloniexTrader(
                         val fromAmount = currMarket.fromAmount(updatedMarkets, marketIdx)
 
                         if (marketIdx != 0 && fromAmount.compareTo(BigDecimal.ZERO) != 0) {
-                            if (!isCancelled) {
+                            if (!isCancelled || finishedWithError) {
                                 val fromCurrencyInit = initMarket.fromCurrency
                                 val fromCurrencyInitAmount = initMarket.fromAmount(updatedMarkets, 0)
                                 val fromCurrencyCurrent = currMarket.fromCurrency
@@ -854,7 +862,7 @@ class PoloniexTrader(
             fromCurrencyAmount: Amount,
             orderBookFlow: Flow<OrderBookAbstract>,
             feeFlow: Flow<FeeMultiplier>
-        ): Array<BareTrade> {
+        ): Array<BareTrade>? {
             val trades = LinkedList<BareTrade>()
             val feeMultiplier = feeFlow.first() // TODO: Remove when Poloniex will fix the bug with fee
             var unfilledAmount = fromCurrencyAmount
@@ -883,7 +891,7 @@ class PoloniexTrader(
                         firstSimulatedTrade.quoteAmount
                     }
 
-                    if (expectQuoteAmount.compareTo(BigDecimal.ZERO) == 0) break
+                    if (expectQuoteAmount.compareTo(BigDecimal.ZERO) == 0) return null
 
                     val transaction = try {
                         logger.debug { "Trying to $orderType on market $market with price ${firstSimulatedTrade.price} and amount $expectQuoteAmount" }
@@ -919,20 +927,20 @@ class PoloniexTrader(
                         logger.error(e.originalMsg)
 
                         if (retryCount++ == 3) {
-                            break
+                            return null
                         } else {
                             delay(1000)
                             continue
                         }
                     } catch (e: AmountMustBeAtLeastException) {
                         logger.debug(e.originalMsg)
-                        break
+                        return null
                     } catch (e: TotalMustBeAtLeastException) {
                         logger.debug(e.originalMsg)
-                        break
+                        return null
                     } catch (e: RateMustBeLessThanException) {
                         logger.debug(e.originalMsg)
-                        break
+                        return null
                     } catch (e: MaxOrdersExceededException) {
                         retryCount = 0
                         logger.warn(e.originalMsg)
