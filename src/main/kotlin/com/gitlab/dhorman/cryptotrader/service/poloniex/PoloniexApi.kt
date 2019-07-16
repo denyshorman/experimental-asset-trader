@@ -114,7 +114,8 @@ class PoloniexApi(
                                             throw e
                                         }
                                     } catch (e: Throwable) {
-                                        logger.error("Can't parse websocket message: ${e.message}")
+                                        val payloadStr = String(payloadBytes, StandardCharsets.UTF_8)
+                                        logger.error("Can't parse websocket message: ${e.message}. Payload: $payloadStr")
                                     }
                                 }
                             }
