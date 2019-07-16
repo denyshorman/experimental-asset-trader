@@ -491,7 +491,6 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                 try {
                     send(fetchFee())
-                    break
                 } catch (e: CancellationException) {
                     delay(1000)
                 } catch (e: Throwable) {

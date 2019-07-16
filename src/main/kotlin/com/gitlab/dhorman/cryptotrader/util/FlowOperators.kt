@@ -77,7 +77,7 @@ private open class ShareOperator<T>(
                                     channel.send(it)
                                 }
 
-                                logger.warn("Downstream flow completed in share operator")
+                                logger.warn("Downstream flow completed in share operator $upstream")
                             }
                         }
                     }
