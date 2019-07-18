@@ -79,6 +79,7 @@ class PoloniexTrader(
         logger.info("Start trading on Poloniex")
 
         subscribeToRequiredTopicsBeforeTrading()
+        startTradeCalcMonitoring()
 
         tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
 
@@ -115,6 +116,97 @@ class PoloniexTrader(
 
             tranIntentScope!!.cancel()
         }
+    }
+
+    private fun CoroutineScope.startTradeCalcMonitoring(): Job = this.launch {
+        poloniexApi.accountNotificationStream.collect { notifications ->
+            var tradeExist = false
+            for (notification in notifications.reverseIterator()) {
+                if (notification is TradeNotification) {
+                    tradeExist = true
+                    break
+                }
+            }
+
+            if (!tradeExist) return@collect
+
+            val balanceUpdates = LinkedList<BalanceUpdate>()
+            val trades = LinkedList<TradeNotification>()
+
+            for (notification in notifications) {
+                if (notification is BalanceUpdate) balanceUpdates.add(notification)
+                if (notification is TradeNotification) trades.add(notification)
+            }
+
+            var fromAmountExchange = BigDecimal.ZERO
+            var targetAmountExchange = BigDecimal.ZERO
+            var fromAmount = BigDecimal.ZERO
+            var targetAmount = BigDecimal.ZERO
+
+            for (balanceDelta in balanceUpdates) {
+                if (balanceDelta.amount < BigDecimal.ZERO) {
+                    fromAmountExchange -= balanceDelta.amount
+                } else {
+                    targetAmountExchange += balanceDelta.amount
+                }
+            }
+
+            val orderType = determineOrderType(fromAmountExchange, trades)
+
+            if (orderType == OrderType.Buy) {
+                for (trade in trades) {
+                    fromAmount += buyBaseAmount(trade.amount, trade.price)
+                    targetAmount += buyQuoteAmount(trade.amount, trade.feeMultiplier)
+                }
+            } else {
+                for (trade in trades) {
+                    fromAmount += sellQuoteAmount(trade.amount)
+                    targetAmount += sellBaseAmount(trade.amount, trade.price, trade.feeMultiplier)
+                }
+            }
+
+            var wrongCalc = false
+
+            if (fromAmountExchange.compareTo(fromAmount) != 0) {
+                wrongCalc = true
+
+                logger.warn(
+                    "Balance delta calculation does not match exchange deltas. " +
+                            "FromAmountExchange: $fromAmountExchange, " +
+                            "FromAmountLocal: $fromAmount"
+                )
+            }
+
+            if (targetAmountExchange.compareTo(targetAmount) != 0) {
+                wrongCalc = true
+
+                logger.warn(
+                    "Balance delta calculation does not match exchange deltas. " +
+                            "TargetAmountExchange: $targetAmountExchange, " +
+                            "TargetAmountLocal: $targetAmount"
+                )
+            }
+
+            if (wrongCalc) {
+                logger.warn("Balance delta calculations were wrong. Notifications: $notifications")
+            }
+        }
+    }
+
+    private fun determineOrderType(
+        fromAmountExchange: BigDecimal,
+        trades: kotlin.collections.List<TradeNotification>
+    ): OrderType {
+        var fromAmount = BigDecimal.ZERO
+
+        for (trade in trades) {
+            fromAmount += sellQuoteAmount(trade.amount)
+        }
+
+        val delta = (fromAmountExchange - fromAmount).abs()
+        val error = SEVEN_ZEROS_AND_ONE * trades.size.toBigDecimal()
+
+        return if (delta <= error) OrderType.Sell else OrderType.Buy
     }
 
     private fun CoroutineScope.startMonitoringForTranRequests(scope: CoroutineScope): Job = this.launch {
@@ -295,8 +387,8 @@ class PoloniexTrader(
                 OrderSpeed.Instant,
                 CurrencyType.Base,
                 Array.of(
-                    BareTrade(initCurrencyAmount, BigDecimal.ONE, BigDecimal.ZERO),
-                    BareTrade(currentCurrencyAmount, BigDecimal.ZERO, BigDecimal.ONE)
+                    adjustFromAmount(initCurrencyAmount),
+                    adjustTargetAmount(currentCurrencyAmount, OrderType.Buy)
                 )
             ),
             TranIntentMarketPartiallyCompleted(
@@ -541,6 +633,18 @@ class PoloniexTrader(
             tuple(currency, BigDecimal(10))
         } else {
             availableBalance
+        }
+    }
+
+    private fun adjustFromAmount(amount: Amount): BareTrade {
+        return BareTrade(amount, BigDecimal.ONE, BigDecimal.ZERO)
+    }
+
+    private fun adjustTargetAmount(amount: Amount, orderType: OrderType): BareTrade {
+        return if (orderType == OrderType.Buy) {
+            BareTrade(amount, BigDecimal.ZERO, BigDecimal.ONE)
+        } else {
+            BareTrade(amount, BigDecimal.ZERO, BigDecimal.ZERO)
         }
     }
 
@@ -809,7 +913,7 @@ class PoloniexTrader(
 
                 if (initCurrencyAmount.compareTo(BigDecimal.ZERO) != 0) {
                     val initMarket = updatedMarkets[0] as TranIntentMarketCompleted
-                    val newTrade = BareTrade(currentCurrencyAmount, BigDecimal.ONE, BigDecimal.ZERO)
+                    val newTrade = adjustFromAmount(currentCurrencyAmount)
                     val newTrades = initMarket.trades.append(newTrade)
                     val newMarket = TranIntentMarketCompleted(
                         initMarket.market,
@@ -824,11 +928,7 @@ class PoloniexTrader(
                 // 2. Add amount to trades of previous market
 
                 val oldMarket = updatedMarkets[prevMarketIdx] as TranIntentMarketCompleted
-                val newTrade = if (oldMarket.orderType == OrderType.Buy) {
-                    BareTrade(currentCurrencyAmount, BigDecimal.ZERO, BigDecimal.ONE)
-                } else {
-                    BareTrade(currentCurrencyAmount, BigDecimal.ZERO, BigDecimal.ZERO)
-                }
+                val newTrade = adjustTargetAmount(currentCurrencyAmount, oldMarket.orderType)
                 val newTrades = oldMarket.trades.append(newTrade)
                 val newMarket = TranIntentMarketCompleted(
                     oldMarket.market,
@@ -978,12 +1078,43 @@ class PoloniexTrader(
                             sellQuoteAmount(trade.amount)
                         }
 
-                        // TODO: Replace with transaction.feeMultiplier when Poloniex fix the bug with sell fee
-                        if (transaction.feeMultiplier.compareTo(feeMultiplier.taker) != 0) {
-                            logger.warn("Poloniex still has a bug with fees. Expected: ${feeMultiplier.taker}. Actual: ${transaction.feeMultiplier}")
+                        val takerFee = if (transaction.feeMultiplier.compareTo(feeMultiplier.taker) != 0) {
+                            logger.warn(
+                                "Poloniex still has a bug with fees. " +
+                                        "Expected: ${feeMultiplier.taker}. " +
+                                        "Actual: ${transaction.feeMultiplier}"
+                            )
+
+                            feeMultiplier.taker
+                        } else {
+                            transaction.feeMultiplier
                         }
 
-                        trades.addLast(BareTrade(trade.amount, trade.price, feeMultiplier.taker))
+                        trades.addLast(BareTrade(trade.amount, trade.price, takerFee))
+
+
+                        // Verify balance calculation and add adjustments
+
+                        val targetAmount = if (orderType == OrderType.Buy) {
+                            buyQuoteAmount(trade.amount, takerFee)
+                        } else {
+                            sellBaseAmount(trade.amount, trade.price, takerFee)
+                        }
+
+                        if (trade.takerAdjustment.compareTo(targetAmount) != 0) {
+                            logger.warn(
+                                "Not consistent amount calculation. " +
+                                        "Instant $orderType trade: $trade. " +
+                                        "Exchange amount: ${trade.takerAdjustment}. " +
+                                        "Calculated amount: $targetAmount"
+                            )
+
+                            val adjAmount = trade.takerAdjustment - targetAmount
+                            val adjTrade = adjustTargetAmount(adjAmount, orderType)
+                            //trades.addLast(adjTrade)
+                        }
+
+                        // TODO: Adjust from amount
                     }
                 }
             } catch (e: CancellationException) {
@@ -1085,6 +1216,50 @@ class PoloniexTrader(
                             }
 
                             if (tradeList.size == 0) return@collect
+
+                            // Verify trade amounts and add adjustments if needed
+
+                            var fromAmountExchange = BigDecimal.ZERO
+                            var targetAmountExchange = BigDecimal.ZERO
+                            var fromAmount = BigDecimal.ZERO
+                            var targetAmount = BigDecimal.ZERO
+
+                            for (trade in trades) {
+                                if (trade is BalanceUpdate) {
+                                    if (trade.amount < BigDecimal.ZERO) {
+                                        fromAmountExchange -= trade.amount
+                                    } else {
+                                        targetAmountExchange += trade.amount
+                                    }
+                                }
+                            }
+
+                            if (orderType == OrderType.Buy) {
+                                for ((_, trade) in tradeList) {
+                                    fromAmount += buyBaseAmount(trade.quoteAmount, trade.price)
+                                    targetAmount += buyQuoteAmount(trade.quoteAmount, trade.feeMultiplier)
+                                }
+                            } else {
+                                for ((_, trade) in tradeList) {
+                                    fromAmount += sellQuoteAmount(trade.quoteAmount)
+                                    targetAmount += sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
+                                }
+                            }
+
+                            if (fromAmountExchange.compareTo(fromAmount) != 0) {
+                                val orderId = tradeList.first._1
+                                val adjAmount = fromAmountExchange - fromAmount
+                                val adjTrade = adjustFromAmount(adjAmount)
+                                /*unfilledAmount += adjAmount
+                                tradeList.add(tuple(orderId, adjTrade))*/
+                            }
+
+                            if (targetAmountExchange.compareTo(targetAmount) != 0) {
+                                val orderId = tradeList.first._1
+                                val adjAmount = targetAmountExchange - targetAmount
+                                val adjTrade = adjustTargetAmount(adjAmount, orderType)
+                                /*tradeList.add(tuple(orderId, adjTrade))*/
+                            }
 
                             withContext(NonCancellable) {
                                 tradesChannel.send(tradeList)
@@ -1703,7 +1878,7 @@ class PoloniexTrader(
                                 }
 
                                 if (targetAmountDelta.compareTo(BigDecimal.ZERO) != 0) {
-                                    committedTrades.add(BareTrade(targetAmountDelta, BigDecimal.ZERO, BigDecimal.ZERO))
+                                    committedTrades.add(adjustTargetAmount(targetAmountDelta, OrderType.Sell))
                                 }
 
                                 val updateQuoteAmount = trade.quoteAmount - commitQuoteAmount
