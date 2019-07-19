@@ -12,10 +12,7 @@ import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPredicted
-import com.gitlab.dhorman.cryptotrader.util.FlowScope
-import com.gitlab.dhorman.cryptotrader.util.asFlow
-import com.gitlab.dhorman.cryptotrader.util.buffer
-import com.gitlab.dhorman.cryptotrader.util.firstOrNull
+import com.gitlab.dhorman.cryptotrader.util.*
 import io.vavr.Tuple2
 import io.vavr.Tuple3
 import io.vavr.collection.Array
@@ -60,6 +57,7 @@ class PoloniexTrader(
     @Qualifier("pg_tran_manager") private val tranManager: ReactiveTransactionManager
 ) {
     private val logger = KotlinLogging.logger {}
+    private val soundSignalEnabled = System.getenv("ENABLE_SOUND_SIGNAL") != null
 
     @Volatile
     var primaryCurrencies: List<Currency> = list("USDT", "USDC")
@@ -725,6 +723,8 @@ class PoloniexTrader(
                         return@withContext
                     }
 
+                    if (logger.isDebugEnabled && soundSignalEnabled) SoundUtil.beep()
+
                     val (unfilledTradeMarkets, committedMarkets) = splitMarkets(modifiedMarkets, marketIdx, trades)
 
                     val unfilledFromAmount =
@@ -797,7 +797,10 @@ class PoloniexTrader(
                                         fromAmount =
                                             (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
-                                        logger.debug { "[${currentMarket.market}, ${currentMarket.orderType}] Received delayed trades: $trades" }
+                                        if (logger.isDebugEnabled) {
+                                            logger.debug("[${currentMarket.market}, ${currentMarket.orderType}] Received delayed trades: $trades")
+                                            if (soundSignalEnabled) SoundUtil.beep()
+                                        }
 
                                         if (fromAmount.compareTo(BigDecimal.ZERO) == 0) {
                                             profitMonitoringJob.cancelAndJoin()

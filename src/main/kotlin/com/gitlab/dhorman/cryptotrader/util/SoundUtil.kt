@@ -6,10 +6,10 @@ import kotlinx.coroutines.launch
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.LineUnavailableException
-import javax.sound.sampled.SourceDataLine
+import kotlin.math.PI
 import kotlin.math.sin
 
-object SoundUtils {
+object SoundUtil {
     private var SAMPLE_RATE = 8000f
 
     @Throws(LineUnavailableException::class)
@@ -20,9 +20,9 @@ object SoundUtils {
         sdl.open(af)
         sdl.start()
         for (i in 0 until msecs * 8) {
-            val angle = (i / (SAMPLE_RATE / hz)).toDouble() * 2.0 * Math.PI
+            val angle = (i / (SAMPLE_RATE / hz)).toDouble() * 2.0 * PI
             buf[0] = (sin(angle) * 127.0 * vol).toByte()
-            sdl.write(buf, 0, 1)
+            sdl.write(buf, 0, buf.size)
         }
         sdl.drain()
         sdl.stop()
