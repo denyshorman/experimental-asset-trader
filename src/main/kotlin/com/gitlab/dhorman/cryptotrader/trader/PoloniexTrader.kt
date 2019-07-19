@@ -170,7 +170,7 @@ class PoloniexTrader(
                     val newId = UUID.randomUUID()
 
                     withContext(NonCancellable) {
-                        TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
                             transactionsDao.addActive(newId, changedMarkets, startMarketIdx)
                             transactionsDao.deleteActive(id)
                         }).retry().awaitFirstOrNull()
@@ -261,7 +261,7 @@ class PoloniexTrader(
 
         val canStartTransaction = TransactionalOperator.create(tranManager, object : TransactionDefinition {
             override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
-        }).transactional(FlowScope.mono {
+        }).transactional(mono(Dispatchers.Unconfined) {
             val (available, onOrders) = data.balances.first().getOrNull(fromCurrency) ?: return@mono false
             val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency) ?: tuple(fromCurrency, BigDecimal.ZERO)
             val reservedAmount = onOrders - amountInUse
@@ -325,7 +325,7 @@ class PoloniexTrader(
         withContext(NonCancellable) {
             TransactionalOperator.create(tranManager, object : TransactionDefinition {
                 override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
-            }).transactional(FlowScope.mono {
+            }).transactional(mono(Dispatchers.Unconfined) {
                 unfilledMarketsDao.remove(id)
                 transactionsDao.addActive(tranId, changedMarkets, activeMarketId)
             }).retry().awaitFirst()
@@ -570,7 +570,7 @@ class PoloniexTrader(
             val modifiedMarkets = withContext(NonCancellable) {
                 TransactionalOperator.create(tranManager, object : TransactionDefinition {
                     override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
-                }).transactional(FlowScope.mono {
+                }).transactional(mono(Dispatchers.Unconfined) {
                     val unfilledMarkets =
                         unfilledMarketsDao.get(markets[0].fromCurrency, currentMarket.fromCurrency)
 
@@ -610,7 +610,7 @@ class PoloniexTrader(
                                 && primaryCurrencies.contains(fromCurrencyInit)
                                 && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
 
-                        TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
                             transactionsDao.deleteActive(id)
 
                             if (!primaryCurrencyUnfilled) {
@@ -661,7 +661,7 @@ class PoloniexTrader(
                         transactionsDao.updateActive(id, committedMarkets, newMarketIdx)
                         TransactionIntent(id, committedMarkets, newMarketIdx, TranIntentScope).start()
                     } else {
-                        TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
                             transactionsDao.addCompleted(id, committedMarkets)
                             transactionsDao.deleteActive(id)
                         }).retry().awaitFirstOrNull()
@@ -721,7 +721,7 @@ class PoloniexTrader(
                                             val newId = UUID.randomUUID()
                                             val orderIds = tradesAndOrderIds.map { it._1 }.toVavrList()
 
-                                            TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                                            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
                                                 if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
                                                     transactionsDao.removeOrderIds(id, orderIds)
                                                     transactionsDao.updateActive(id, updatedMarkets, marketIdx)
@@ -775,7 +775,7 @@ class PoloniexTrader(
                                         && primaryCurrencies.contains(fromCurrencyInit)
                                         && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
 
-                                TransactionalOperator.create(tranManager).transactional(FlowScope.mono {
+                                TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
                                     transactionsDao.deleteActive(id)
                                     if (!primaryCurrencyUnfilled) {
                                         unfilledMarketsDao.add(

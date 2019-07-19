@@ -5,7 +5,7 @@ version = versioning.info.full
 java.sourceCompatibility = JavaVersion.VERSION_1_8
 
 val kotlinVersion = "1.3.41"
-val kotlinCoroutinesVersion = "1.3.0-M2"
+val kotlinCoroutinesVersion = "1.3.0-RC"
 val jacksonVersion = "2.9.9"
 val swaggerVersion = "3.0.0-SNAPSHOT"
 

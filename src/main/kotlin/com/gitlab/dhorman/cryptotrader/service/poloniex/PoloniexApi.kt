@@ -11,7 +11,6 @@ import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.core.toMarket
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
-import com.gitlab.dhorman.cryptotrader.util.FlowScope
 import com.gitlab.dhorman.cryptotrader.util.HmacSha512Digest
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.gitlab.dhorman.cryptotrader.util.share
@@ -77,7 +76,7 @@ class PoloniexApi(
             while (true) {
                 try {
                     val session = webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
-                        FlowScope.mono {
+                        mono(Dispatchers.Unconfined) {
                             send(true)
                             logger.info("Connection established with $PoloniexWebSocketApiUrl")
 
@@ -121,7 +120,7 @@ class PoloniexApi(
                             }
 
                             val send = async {
-                                val output = connectionOutput.asFlux(coroutineContext).doOnNext {
+                                val output = connectionOutput.asFlux().doOnNext {
                                     if (logger.isTraceEnabled) logger.trace("Sent: $it")
                                 }.map(session::textMessage)
 
