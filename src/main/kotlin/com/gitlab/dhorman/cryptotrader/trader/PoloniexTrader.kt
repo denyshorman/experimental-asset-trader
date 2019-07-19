@@ -77,7 +77,6 @@ class PoloniexTrader(
         logger.info("Start trading on Poloniex")
 
         subscribeToRequiredTopicsBeforeTrading()
-        startTradeCalcMonitoring()
 
         tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
 
@@ -114,97 +113,6 @@ class PoloniexTrader(
 
             tranIntentScope!!.cancel()
         }
-    }
-
-    private fun CoroutineScope.startTradeCalcMonitoring(): Job = this.launch {
-        poloniexApi.accountNotificationStream.collect { notifications ->
-            var tradeExist = false
-            for (notification in notifications.reverseIterator()) {
-                if (notification is TradeNotification) {
-                    tradeExist = true
-                    break
-                }
-            }
-
-            if (!tradeExist) return@collect
-
-            val balanceUpdates = LinkedList<BalanceUpdate>()
-            val trades = LinkedList<TradeNotification>()
-
-            for (notification in notifications) {
-                if (notification is BalanceUpdate) balanceUpdates.add(notification)
-                if (notification is TradeNotification) trades.add(notification)
-            }
-
-            var fromAmountExchange = BigDecimal.ZERO
-            var targetAmountExchange = BigDecimal.ZERO
-            var fromAmount = BigDecimal.ZERO
-            var targetAmount = BigDecimal.ZERO
-
-            for (balanceDelta in balanceUpdates) {
-                if (balanceDelta.amount < BigDecimal.ZERO) {
-                    fromAmountExchange -= balanceDelta.amount
-                } else {
-                    targetAmountExchange += balanceDelta.amount
-                }
-            }
-
-            val orderType = determineOrderType(fromAmountExchange, trades)
-
-            if (orderType == OrderType.Buy) {
-                for (trade in trades) {
-                    fromAmount += buyBaseAmount(trade.amount, trade.price)
-                    targetAmount += buyQuoteAmount(trade.amount, trade.feeMultiplier)
-                }
-            } else {
-                for (trade in trades) {
-                    fromAmount += sellQuoteAmount(trade.amount)
-                    targetAmount += sellBaseAmount(trade.amount, trade.price, trade.feeMultiplier)
-                }
-            }
-
-            var wrongCalc = false
-
-            if (fromAmountExchange.compareTo(fromAmount) != 0) {
-                wrongCalc = true
-
-                logger.warn(
-                    "Balance delta calculation does not match exchange deltas. " +
-                            "FromAmountExchange: $fromAmountExchange, " +
-                            "FromAmountLocal: $fromAmount"
-                )
-            }
-
-            if (targetAmountExchange.compareTo(targetAmount) != 0) {
-                wrongCalc = true
-
-                logger.warn(
-                    "Balance delta calculation does not match exchange deltas. " +
-                            "TargetAmountExchange: $targetAmountExchange, " +
-                            "TargetAmountLocal: $targetAmount"
-                )
-            }
-
-            if (wrongCalc) {
-                logger.warn("Balance delta calculations were wrong. Notifications: $notifications")
-            }
-        }
-    }
-
-    private fun determineOrderType(
-        fromAmountExchange: BigDecimal,
-        trades: kotlin.collections.List<TradeNotification>
-    ): OrderType {
-        var fromAmount = BigDecimal.ZERO
-
-        for (trade in trades) {
-            fromAmount += sellQuoteAmount(trade.amount)
-        }
-
-        val delta = (fromAmountExchange - fromAmount).abs()
-        val error = SEVEN_ZEROS_AND_ONE * trades.size.toBigDecimal()
-
-        return if (delta <= error) OrderType.Sell else OrderType.Buy
     }
 
     private fun CoroutineScope.startMonitoringForTranRequests(scope: CoroutineScope): Job = this.launch {
@@ -1191,11 +1099,11 @@ class PoloniexTrader(
 
                         var unfilledAmount = unfilledAmountChannel.value
 
-                        poloniexApi.accountNotificationStream.collect { trades ->
+                        poloniexApi.accountNotificationStream.collect { notifications ->
                             val orderIds = latestOrderIdsRef.get()
                             val tradeList = LinkedList<Tuple2<Long, BareTrade>>()
 
-                            for (trade in trades) {
+                            for (trade in notifications) {
                                 if (trade !is TradeNotification) continue
 
                                 for (orderId in orderIds.reverseIterator()) {
@@ -1222,39 +1130,25 @@ class PoloniexTrader(
 
                             // Verify trade amounts and add adjustments if needed
 
-                            var fromAmountExchange = BigDecimal.ZERO
                             var targetAmountExchange = BigDecimal.ZERO
-                            var fromAmount = BigDecimal.ZERO
                             var targetAmount = BigDecimal.ZERO
 
-                            for (trade in trades) {
-                                if (trade is BalanceUpdate) {
-                                    if (trade.amount < BigDecimal.ZERO) {
-                                        fromAmountExchange -= trade.amount
-                                    } else {
-                                        targetAmountExchange += trade.amount
+                            for (balanceUpdate in notifications) {
+                                if (balanceUpdate is BalanceUpdate) {
+                                    if (balanceUpdate.amount > BigDecimal.ZERO) {
+                                        targetAmountExchange += balanceUpdate.amount
                                     }
                                 }
                             }
 
                             if (orderType == OrderType.Buy) {
                                 for ((_, trade) in tradeList) {
-                                    fromAmount += buyBaseAmount(trade.quoteAmount, trade.price)
                                     targetAmount += buyQuoteAmount(trade.quoteAmount, trade.feeMultiplier)
                                 }
                             } else {
                                 for ((_, trade) in tradeList) {
-                                    fromAmount += sellQuoteAmount(trade.quoteAmount)
                                     targetAmount += sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
                                 }
-                            }
-
-                            if (fromAmountExchange.compareTo(fromAmount) != 0) {
-                                val orderId = tradeList.first._1
-                                val adjAmount = fromAmountExchange - fromAmount
-                                val adjTrade = adjustFromAmount(adjAmount)
-                                /*unfilledAmount += adjAmount
-                                tradeList.add(tuple(orderId, adjTrade))*/
                             }
 
                             if (targetAmountExchange.compareTo(targetAmount) != 0) {
@@ -1262,6 +1156,12 @@ class PoloniexTrader(
                                 val adjAmount = targetAmountExchange - targetAmount
                                 val adjTrade = adjustTargetAmount(adjAmount, orderType)
                                 /*tradeList.add(tuple(orderId, adjTrade))*/
+
+                                logger.warn(
+                                    "Balance delta calculation does not match exchange deltas. " +
+                                            "TargetAmountExchange: $targetAmountExchange, " +
+                                            "TargetAmountLocal: $targetAmount"
+                                )
                             }
 
                             withContext(NonCancellable) {
