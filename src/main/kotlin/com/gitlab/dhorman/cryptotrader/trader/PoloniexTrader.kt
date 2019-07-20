@@ -721,14 +721,15 @@ class PoloniexTrader(
                                             val newId = UUID.randomUUID()
                                             val orderIds = tradesAndOrderIds.map { it._1 }.toVavrList()
 
-                                            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
-                                                if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
-                                                    transactionsDao.removeOrderIds(id, orderIds)
-                                                    transactionsDao.updateActive(id, updatedMarkets, marketIdx)
-                                                }
+                                            TransactionalOperator.create(tranManager)
+                                                .transactional(mono(Dispatchers.Unconfined) {
+                                                    if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
+                                                        transactionsDao.removeOrderIds(id, orderIds)
+                                                        transactionsDao.updateActive(id, updatedMarkets, marketIdx)
+                                                    }
 
-                                                transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
-                                            }).retry().awaitFirstOrNull()
+                                                    transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
+                                                }).retry().awaitFirstOrNull()
 
                                             TransactionIntent(
                                                 newId,
@@ -908,6 +909,7 @@ class PoloniexTrader(
                         if (trades.size == 0) {
                             return null
                         } else {
+                            // TODO: Check if Poloniex steals unfilledAmount near to zero for instant buy trades
                             break
                         }
                     }
@@ -1020,12 +1022,10 @@ class PoloniexTrader(
                                         "Calculated amount: $targetAmount"
                             )
 
-                            val adjAmount = trade.takerAdjustment - targetAmount
+                            /*val adjAmount = trade.takerAdjustment - targetAmount
                             val adjTrade = adjustTargetAmount(adjAmount, orderType)
-                            //trades.addLast(adjTrade)
+                            trades.addLast(adjTrade)*/
                         }
-
-                        // TODO: Adjust from amount
                     }
                 }
             } catch (e: CancellationException) {
@@ -1070,6 +1070,22 @@ class PoloniexTrader(
                                         val trade0 = BareTrade(trade.amount, trade.price, trade.feeMultiplier)
                                         tradeList.add(tuple(trade.orderId, trade0))
                                     }
+                                }
+                            }
+
+                            // Check if exchange closed order because of zero quoteAmount
+
+                            if (orderType == OrderType.Buy && tradeList.size > 0 && unfilledAmount.compareTo(BigDecimal.ZERO) != 0) {
+                                val price = tradeList.first._2.price
+                                val quoteAmount = calcQuoteAmount(unfilledAmount, price)
+
+                                if (quoteAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                    logger.warn("[$market, $orderType] Poloniex has stolen $unfilledAmount amount from open order")
+
+                                    val orderId = tradeList.first._1
+                                    val adjTrade = adjustFromAmount(-unfilledAmount)
+                                    tradeList.add(tuple(orderId, adjTrade))
+                                    unfilledAmount = BigDecimal.ZERO
                                 }
                             }
 
@@ -1128,6 +1144,22 @@ class PoloniexTrader(
 
                             if (tradeList.size == 0) return@collect
 
+                            // Check if exchange closed order because of zero quoteAmount
+
+                            if (orderType == OrderType.Buy && unfilledAmount.compareTo(BigDecimal.ZERO) != 0) {
+                                val price = tradeList.first._2.price
+                                val quoteAmount = calcQuoteAmount(unfilledAmount, price)
+
+                                if (quoteAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                    logger.warn("[$market, $orderType] Poloniex has stolen $unfilledAmount amount from open order")
+
+                                    val orderId = tradeList.first._1
+                                    val adjTrade = adjustFromAmount(-unfilledAmount)
+                                    tradeList.add(tuple(orderId, adjTrade))
+                                    unfilledAmount = BigDecimal.ZERO
+                                }
+                            }
+
                             // Verify trade amounts and add adjustments if needed
 
                             var targetAmountExchange = BigDecimal.ZERO
@@ -1152,13 +1184,13 @@ class PoloniexTrader(
                             }
 
                             if (targetAmountExchange.compareTo(targetAmount) != 0) {
-                                val orderId = tradeList.first._1
+                                /*val orderId = tradeList.first._1
                                 val adjAmount = targetAmountExchange - targetAmount
                                 val adjTrade = adjustTargetAmount(adjAmount, orderType)
-                                /*tradeList.add(tuple(orderId, adjTrade))*/
+                                tradeList.add(tuple(orderId, adjTrade))*/
 
                                 logger.warn(
-                                    "Balance delta calculation does not match exchange deltas. " +
+                                    "[$market, $orderType] Balance delta calculation does not match exchange deltas. " +
                                             "TargetAmountExchange: $targetAmountExchange, " +
                                             "TargetAmountLocal: $targetAmount"
                                 )
@@ -1240,15 +1272,14 @@ class PoloniexTrader(
 
                             orderBook.conflate().collect { book ->
                                 withContext(NonCancellable) {
-                                    val resp =
-                                        moveOrder(
-                                            market,
-                                            book,
-                                            orderType,
-                                            lastOrderId!!,
-                                            prevPrice!!,
-                                            unfilledAmountChannel
-                                        ) ?: return@withContext
+                                    val resp = moveOrder(
+                                        market,
+                                        book,
+                                        orderType,
+                                        lastOrderId!!,
+                                        prevPrice!!,
+                                        unfilledAmountChannel
+                                    ) ?: return@withContext
 
                                     handlePlaceMoveOrderResult(resp)
 
@@ -1271,6 +1302,7 @@ class PoloniexTrader(
 
                                             break
                                         } catch (e: OrderCompletedOrNotExistException) {
+                                            logger.debug("[$market, $orderType] ${e.message}")
                                             break
                                         } catch (e: UnknownHostException) {
                                             delay(2000)

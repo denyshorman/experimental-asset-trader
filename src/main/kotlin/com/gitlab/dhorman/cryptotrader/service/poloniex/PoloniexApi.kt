@@ -174,6 +174,11 @@ class PoloniexApi(
             jacksonTypeRef<List<AccountNotification>>(),
             privateApi = true
         )
+            .onEach {
+                if (logger.isDebugEnabled) {
+                    logger.debug("Account Notifications: $it")
+                }
+            }
             .share()
     }
 
