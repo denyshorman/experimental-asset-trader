@@ -693,8 +693,8 @@ class PoloniexTrader(
 
                             withContext(NonCancellable) {
                                 tradesChannel
+                                    .buffer(this, Duration.ofSeconds(5))
                                     .asFlow()
-                                    .buffer(Duration.ofSeconds(5))
                                     .map { it.flatten() }
                                     .collect { tradesAndOrderIds ->
                                         val trades = Array.ofAll(tradesAndOrderIds.map { it._2 })

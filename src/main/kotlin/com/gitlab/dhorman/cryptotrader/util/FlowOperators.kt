@@ -111,34 +111,46 @@ fun <T> Flow<T>.share(replayCount: Int = 0, gracePeriod: Duration? = null): Flow
     return ShareOperator(this, replayCount, gracePeriod)
 }
 
-fun <T> Flow<T>.buffer(timespan: Duration): Flow<List<T>> = channelFlow {
-    coroutineScope {
-        var events = LinkedList<T>()
-        var timerJob: Job? = null
-        val lock = Mutex()
+fun <T> Channel<T>.buffer(scope: CoroutineScope, timespan: Duration): Channel<List<T>> {
+    val upstream = Channel<List<T>>(Channel.RENDEZVOUS)
+    var events = LinkedList<T>()
+    var timerJob: Job? = null
+    val lock = Mutex()
 
-        collect {
-            lock.withLock {
-                if (timerJob == null) {
-                    timerJob = launch {
-                        delay(timespan.toMillis())
+    scope.launch {
+        var error: Throwable? = null
 
-                        lock.withLock {
-                            send(events)
+        try {
+            consumeEach {
+                lock.withLock {
+                    if (timerJob == null) {
+                        timerJob = launch {
+                            delay(timespan.toMillis())
 
-                            events = LinkedList()
-                            timerJob = null
+                            lock.withLock {
+                                upstream.send(events)
+
+                                events = LinkedList()
+                                timerJob = null
+                            }
                         }
                     }
-                }
 
-                events.add(it)
+                    events.add(it)
+                }
+            }
+        } catch (e: Throwable) {
+            error = e
+        } finally {
+            withContext(NonCancellable) {
+                timerJob?.cancelAndJoin()
+                if (events.size != 0) upstream.send(events)
+                upstream.close(error)
             }
         }
-
-        timerJob?.cancelAndJoin()
-        if (events.size != 0) send(events)
     }
+
+    return upstream
 }
 
 fun <K, V> flowFromMap(map: Map<K, V>): Flow<Tuple2<K, V>> = flow {
