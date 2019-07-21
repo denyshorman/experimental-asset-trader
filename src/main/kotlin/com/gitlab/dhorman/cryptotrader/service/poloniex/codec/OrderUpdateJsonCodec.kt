@@ -16,7 +16,7 @@ object OrderUpdateJsonCodec {
             return OrderUpdate(
                 arrayNode[1].asLong(),
                 codec.treeToValue(arrayNode[2]),
-                arrayNode[3].asText()
+                codec.treeToValue(arrayNode[3])
             )
         }
     }

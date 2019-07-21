@@ -5,13 +5,7 @@ import java.math.RoundingMode
 
 // USDT -> ETH
 fun calcQuoteAmount(baseAmount: BigDecimal, price: BigDecimal): BigDecimal {
-    var quoteAmount = baseAmount.divide(price, 8, RoundingMode.UP)
-
-    if (buyBaseAmount(quoteAmount, price) > baseAmount) {
-        quoteAmount = baseAmount.divide(price, 8, RoundingMode.DOWN)
-    }
-
-    return quoteAmount
+    return baseAmount.divide(price, 8, RoundingMode.DOWN)
 }
 
 // -USDT

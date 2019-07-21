@@ -69,7 +69,7 @@ data class LimitOrderCreated(
 data class OrderUpdate(
     val orderId: Long,
     val newAmount: Amount,
-    val orderType: String // TODO: Migrate to enum
+    val orderType: OrderUpdateType
 ) : AccountNotification()
 
 @JsonDeserialize(using = TradeNotificationJsonCodec.Decoder::class)
@@ -150,6 +150,12 @@ enum class FundingType(@get:JsonValue val id: Int) {
     companion object {
         @JsonCreator
         @JvmStatic
-        fun valueById(id: Int) = FundingType.values().find { it.id == id }
+        fun valueById(id: Int) = values().find { it.id == id }
     }
+}
+
+enum class OrderUpdateType(@get:JsonValue val id: String) {
+    Filled("f"),
+    Cancelled("c"),
+    SelfTrade("s"),
 }

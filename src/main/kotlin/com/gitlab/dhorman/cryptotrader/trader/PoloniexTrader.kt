@@ -1073,22 +1073,6 @@ class PoloniexTrader(
                                 }
                             }
 
-                            // Check if exchange closed order because of zero quoteAmount
-
-                            if (orderType == OrderType.Buy && tradeList.size > 0 && unfilledAmount.compareTo(BigDecimal.ZERO) != 0) {
-                                val price = tradeList.first._2.price
-                                val quoteAmount = calcQuoteAmount(unfilledAmount, price)
-
-                                if (quoteAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                    logger.warn("[$market, $orderType] Poloniex has stolen $unfilledAmount amount from open order")
-
-                                    val orderId = tradeList.first._1
-                                    val adjTrade = adjustFromAmount(-unfilledAmount)
-                                    tradeList.add(tuple(orderId, adjTrade))
-                                    unfilledAmount = BigDecimal.ZERO
-                                }
-                            }
-
                             unfilledAmountChannel.send(unfilledAmount)
                             if (tradeList.size != 0) tradesChannel.send(tradeList)
 
@@ -1143,22 +1127,6 @@ class PoloniexTrader(
                             }
 
                             if (tradeList.size == 0) return@collect
-
-                            // Check if exchange closed order because of zero quoteAmount
-
-                            if (orderType == OrderType.Buy && unfilledAmount.compareTo(BigDecimal.ZERO) != 0) {
-                                val price = tradeList.first._2.price
-                                val quoteAmount = calcQuoteAmount(unfilledAmount, price)
-
-                                if (quoteAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                    logger.warn("[$market, $orderType] Poloniex has stolen $unfilledAmount amount from open order")
-
-                                    val orderId = tradeList.first._1
-                                    val adjTrade = adjustFromAmount(-unfilledAmount)
-                                    tradeList.add(tuple(orderId, adjTrade))
-                                    unfilledAmount = BigDecimal.ZERO
-                                }
-                            }
 
                             // Verify trade amounts and add adjustments if needed
 
