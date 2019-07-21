@@ -905,13 +905,7 @@ class PoloniexTrader(
 
                     if (expectQuoteAmount.compareTo(BigDecimal.ZERO) == 0) {
                         logger.debug("Quote amount for trade is equal to zero. Unfilled amount: $unfilledAmount")
-
-                        if (trades.size == 0) {
-                            return null
-                        } else {
-                            // TODO: Check if Poloniex steals unfilledAmount near to zero for instant buy trades
-                            break
-                        }
+                        if (trades.size == 0) return null else break
                     }
 
                     val transaction = try {
@@ -948,20 +942,20 @@ class PoloniexTrader(
                         logger.error(e.originalMsg)
 
                         if (retryCount++ == 3) {
-                            return null
+                            if (trades.size == 0) return null else break
                         } else {
                             delay(1000)
                             continue
                         }
                     } catch (e: AmountMustBeAtLeastException) {
                         logger.debug(e.originalMsg)
-                        return null
+                        if (trades.size == 0) return null else break
                     } catch (e: TotalMustBeAtLeastException) {
                         logger.debug(e.originalMsg)
-                        return null
+                        if (trades.size == 0) return null else break
                     } catch (e: RateMustBeLessThanException) {
                         logger.debug(e.originalMsg)
-                        return null
+                        if (trades.size == 0) return null else break
                     } catch (e: MaxOrdersExceededException) {
                         retryCount = 0
                         logger.warn(e.originalMsg)

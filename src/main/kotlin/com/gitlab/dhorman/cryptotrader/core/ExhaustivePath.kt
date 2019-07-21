@@ -48,30 +48,52 @@ data class ExhaustivePath(
                         }
                     } else {
                         if (targetCurrency == order.market.baseCurrency) {
-                            (amount!!.min(order.stat.baseQuoteAvgAmount._2) * order.stat.baseQuoteAvgAmount._1).divide(
-                                order.stat.baseQuoteAvgAmount._2,
-                                16,
-                                RoundingMode.DOWN
-                            )
+                            if (order.stat.baseQuoteAvgAmount._2.compareTo(BigDecimal.ZERO) == 0) {
+                                null
+                            } else {
+                                (amount!!.min(order.stat.baseQuoteAvgAmount._2) * order.stat.baseQuoteAvgAmount._1).divide(
+                                    order.stat.baseQuoteAvgAmount._2,
+                                    16,
+                                    RoundingMode.DOWN
+                                )
+                            }
                         } else {
-                            (amount!!.min(order.stat.baseQuoteAvgAmount._1) * order.stat.baseQuoteAvgAmount._2).divide(
-                                order.stat.baseQuoteAvgAmount._1,
-                                16,
-                                RoundingMode.DOWN
-                            )
+                            if (order.stat.baseQuoteAvgAmount._1.compareTo(BigDecimal.ZERO) == 0) {
+                                null
+                            } else {
+                                (amount!!.min(order.stat.baseQuoteAvgAmount._1) * order.stat.baseQuoteAvgAmount._2).divide(
+                                    order.stat.baseQuoteAvgAmount._1,
+                                    16,
+                                    RoundingMode.DOWN
+                                )
+                            }
                         }
                     }
                 }
                 is InstantOrder -> run {
                     if (amount != null) {
                         if (targetCurrency == order.market.baseCurrency) {
-                            val price =
+                            val price = if (order.toAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                null
+                            } else {
                                 (order.fromAmount * order.feeMultiplier).divide(order.toAmount, 16, RoundingMode.DOWN)
-                            amount!! * price
+                            }
+
+                            price?.multiply(amount!!)
                         } else {
-                            val price =
-                                order.toAmount.divide(order.fromAmount * order.feeMultiplier, 8, RoundingMode.DOWN)
-                            amount!!.divide(price, 16, RoundingMode.DOWN)
+                            val div = order.fromAmount * order.feeMultiplier
+
+                            val price = if (div.compareTo(BigDecimal.ZERO) == 0) {
+                                null
+                            } else {
+                                order.toAmount.divide(div, 8, RoundingMode.DOWN)
+                            }
+
+                            if (price != null && price.compareTo(BigDecimal.ZERO) != 0) {
+                                amount!!.divide(price, 16, RoundingMode.DOWN)
+                            } else {
+                                null
+                            }
                         }
                     } else {
                         null
