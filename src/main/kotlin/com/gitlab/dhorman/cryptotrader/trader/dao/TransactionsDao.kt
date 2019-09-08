@@ -4,14 +4,15 @@ import com.fasterxml.jackson.core.JsonGenerator
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
+import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.Views
 import io.vavr.Tuple2
 import io.vavr.Tuple4
 import io.vavr.collection.Array
-import io.vavr.collection.Traversable
 import io.vavr.kotlin.toVavrStream
 import io.vavr.kotlin.tuple
 import kotlinx.coroutines.reactive.awaitFirstOrNull
@@ -29,7 +30,7 @@ class TransactionsDao(
     private val mapper: ObjectMapper
 ) {
     suspend fun getActive(): List<Tuple2<UUID, Array<TranIntentMarket>>> {
-        return databaseClient.execute().sql("SELECT id, markets FROM poloniex_active_transactions")
+        return databaseClient.execute("SELECT id, markets FROM poloniex_active_transactions")
             .fetch().all()
             .map {
                 tuple(
@@ -51,7 +52,7 @@ class TransactionsDao(
         val fromCurrency = markets[activeMarketId].fromCurrency
         val fromAmount = (markets[activeMarketId] as TranIntentMarketPartiallyCompleted).fromAmount
 
-        databaseClient.execute().sql("INSERT INTO poloniex_active_transactions(id, markets, from_currency, from_amount) VALUES ($1, $2, $3, $4)")
+        databaseClient.execute("INSERT INTO poloniex_active_transactions(id, markets, from_currency, from_amount) VALUES ($1, $2, $3, $4)")
             .bind(0, id)
             .bind(1, marketsJson)
             .bind(2, fromCurrency)
@@ -61,7 +62,7 @@ class TransactionsDao(
     }
 
     suspend fun deleteActive(id: UUID) {
-        databaseClient.execute().sql("DELETE FROM poloniex_active_transactions WHERE id = $1")
+        databaseClient.execute("DELETE FROM poloniex_active_transactions WHERE id = $1")
             .bind(0, id)
             .then()
             .awaitFirstOrNull()
@@ -77,7 +78,7 @@ class TransactionsDao(
         val fromCurrency = markets[activeMarketId].fromCurrency
         val fromAmount = (markets[activeMarketId] as TranIntentMarketPartiallyCompleted).fromAmount
 
-        databaseClient.execute().sql("UPDATE poloniex_active_transactions SET markets = $1, from_currency = $2, from_amount = $3 WHERE id = $4")
+        databaseClient.execute("UPDATE poloniex_active_transactions SET markets = $1, from_currency = $2, from_amount = $3 WHERE id = $4")
             .bind(0, marketsJson)
             .bind(1, fromCurrency)
             .bind(2, fromAmount)
@@ -86,42 +87,8 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun getOrderIds(tranId: UUID, count: Int = 32): List<Long> {
-        return databaseClient.execute().sql("SELECT order_id FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY order_id DESC LIMIT $2")
-            .bind(0, tranId)
-            .bind(1, count)
-            .fetch().all()
-            .map { it["order_id"] as Long }
-            .collectList()
-            .awaitSingle()
-    }
-
-    suspend fun getTimestampLatestOrderId(tranId: UUID): Instant? {
-        return databaseClient.execute().sql("SELECT added_ts FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY order_id DESC LIMIT 1")
-            .bind(0, tranId)
-            .fetch().one()
-            .map { it["added_ts"] as Instant }
-            .awaitFirstOrNull()
-    }
-
-    suspend fun addOrderId(tranId: UUID, orderId: Long) {
-        databaseClient.execute().sql("INSERT INTO poloniex_transaction_order_ids(tran_id, order_id) VALUES($1, $2)")
-            .bind(0, tranId)
-            .bind(1, orderId)
-            .then()
-            .awaitFirstOrNull()
-    }
-
-    suspend fun removeOrderIds(tranId: UUID, orderIds: Traversable<Long>) {
-        val orderIdsStr = orderIds.joinToString()
-        databaseClient.execute().sql("DELETE FROM poloniex_transaction_order_ids WHERE tran_id = $1 AND order_id IN ($orderIdsStr)")
-            .bind(0, tranId)
-            .then()
-            .awaitFirstOrNull()
-    }
-
     suspend fun getCompleted(): List<Tuple4<Long, Array<TranIntentMarket>, Instant, Instant>> {
-        return databaseClient.execute().sql("SELECT * FROM poloniex_completed_transactions ORDER BY completed_ts DESC")
+        return databaseClient.execute("SELECT * FROM poloniex_completed_transactions ORDER BY completed_ts DESC")
             .fetch().all()
             .map {
                 tuple(
@@ -142,7 +109,7 @@ class TransactionsDao(
             .withView(Views.DB::class.java)
             .writeValueAsString(markets)
 
-        databaseClient.execute().sql("INSERT INTO poloniex_completed_transactions(created_ts, markets) VALUES ((SELECT created_ts FROM poloniex_active_transactions WHERE id = $1), $2)")
+        databaseClient.execute("INSERT INTO poloniex_completed_transactions(created_ts, markets) VALUES ((SELECT created_ts FROM poloniex_active_transactions WHERE id = $1), $2)")
             .bind(0, activeTranId)
             .bind(1, marketsJson)
             .then()
@@ -150,7 +117,7 @@ class TransactionsDao(
     }
 
     suspend fun balanceInUse(currency: Currency): Tuple2<Currency, BigDecimal>? {
-        return databaseClient.execute().sql("SELECT from_currency, from_amount FROM poloniex_active_transactions WHERE from_currency = $1")
+        return databaseClient.execute("SELECT from_currency, from_amount FROM poloniex_active_transactions WHERE from_currency = $1")
             .bind(0, currency)
             .fetch().one()
             .map {
@@ -166,7 +133,7 @@ class TransactionsDao(
         // TODO: Escape input and wait until driver will support List input
         val currencyList = currencies.toVavrStream().map { "'$it'" }.joinToString()
 
-        return databaseClient.execute().sql("SELECT from_currency, SUM(from_amount) amount FROM poloniex_active_transactions WHERE from_currency IN ($currencyList) GROUP BY from_currency")
+        return databaseClient.execute("SELECT from_currency, SUM(from_amount) amount FROM poloniex_active_transactions WHERE from_currency IN ($currencyList) GROUP BY from_currency")
             .fetch().all()
             .map {
                 tuple(
@@ -178,18 +145,8 @@ class TransactionsDao(
             .awaitSingle()
     }
 
-    suspend fun deleteAllOrderIds(tranId: UUID) {
-        databaseClient.execute().sql("DELETE FROM poloniex_transaction_order_ids WHERE tran_id = $1")
-            .bind(0, tranId)
-            .then()
-            .awaitFirstOrNull()
-    }
-
-    suspend fun deleteOldOrderIds(tranId: UUID, count: Int) {
-        databaseClient.execute().sql("DELETE FROM poloniex_transaction_order_ids WHERE order_id IN (SELECT order_id FROM poloniex_transaction_order_ids WHERE tran_id = $1 ORDER BY added_ts LIMIT $2)")
-            .bind(0, tranId)
-            .bind(1, count)
-            .then()
-            .awaitFirstOrNull()
+    // TODO: Implement getLatestOrderAndTradeId
+    fun getLatestOrderAndTradeId(market: Market, orderType: OrderType): Tuple2<Long, Long>? {
+        return null
     }
 }

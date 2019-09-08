@@ -84,6 +84,16 @@ data class TradeNotification(
     val date: LocalDateTime
 ) : AccountNotification()
 
+@JsonDeserialize(using = OrderPendingAckJsonCodec.Decoder::class)
+data class OrderPendingAck(
+    val orderId: Long,
+    val marketId: Int,
+    val price: Price,
+    val amount: Amount,
+    val orderType: OrderUpdateType,
+    val clientOrderId: Long
+) : AccountNotification()
+
 
 @JsonDeserialize(using = OrderBookNotificationJsonCodec.Decoder::class)
 sealed class OrderBookNotification

@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.test.context.ActiveProfiles
 import java.math.BigDecimal
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import kotlin.random.Random
 
 @SpringBootTest
@@ -53,7 +55,7 @@ class PoloniexApiTest {
 
     @Test
     fun `Get trade private history`() = runBlocking {
-        val history = poloniexApi.tradeHistory(limit = 20)
+        val history = poloniexApi.tradeHistory(limit = 20, fromTs = Instant.now().minus(80, ChronoUnit.DAYS))
         logger.info("History $history")
     }
 
@@ -62,6 +64,12 @@ class PoloniexApiTest {
         poloniexApi.accountNotificationStream.collect {
             println(it)
         }
+    }
+
+    @Test
+    fun `Get order trades`() = runBlocking {
+        val trades = poloniexApi.orderTrades(1648752843)
+        println(trades)
     }
 
     @Test

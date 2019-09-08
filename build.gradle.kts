@@ -4,19 +4,18 @@ group = "com.gitlab.dhorman"
 version = versioning.info.full
 java.sourceCompatibility = JavaVersion.VERSION_1_8
 
-val kotlinVersion = "1.3.41"
-val kotlinCoroutinesVersion = "1.3.0-RC"
+val kotlinVersion = "1.3.50"
+val kotlinCoroutinesVersion = "1.3.1"
 val jacksonVersion = "2.9.9"
 val swaggerVersion = "3.0.0-SNAPSHOT"
 
 plugins {
-    kotlin("jvm") version "1.3.41"
-    kotlin("plugin.spring") version "1.3.41"
-    id("org.springframework.boot") version "2.2.0.M3"
+    kotlin("jvm") version "1.3.50"
+    kotlin("plugin.spring") version "1.3.50"
+    id("org.springframework.boot") version "2.2.0.M6"
+    id("io.spring.dependency-management") version "1.0.8.RELEASE"
     id("net.nemerosa.versioning") version "2.8.2"
 }
-
-apply(plugin = "io.spring.dependency-management")
 
 repositories {
     mavenCentral()
@@ -54,8 +53,8 @@ dependencies {
     implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
     implementation("io.springfox:springfox-bean-validators:$swaggerVersion")
-    implementation("org.springframework.data:spring-data-r2dbc:1.0.0.M2")
-    implementation("io.r2dbc:r2dbc-postgresql:0.8.0.M8")
+    implementation("org.springframework.data:spring-data-r2dbc:1.0.0.BUILD-SNAPSHOT")
+    implementation("io.r2dbc:r2dbc-postgresql:0.8.0.BUILD-SNAPSHOT")
     implementation("org.springframework.plugin:spring-plugin-core:1.2.0.RELEASE") // TODO: Remove when springfox and spring will be released
 
     runtimeOnly("org.springframework.boot:spring-boot-devtools")
