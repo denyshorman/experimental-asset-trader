@@ -1135,11 +1135,7 @@ class PoloniexTrader(
                         continue
                     }
 
-                    val expectQuoteAmount = if (orderType == OrderType.Buy) {
-                        calcQuoteAmount(unfilledAmount, firstSimulatedTrade.price)
-                    } else {
-                        firstSimulatedTrade.quoteAmount
-                    }
+                    val expectQuoteAmount = firstSimulatedTrade.quoteAmount
 
                     if (expectQuoteAmount.compareTo(BigDecimal.ZERO) == 0) {
                         logger.debug("Quote amount for trade is equal to zero. Unfilled amount: $unfilledAmount")
@@ -1597,6 +1593,7 @@ class PoloniexTrader(
             var currOrderId: Long? = null
             var latestTradeId: Long = -1
             var prevPrice: Price? = null
+            var prevQuoteAmount: Amount? = null
             val orderCreateConfirmed = AtomicReference<CompletableDeferred<Unit>?>(null)
             val orderCancelConfirmed = AtomicReference<CompletableDeferred<OrderUpdateType>?>(null)
             val commonStateMutex = Mutex()
@@ -1606,14 +1603,14 @@ class PoloniexTrader(
             val tradeMonitoringJob = launch(Job(), CoroutineStart.UNDISPATCHED) {
                 poloniexApi.accountNotificationStream.collect { notifications ->
                     var tradeList: LinkedList<BareTrade>? = null
+                    var orderCreateReceived: LimitOrderCreated? = null
+                    var orderCancelReceived: OrderUpdate? = null
 
                     commonStateMutex.withLock {
                         for (notification in notifications) {
                             when (notification) {
                                 is TradeNotification -> run {
-                                    if (currOrderId != null && notification.orderId == currOrderId ||
-                                        prevOrderId != null && notification.orderId == prevOrderId
-                                    ) {
+                                    if (currOrderId != null && notification.orderId == currOrderId || prevOrderId != null && notification.orderId == prevOrderId) {
                                         if (notification.tradeId > latestTradeId) {
                                             latestTradeId = notification.tradeId
                                         }
@@ -1622,25 +1619,17 @@ class PoloniexTrader(
                                             tradeList = LinkedList()
                                         }
 
-                                        tradeList!!.add(
-                                            BareTrade(
-                                                notification.amount,
-                                                notification.price,
-                                                notification.feeMultiplier
-                                            )
-                                        )
+                                        tradeList!!.add(BareTrade(notification.amount, notification.price, notification.feeMultiplier))
                                     }
                                 }
                                 is LimitOrderCreated -> run {
                                     if (notification.orderId == currOrderId) {
-                                        orderCreateConfirmed.get()?.complete(Unit)
+                                        orderCreateReceived = notification
                                     }
                                 }
                                 is OrderUpdate -> run {
-                                    if (notification.orderId == currOrderId &&
-                                        notification.newAmount.compareTo(BigDecimal.ZERO) == 0
-                                    ) {
-                                        orderCancelConfirmed.get()?.complete(notification.orderType)
+                                    if (notification.orderId == currOrderId && notification.newAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                        orderCancelReceived = notification
                                     }
                                 }
                             }
@@ -1648,8 +1637,12 @@ class PoloniexTrader(
                     }
 
                     if (tradeList != null && !tradeList!!.isEmpty()) {
+                        adjustTrades(tradeList!!)
                         scheduler.addTrades(tradeList!!)
                     }
+
+                    if (orderCreateReceived != null) orderCreateConfirmed.get()?.complete(Unit)
+                    if (orderCancelReceived != null) orderCancelConfirmed.get()?.complete(orderCancelReceived!!.orderType)
                 }
             }
 
@@ -1676,6 +1669,7 @@ class PoloniexTrader(
 
                                         currOrderId = placeOrderResult._1
                                         prevPrice = placeOrderResult._2
+                                        prevQuoteAmount = placeOrderResult._3
 
                                         orderCreateConfirmed.set(CompletableDeferred())
                                         orderCancelConfirmed.set(CompletableDeferred())
@@ -1686,10 +1680,13 @@ class PoloniexTrader(
                             orderCreateConfirmed.get()?.await()
 
                             var prevFromAmount = scheduler.commonFromAmountChannel.value
+                            val timeout = Duration.ofSeconds(5)
+                            val timeoutMillis = timeout.toMillis()
+                            var bookUpdateTime = System.currentTimeMillis()
 
                             scheduler.commonFromAmountChannel
                                 .asFlow()
-                                .combine(orderBook) { _, book -> book }
+                                .combine(orderBook.returnLastIfNoValueWithinSpecifiedTime(timeout)) { _, book -> book }
                                 .conflate()
                                 .collect { book ->
                                     withContext(NonCancellable) {
@@ -1697,21 +1694,25 @@ class PoloniexTrader(
                                             commonStateMutex.withLock {
                                                 val currFromAmount = scheduler.commonFromAmountChannel.value
                                                 val forceMove = prevFromAmount.compareTo(currFromAmount) != 0
+                                                val now = System.currentTimeMillis()
+                                                val fixPriceGaps = now - bookUpdateTime >= timeoutMillis
+                                                bookUpdateTime = now
                                                 prevFromAmount = currFromAmount
 
-                                                val moveOrderResult = moveOrder(
+                                                val (orderId, price, quoteAmount) = moveOrder(
                                                     book,
                                                     currOrderId!!,
                                                     prevPrice!!,
+                                                    prevQuoteAmount!!,
                                                     currFromAmount,
-                                                    forceMove
+                                                    forceMove,
+                                                    fixPriceGaps
                                                 ) ?: return@withContext
-
-                                                val (orderId, price, _) = moveOrderResult
 
                                                 prevOrderId = currOrderId
                                                 currOrderId = orderId
                                                 prevPrice = price
+                                                prevQuoteAmount = quoteAmount
 
                                                 orderCreateConfirmed.set(CompletableDeferred())
                                                 orderCancelConfirmed.set(CompletableDeferred())
@@ -1744,15 +1745,8 @@ class PoloniexTrader(
                             val cancelConfirmedDef = orderCancelConfirmed.get()
                             val cancelConfirmed = cancelConfirmedDef?.isCompleted ?: true
                             if (!cancelConfirmed) cancelOrder(currOrderId!!)
-                            val cancelType = withTimeoutOrNull(Duration.ofMinutes(3).toMillis()) {
+                            withTimeoutOrNull(Duration.ofMinutes(3).toMillis()) {
                                 cancelConfirmedDef?.await()
-                            }
-
-                            val fromAmountValue = scheduler.commonFromAmountChannel.value
-
-                            if (cancelType == OrderUpdateType.Filled && fromAmountValue > BigDecimal.ZERO) {
-                                logger.warn("Poloniex filled all but path still has some amount $fromAmountValue")
-                                // TODO: Prepare adjustment trade
                             }
 
                             currOrderId = null
@@ -1875,8 +1869,10 @@ class PoloniexTrader(
             book: OrderBookAbstract,
             lastOrderId: Long,
             myPrice: Price,
+            myQuoteAmount: Amount,
             fromAmountValue: Amount,
-            forceMove: Boolean
+            forceMove: Boolean,
+            fixPriceGaps: Boolean = false
         ): Tuple3<Long, Price, Amount>? {
             while (true) {
                 try {
@@ -1913,11 +1909,10 @@ class PoloniexTrader(
                             }
                         }
 
-                        val bookPrice1 = primaryBook.headOption().map { it._1 }.orNull
-                            ?: throw OrderBookEmptyException(orderType)
+                        val (bookPrice1, bookQuoteAmount1) = primaryBook.headOption().orNull ?: throw OrderBookEmptyException(orderType)
                         val myPositionInBook = priceComparator.compare(bookPrice1, myPrice)
 
-                        if (myPositionInBook == 1) {
+                        if (myPositionInBook == 1 || myPositionInBook == 0 && myQuoteAmount.compareTo(bookQuoteAmount1) != 0) {
                             // I am on second position
                             var price = moveToOnePoint(bookPrice1)
                             val ask = secondaryBook.headOption().map { it._1 }.orNull
@@ -1925,8 +1920,12 @@ class PoloniexTrader(
                             price
                         } else {
                             // I am on first position
-                            null // Ignore possible price gaps
-                            // TODO: Implement better algorithm to handle price gaps
+                            if (fixPriceGaps) {
+                                val secondPrice = primaryBook.drop(1).headOption().map { moveToOnePoint(it._1) }.orNull
+                                if (secondPrice != null && priceComparator.compare(myPrice, secondPrice) == 1) secondPrice else null
+                            } else {
+                                null
+                            }
                         }
                     } ?: if (forceMove) myPrice else return null
 
@@ -2029,6 +2028,31 @@ class PoloniexTrader(
                     if (logger.isDebugEnabled) logger.debug(e.message)
                     delay(1000)
                 }
+            }
+        }
+
+        private fun adjustTrades(trades: LinkedList<BareTrade>) {
+            if (orderType == OrderType.Sell || trades.size < 2) return
+
+            var fromAmountExpected = BigDecimal.ZERO
+            var fromAmountActual = BigDecimal.ZERO
+
+            trades.forEach { trade ->
+                fromAmountExpected += (trade.quoteAmount * trade.price).setScale(8, RoundingMode.DOWN)
+                fromAmountActual += (trade.quoteAmount * trade.price).setScale(8, RoundingMode.HALF_EVEN)
+            }
+
+            if (fromAmountExpected.compareTo(fromAmountActual) != 0) {
+                logger.warn(
+                    "Poloniex uses unexpected calculation for fromAmount. " +
+                        "Expected: $fromAmountExpected. " +
+                        "Actual*: $fromAmountActual. " +
+                        "Trades: $trades. " +
+                        "Please adjust trades accordingly"
+                )
+
+                val adjTrade = adjustFromAmount(fromAmountActual - fromAmountExpected)
+                trades.add(adjTrade)
             }
         }
     }

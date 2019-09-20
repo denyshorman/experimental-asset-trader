@@ -53,9 +53,10 @@ dependencies {
     implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
     implementation("io.springfox:springfox-bean-validators:$swaggerVersion")
-    implementation("org.springframework.data:spring-data-r2dbc:1.0.0.BUILD-SNAPSHOT")
-    implementation("io.r2dbc:r2dbc-postgresql:0.8.0.BUILD-SNAPSHOT")
+    implementation("org.springframework.boot.experimental:spring-boot-starter-data-r2dbc")
+    implementation("io.r2dbc:r2dbc-postgresql")
     implementation("org.springframework.plugin:spring-plugin-core:1.2.0.RELEASE") // TODO: Remove when springfox and spring will be released
+    implementation("io.netty:netty-all:4.1.39.Final") // TODO: Remove
 
     runtimeOnly("org.springframework.boot:spring-boot-devtools")
 
@@ -63,8 +64,15 @@ dependencies {
     testImplementation("org.mockito:mockito-core:2.26.0")
     testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.1.0")
     testImplementation("io.projectreactor:reactor-test")
+    testImplementation("org.springframework.boot.experimental:spring-boot-test-autoconfigure-r2dbc")
     testImplementation("org.springframework.boot:spring-boot-starter-test") {
-        exclude("junit:junit")
+        exclude(group = "org.junit.vintage", module = "junit-vintage-engine")
+    }
+}
+
+dependencyManagement {
+    imports {
+        mavenBom("org.springframework.boot.experimental:spring-boot-bom-r2dbc:0.1.0.BUILD-SNAPSHOT")
     }
 }
 
@@ -80,6 +88,10 @@ tasks {
                 "-Xuse-experimental=kotlinx.coroutines.FlowPreview"
             )
         }
+    }
+
+    withType<Test> {
+        useJUnitPlatform()
     }
 }
 

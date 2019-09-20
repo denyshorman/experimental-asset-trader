@@ -22,6 +22,8 @@ import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
 import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 import java.util.*
 
 @Repository
@@ -94,8 +96,8 @@ class TransactionsDao(
                 tuple(
                     it["id"] as Long,
                     mapper.readValue<Array<TranIntentMarket>>(it["markets"] as String),
-                    it["created_ts"] as Instant,
-                    it["completed_ts"] as Instant
+                    (it["created_ts"] as LocalDateTime).toInstant(ZoneOffset.UTC),
+                    (it["completed_ts"] as LocalDateTime).toInstant(ZoneOffset.UTC)
                 )
             }
             .collectList()

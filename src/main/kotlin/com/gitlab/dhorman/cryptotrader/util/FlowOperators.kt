@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.atomic.AtomicReference
 
 private val logger = KotlinLogging.logger {}
 
@@ -184,4 +185,20 @@ suspend fun <T> Flow<T>.firstOrNull(): T? {
 
 fun <T> Channel<T>.asFlow(): Flow<T> = flow {
     consumeEach { emit(it) }
+}
+
+fun <T> Flow<T>.returnLastIfNoValueWithinSpecifiedTime(duration: Duration) = channelFlow {
+    val lastValue = AtomicReference<T>(null)
+    val delayMillis = duration.toMillis()
+    var timeoutJob: Job? = null
+
+    collect { value ->
+        timeoutJob?.cancelAndJoin()
+        lastValue.set(value)
+        timeoutJob = launch(start = CoroutineStart.UNDISPATCHED) {
+            delay(delayMillis)
+            send(lastValue.get())
+        }
+        send(value)
+    }
 }
