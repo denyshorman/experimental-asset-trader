@@ -81,7 +81,7 @@ class PoloniexApi(
                             logger.info("Connection established with $PoloniexWebSocketApiUrl")
 
                             val receive = async {
-                                session.receive().timeout(Duration.ofSeconds(3)).collect { msg ->
+                                session.receive().timeout(Duration.ofSeconds(3)).onBackpressureError().collect { msg ->
                                     val payloadBytes = ByteArray(msg.payload.readableByteCount())
                                     msg.payload.read(payloadBytes)
 
@@ -91,9 +91,7 @@ class PoloniexApi(
                                     }
 
                                     try {
-                                        val payload =
-                                            pushNotificationJsonReader.readValue<PushNotification>(payloadBytes)
-
+                                        val payload = pushNotificationJsonReader.readValue<PushNotification>(payloadBytes)
                                         channels[payload.channel]?.send(payload)
                                     } catch (e: CancellationException) {
                                         throw e
@@ -108,10 +106,9 @@ class PoloniexApi(
                                         if (error.msg != null) {
                                             if (error.msg == PermissionDeniedMsg) throw PermissionDeniedException
                                             if (error.msg == InvalidChannelMsg) throw InvalidChannelException
-                                            throw e
-                                        } else {
-                                            throw e
                                         }
+
+                                        throw e
                                     } catch (e: Throwable) {
                                         val payloadStr = String(payloadBytes, StandardCharsets.UTF_8)
                                         logger.error("Can't parse websocket message: ${e.message}. Payload: $payloadStr")
@@ -151,6 +148,8 @@ class PoloniexApi(
                     send(false)
                     logger.error(e.message)
                     delay(1000)
+                } finally {
+                    logger.info("Connection closed with $PoloniexWebSocketApiUrl")
                 }
             }
         }.distinctUntilChanged().share(1)
@@ -772,7 +771,10 @@ class PoloniexApi(
         }
 
         suspend fun unsubscribeFromChannel() {
-            if (!shouldUnsubscribe.get()) return
+            if (!shouldUnsubscribe.get()) {
+                if (logger.isDebugEnabled) logger.debug("Unsubscription from channel $channel is not required. Connection has been already closed.")
+                return
+            }
 
             val command = Command(CommandType.Unsubscribe, channel)
             val json = objectMapper.writeValueAsString(command)
