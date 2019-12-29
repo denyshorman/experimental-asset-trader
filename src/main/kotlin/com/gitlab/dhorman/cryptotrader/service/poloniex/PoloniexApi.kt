@@ -117,7 +117,7 @@ class PoloniexApi(
                             }
 
                             val send = async {
-                                val output = connectionOutput.asFlux().doOnNext {
+                                val output = connectionOutput.consumeAsFlow().asFlux().doOnNext {
                                     if (logger.isTraceEnabled) logger.trace("Sent: $it")
                                 }.map(session::textMessage)
 

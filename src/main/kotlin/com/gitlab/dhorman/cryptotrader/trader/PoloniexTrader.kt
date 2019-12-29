@@ -164,7 +164,7 @@ class PoloniexTrader(
 
                             break
                         } else {
-                            logger.debug { "Optimal path was not found for $id. Retrying..." }
+                            logger.debug { "Optimal path was not found for $id (init = $initAmount, current = $fromCurrencyAmount). Retrying..." }
                         }
 
                         delay(60000)
@@ -2251,7 +2251,7 @@ class PoloniexTrader(
             return mutex.withLock {
                 logger.debug { "Trying to find intent in path manager for ($marketIdx) ${markets.pathString()}..." }
 
-                val intent = paths.find { it.markets == markets && it.marketIdx == marketIdx }
+                val intent = paths.find { it.marketIdx == marketIdx && areEqual(it.markets, markets) }
 
                 if (intent != null) {
                     logger.debug { "Intent ${intent.id} was found in path manager for ($marketIdx) ${markets.pathString()}" }
@@ -2279,6 +2279,19 @@ class PoloniexTrader(
 
         companion object {
             private val logger = KotlinLogging.logger {}
+
+            private fun areEqual(markets0: Array<TranIntentMarket>, markets1: Array<TranIntentMarket>): Boolean {
+                if (markets0.length() != markets1.length()) return false
+                var i = 0
+                while (i < markets0.length()) {
+                    val equal = markets0[i].market == markets1[i].market
+                        && markets0[i].orderSpeed == markets1[i].orderSpeed
+                        && markets0[i].fromCurrencyType == markets1[i].fromCurrencyType
+                    if (!equal) return false
+                    i++
+                }
+                return true
+            }
         }
     }
 }

@@ -209,6 +209,8 @@ data class MoveOrderResult(
 data class FeeInfo(
     val makerFee: BigDecimal,
     val takerFee: BigDecimal,
+    val marginMakerFee: BigDecimal,
+    val marginTakerFee: BigDecimal,
     val thirtyDayVolume: BigDecimal,
     val nextTier: BigDecimal
 )

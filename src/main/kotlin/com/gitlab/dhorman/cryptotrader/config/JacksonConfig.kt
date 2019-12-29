@@ -26,7 +26,6 @@ class JacksonConfig(private val env: Environment) {
             .registerModule(JavaTimeModule())
 
         mapper.configure(JsonParser.Feature.ALLOW_COMMENTS, true)
-        mapper.configure(JsonParser.Feature.ALLOW_TRAILING_COMMA, true)
 
         if (env.activeProfiles.contains("prod")) {
             mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
