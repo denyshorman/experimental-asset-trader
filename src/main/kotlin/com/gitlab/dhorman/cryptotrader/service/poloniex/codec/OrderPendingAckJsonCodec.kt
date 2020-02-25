@@ -16,9 +16,9 @@ object OrderPendingAckJsonCodec {
             return OrderPendingAck(
                 arrayNode[1].asLong(),
                 arrayNode[2].asInt(),
-                codec.treeToValue(arrayNode[3]),
-                codec.treeToValue(arrayNode[4]),
-                codec.treeToValue(arrayNode[5]),
+                codec.treeToValue(arrayNode[3])!!,
+                codec.treeToValue(arrayNode[4])!!,
+                codec.treeToValue(arrayNode[5])!!,
                 arrayNode[6].asLong()
             )
         }

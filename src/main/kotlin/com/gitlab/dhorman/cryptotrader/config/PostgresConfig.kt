@@ -1,19 +1,30 @@
 package com.gitlab.dhorman.cryptotrader.config
 
 import com.gitlab.dhorman.cryptotrader.util.Secrets
-import io.r2dbc.postgresql.PostgresqlConnectionConfiguration
-import io.r2dbc.postgresql.PostgresqlConnectionFactory
-import org.springframework.beans.factory.annotation.Qualifier
+import io.r2dbc.spi.ConnectionFactories
+import io.r2dbc.spi.ConnectionFactory
+import io.r2dbc.spi.ConnectionFactoryOptions.*
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.data.r2dbc.config.AbstractR2dbcConfiguration
 import org.springframework.data.r2dbc.connectionfactory.R2dbcTransactionManager
 import org.springframework.data.r2dbc.core.DatabaseClient
 import org.springframework.transaction.ReactiveTransactionManager
 
 @Configuration
-class PostgresConfig {
+class PostgresConfig : AbstractR2dbcConfiguration() {
+    @Bean("pg_client")
+    fun databaseClient(): DatabaseClient {
+        return DatabaseClient.create(connectionFactory())
+    }
+
+    @Bean("pg_tran_manager")
+    fun transactionManager(): ReactiveTransactionManager {
+        return R2dbcTransactionManager(connectionFactory())
+    }
+
     @Bean("pg_conn_factory")
-    fun getPostgresqlConnectionFactory(): PostgresqlConnectionFactory {
+    override fun connectionFactory(): ConnectionFactory {
         val host = Secrets.get("POSTGRES_HOST")
             ?: throw RuntimeException("Please define POSTGRES_HOST environment variable")
 
@@ -29,24 +40,15 @@ class PostgresConfig {
         val database = Secrets.get("POSTGRES_DB")
             ?: throw RuntimeException("Please define POSTGRES_DB environment variable")
 
-        return PostgresqlConnectionFactory(
-            PostgresqlConnectionConfiguration.builder()
-                .host(host)
-                .port(port)
-                .database(database)
-                .username(login)
-                .password(password)
-                .build()
-        )
-    }
+        val options = builder()
+            .option(HOST, host)
+            .option(PORT, port)
+            .option(USER, login)
+            .option(PASSWORD, password)
+            .option(DATABASE, database)
+            .option(DRIVER, "postgresql")
+            .build()
 
-    @Bean("pg_client")
-    fun getDatabaseClient(@Qualifier("pg_conn_factory") connectionFactory: PostgresqlConnectionFactory): DatabaseClient {
-        return DatabaseClient.create(connectionFactory)
-    }
-
-    @Bean("pg_tran_manager")
-    fun getPostgresTransactionManager(@Qualifier("pg_conn_factory") connectionFactory: PostgresqlConnectionFactory): ReactiveTransactionManager {
-        return R2dbcTransactionManager(connectionFactory)
+        return ConnectionFactories.get(options)
     }
 }

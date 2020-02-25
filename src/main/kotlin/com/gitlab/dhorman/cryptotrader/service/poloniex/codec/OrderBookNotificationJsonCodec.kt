@@ -17,9 +17,9 @@ object OrderBookNotificationJsonCodec {
             val arrayNode: ArrayNode = p.readValueAsTree()
             val codec = p.codec as ObjectMapper
             return when (val type = arrayNode[0].textValue()) {
-                "i" -> codec.treeToValue<OrderBookInit>(arrayNode[1].path("orderBook"))
-                "o" -> codec.treeToValue<OrderBookUpdate>(arrayNode)
-                "t" -> codec.treeToValue<OrderBookTrade>(arrayNode)
+                "i" -> codec.treeToValue<OrderBookInit>(arrayNode[1].path("orderBook"))!!
+                "o" -> codec.treeToValue<OrderBookUpdate>(arrayNode)!!
+                "t" -> codec.treeToValue<OrderBookTrade>(arrayNode)!!
                 else -> throw Exception("Not recognized order book update type $type")
             }
         }

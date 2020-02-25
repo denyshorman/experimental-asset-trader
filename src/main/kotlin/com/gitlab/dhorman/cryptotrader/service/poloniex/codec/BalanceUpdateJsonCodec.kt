@@ -15,8 +15,8 @@ object BalanceUpdateJsonCodec {
             val codec = p.codec as ObjectMapper
             return BalanceUpdate(
                 arrayNode[1].asInt(),
-                codec.treeToValue(arrayNode[2]),
-                codec.treeToValue(arrayNode[3])
+                codec.treeToValue(arrayNode[2])!!,
+                codec.treeToValue(arrayNode[3])!!
             )
         }
     }

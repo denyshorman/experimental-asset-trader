@@ -14,9 +14,9 @@ object OrderBookUpdateJsonCodec {
             val arrayNode: ArrayNode = p.readValueAsTree()
             val codec = p.codec as ObjectMapper
             return OrderBookUpdate(
-                codec.treeToValue(arrayNode[1]),
-                codec.treeToValue(arrayNode[2]),
-                codec.treeToValue(arrayNode[3])
+                codec.treeToValue(arrayNode[1])!!,
+                codec.treeToValue(arrayNode[2])!!,
+                codec.treeToValue(arrayNode[3])!!
             )
         }
     }

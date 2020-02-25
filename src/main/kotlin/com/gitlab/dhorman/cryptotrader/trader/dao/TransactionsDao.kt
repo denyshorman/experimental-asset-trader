@@ -1,6 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.trader.dao
 
-import com.fasterxml.jackson.core.JsonGenerator
+import com.fasterxml.jackson.core.json.JsonWriteFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -46,7 +46,7 @@ class TransactionsDao(
 
     suspend fun addActive(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
         val marketsJson = mapper
-            .configure(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS, true)
+            .configure(JsonWriteFeature.WRITE_NUMBERS_AS_STRINGS.mappedFeature(), true)
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
             .withView(Views.DB::class.java)
             .writeValueAsString(markets)
@@ -72,7 +72,7 @@ class TransactionsDao(
 
     suspend fun updateActive(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
         val marketsJson = mapper
-            .configure(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS, true)
+            .configure(JsonWriteFeature.WRITE_NUMBERS_AS_STRINGS.mappedFeature(), true)
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
             .withView(Views.DB::class.java)
             .writeValueAsString(markets)
@@ -106,7 +106,7 @@ class TransactionsDao(
 
     suspend fun addCompleted(activeTranId: UUID, markets: Array<TranIntentMarket>) {
         val marketsJson = mapper
-            .configure(JsonGenerator.Feature.WRITE_NUMBERS_AS_STRINGS, true)
+            .configure(JsonWriteFeature.WRITE_NUMBERS_AS_STRINGS.mappedFeature(), true)
             .writerFor(jacksonTypeRef<Array<TranIntentMarket>>())
             .withView(Views.DB::class.java)
             .writeValueAsString(markets)

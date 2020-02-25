@@ -21,12 +21,12 @@ object TradeNotificationJsonCodec {
             val codec = p.codec as ObjectMapper
             return TradeNotification(
                 arrayNode[1].asLong(),
-                codec.treeToValue(arrayNode[2]),
-                codec.treeToValue(arrayNode[3]),
-                codec.treeToValue<BigDecimal>(arrayNode[4]).oneMinus,
-                codec.treeToValue(arrayNode[5]),
+                codec.treeToValue(arrayNode[2])!!,
+                codec.treeToValue(arrayNode[3])!!,
+                codec.treeToValue<BigDecimal>(arrayNode[4])!!.oneMinus,
+                codec.treeToValue(arrayNode[5])!!,
                 arrayNode[6].asLong(),
-                codec.treeToValue(arrayNode[7]), // TODO: Investigate Can't parse websocket message: arrayNode[7] must not be null
+                codec.treeToValue(arrayNode[7])!!, // TODO: Investigate Can't parse websocket message: arrayNode[7] must not be null
                 LocalDateTime.parse(arrayNode[8].asText(), df)
             )
         }

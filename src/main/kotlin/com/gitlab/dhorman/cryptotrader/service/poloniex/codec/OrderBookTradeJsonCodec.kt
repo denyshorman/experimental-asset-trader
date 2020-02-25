@@ -15,10 +15,10 @@ object OrderBookTradeJsonCodec {
             val codec = p.codec as ObjectMapper
             return OrderBookTrade(
                 arrayNode[1].asLong(),
-                codec.treeToValue(arrayNode[2]),
-                codec.treeToValue(arrayNode[3]),
-                codec.treeToValue(arrayNode[4]),
-                codec.treeToValue(arrayNode[5])
+                codec.treeToValue(arrayNode[2])!!,
+                codec.treeToValue(arrayNode[3])!!,
+                codec.treeToValue(arrayNode[4])!!,
+                codec.treeToValue(arrayNode[5])!!
             )
         }
     }

@@ -14,11 +14,11 @@ object AccountNotificationJsonCodec {
             val arrayNode: ArrayNode = p.readValueAsTree()
             val codec = p.codec as ObjectMapper
             return when (val type = arrayNode[0].textValue()) {
-                "b" -> codec.treeToValue<BalanceUpdate>(arrayNode)
-                "n" -> codec.treeToValue<LimitOrderCreated>(arrayNode)
-                "o" -> codec.treeToValue<OrderUpdate>(arrayNode)
-                "t" -> codec.treeToValue<TradeNotification>(arrayNode)
-                "p" -> codec.treeToValue<OrderPendingAck>(arrayNode)
+                "b" -> codec.treeToValue<BalanceUpdate>(arrayNode)!!
+                "n" -> codec.treeToValue<LimitOrderCreated>(arrayNode)!!
+                "o" -> codec.treeToValue<OrderUpdate>(arrayNode)!!
+                "t" -> codec.treeToValue<TradeNotification>(arrayNode)!!
+                "p" -> codec.treeToValue<OrderPendingAck>(arrayNode)!!
                 else -> throw Exception("Not recognized account notification type $type")
             }
         }

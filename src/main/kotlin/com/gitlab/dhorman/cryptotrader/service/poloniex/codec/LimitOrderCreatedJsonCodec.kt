@@ -21,9 +21,9 @@ object LimitOrderCreatedJsonCodec {
             return LimitOrderCreated(
                 arrayNode[1].asInt(),
                 arrayNode[2].asLong(),
-                codec.treeToValue(arrayNode[3]),
-                codec.treeToValue(arrayNode[4]),
-                codec.treeToValue(arrayNode[5]),
+                codec.treeToValue(arrayNode[3])!!,
+                codec.treeToValue(arrayNode[4])!!,
+                codec.treeToValue(arrayNode[5])!!,
                 LocalDateTime.parse(arrayNode[6].asText(), df)
             )
         }
