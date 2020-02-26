@@ -1194,6 +1194,7 @@ class PoloniexTrader(
                     val firstSimulatedTrade = simulateInstantTrades(unfilledAmount, orderType, orderBookFlow, feeFlow).firstOrNull()?._2
 
                     if (firstSimulatedTrade == null) {
+                        logger.warn("Can't do instant trade. Wait...")
                         delay(2000)
                         continue
                     }

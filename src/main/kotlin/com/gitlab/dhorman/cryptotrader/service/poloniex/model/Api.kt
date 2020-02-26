@@ -101,6 +101,7 @@ data class CurrencyDetails(
     val disabled: Boolean,
     val delisted: Boolean,
     val frozen: Boolean,
+    val hexColor: String,
     @get:JsonProperty("isGeofenced") val isGeofenced: Boolean
 )
 

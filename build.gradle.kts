@@ -58,7 +58,7 @@ dependencies {
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
     implementation("io.springfox:springfox-bean-validators:$swaggerVersion")
     implementation("org.springframework.boot.experimental:spring-boot-starter-data-r2dbc")
-    implementation("org.springframework.plugin:spring-plugin-core:1.2.0.RELEASE") // TODO: Remove when springfox and spring will be released
+    implementation("org.springframework.plugin:spring-plugin-core:2.0.0.RELEASE") // TODO: Remove when springfox and spring will be released
 
     runtimeOnly("io.r2dbc:r2dbc-postgresql")
     developmentOnly("org.springframework.boot:spring-boot-devtools")
