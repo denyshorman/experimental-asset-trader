@@ -16,7 +16,7 @@ configurations {
 plugins {
     kotlin("jvm") version "1.3.61"
     kotlin("plugin.spring") version "1.3.61"
-    id("org.springframework.boot") version "2.2.4.RELEASE"
+    id("org.springframework.boot") version "2.2.5.RELEASE"
     id("io.spring.dependency-management") version "1.0.9.RELEASE"
     id("net.nemerosa.versioning") version "2.8.2"
 }
@@ -43,7 +43,7 @@ dependencies {
     implementation("io.projectreactor.kotlin:reactor-kotlin-extensions")
     implementation("org.slf4j:slf4j-api:1.7.26")
     implementation("ch.qos.logback:logback-classic:1.2.3")
-    implementation("io.github.microutils:kotlin-logging:1.6.26")
+    implementation("io.github.microutils:kotlin-logging:1.7.8")
     implementation("io.vavr:vavr-kotlin:0.10.0")
     implementation("io.vavr:vavr-jackson:0.10.0")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")

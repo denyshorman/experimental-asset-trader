@@ -326,7 +326,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     coroutineScope {
                         launch {
                             poloniexApi.connection.collect { connected ->
-                                if (!connected) throw Exception("Connection is closed")
+                                if (!connected) throw Exception("Connection has been closed")
                             }
                         }
 

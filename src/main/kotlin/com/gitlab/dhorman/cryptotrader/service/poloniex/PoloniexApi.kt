@@ -28,7 +28,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.reactive.collect
-import kotlinx.coroutines.reactor.asFlux
+import kotlinx.coroutines.reactor.flux
 import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
@@ -117,9 +117,13 @@ class PoloniexApi(
                             }
 
                             val send = async {
-                                val output = connectionOutput.consumeAsFlow().asFlux().doOnNext {
-                                    if (logger.isTraceEnabled) logger.trace("Sent: $it")
-                                }.map(session::textMessage)
+                                val output = flux(Dispatchers.Unconfined) {
+                                    for (msgStr in connectionOutput) {
+                                        if (logger.isTraceEnabled) logger.trace("Sent: $msgStr")
+                                        val webSocketMsg = session.textMessage(msgStr)
+                                        send(webSocketMsg)
+                                    }
+                                }
 
                                 session.send(output).awaitFirstOrNull()
                             }
@@ -132,7 +136,7 @@ class PoloniexApi(
                     session.awaitFirstOrNull()
                 } catch (e: CancellationException) {
                     send(false)
-                    logger.debug("Connection closed because internal job was cancelled")
+                    logger.debug("Connection closed because internal job has been cancelled")
                 } catch (e: TimeoutException) {
                     send(false)
                     logger.debug("Haven't received any value from $PoloniexWebSocketApiUrl within specified interval")
@@ -723,7 +727,7 @@ class PoloniexApi(
             channels[channel]!!.consumeEach { msg ->
                 if (msg.data != null && msg.data != NullNode.instance) {
                     try {
-                        val data = objectMapper.convertValue<T>(msg.data, respClass)
+                        val data = objectMapper.convertValue(msg.data, respClass)
                         main.send(data)
                     } catch (e: CancellationException) {
                         throw e
@@ -756,7 +760,9 @@ class PoloniexApi(
                 }
 
                 try {
-                    connectionOutput.send(payload)
+                    withTimeout(15000) {
+                        connectionOutput.send(payload)
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
@@ -765,7 +771,7 @@ class PoloniexApi(
                     continue
                 }
 
-                if (logger.isDebugEnabled) logger.debug("Subscribe to $channel channel")
+                if (logger.isDebugEnabled) logger.debug("Subscribed to $channel channel")
                 break
             }
         }
@@ -783,7 +789,7 @@ class PoloniexApi(
                 withTimeout(2000) {
                     connectionOutput.send(json)
                 }
-                if (logger.isDebugEnabled) logger.debug("Unsubscribe from $channel channel")
+                if (logger.isDebugEnabled) logger.debug("Unsubscribed from $channel channel")
             } catch (_: TimeoutCancellationException) {
                 if (logger.isDebugEnabled) logger.debug("Can't unsubscribe from $channel channel. Connection closed ?")
             } catch (e: Throwable) {

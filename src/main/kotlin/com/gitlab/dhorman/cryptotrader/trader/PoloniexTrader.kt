@@ -38,6 +38,7 @@ import org.springframework.transaction.TransactionDefinition
 import org.springframework.transaction.reactive.TransactionalOperator
 import reactor.core.publisher.Flux
 import java.io.IOException
+import java.lang.RuntimeException
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.net.UnknownHostException
@@ -64,7 +65,7 @@ class PoloniexTrader(
     private val soundSignalEnabled = System.getenv("ENABLE_SOUND_SIGNAL") != null
     private lateinit var tranIntentScope: CoroutineScope
     private lateinit var delayedTradeManager: DelayedTradeManager
-    private val pathManager = PathManager()
+    private val intentManager = IntentManager()
 
     @Volatile
     var primaryCurrencies: List<Currency> = list("USDT", "USDC")
@@ -77,7 +78,7 @@ class PoloniexTrader(
 
     val tranRequests = Channel<ExhaustivePath>(Channel.RENDEZVOUS)
 
-    fun start(scope: CoroutineScope) = scope.launch {
+    fun start(scope: CoroutineScope) = scope.launch(CoroutineName("PoloniexTraderStarter")) {
         logger.info("Start trading on Poloniex")
 
         subscribeToRequiredTopicsBeforeTrading()
@@ -96,7 +97,10 @@ class PoloniexTrader(
             tickerFlow.collect {
                 logger.debug { "Trying to find new transaction..." }
 
-                val (startCurrency, requestedAmount) = requestBalanceForTransaction() ?: return@collect
+                val (startCurrency, requestedAmount) = requestBalanceForTransaction() ?: run {
+                    logger.debug { "Can't allocate money for new transaction" }
+                    return@collect
+                }
 
                 logger.debug { "Requested currency $startCurrency and amount $requestedAmount for transaction" }
 
@@ -120,21 +124,27 @@ class PoloniexTrader(
     }
 
     private fun CoroutineScope.startMonitoringForTranRequests(scope: CoroutineScope): Job = this.launch {
-        tranRequests.consumeEach {
-            startPathTransaction(it, scope)
+        for (tranRequest in tranRequests) {
+            startPathTransaction(tranRequest, scope)
         }
     }
 
     private suspend fun subscribeToRequiredTopicsBeforeTrading() {
+        if (logger.isTraceEnabled) logger.trace("Subscribe to topics before trading")
+
         coroutineScope {
             launch(start = CoroutineStart.UNDISPATCHED) {
                 data.balances.first()
+                if (logger.isTraceEnabled) logger.trace("Subscribed to balances topic")
             }
 
             launch(start = CoroutineStart.UNDISPATCHED) {
                 data.openOrders.first()
+                if (logger.isTraceEnabled) logger.trace("Subscribed to openOrders topic")
             }
         }
+
+        if (logger.isTraceEnabled) logger.trace("Subscribed to all required topics before trading")
     }
 
     private suspend fun resumeSleepingTransactions(scope: CoroutineScope) {
@@ -376,6 +386,8 @@ class PoloniexTrader(
     }
 
     private suspend fun requestBalanceForTransaction(): Tuple2<Currency, Amount>? {
+        logger.trace { "Requesting new balance for transaction" }
+
         // TODO: Review requestBalanceForTransaction algorithm
         val usedBalances = transactionsDao.balancesInUse(primaryCurrencies)
             .groupBy({ it._1 }, { it._2 })
@@ -398,7 +410,11 @@ class PoloniexTrader(
                 tuple(currency, availableAmount)
             }
             .filter { it._2 > BigDecimal(2) }
-            .firstOrNull() ?: return null
+            .firstOrNull()
+
+        logger.trace { "usedBalances: $usedBalances ; allBalances: $allBalances ; availableBalance: $availableBalance" }
+
+        if (availableBalance == null) return null
 
         val (currency, amount) = availableBalance
 
@@ -539,6 +555,12 @@ class PoloniexTrader(
             }
         }
 
+        private fun isAdjustmentTrade(trade: BareTrade): Boolean {
+            return trade.price.compareTo(BigDecimal.ONE) == 0 && trade.feeMultiplier.compareTo(BigDecimal.ZERO) == 0
+                || trade.price.compareTo(BigDecimal.ZERO) == 0 && trade.feeMultiplier.compareTo(BigDecimal.ONE) == 0
+                || trade.price.compareTo(BigDecimal.ZERO) == 0 && trade.feeMultiplier.compareTo(BigDecimal.ZERO) == 0
+        }
+
         private fun adjustFromAmount(amount: Amount): BareTrade {
             return BareTrade(amount, BigDecimal.ONE, BigDecimal.ZERO)
         }
@@ -551,65 +573,142 @@ class PoloniexTrader(
             }
         }
 
-        private fun calcQuoteAmountSellTrade(fromAmount: Amount, targetAmount: Amount, price: Price, feeMultiplier: BigDecimal): BigDecimal {
-            val tfd = targetAmount.divide(feeMultiplier, 8, RoundingMode.DOWN)
-            val tfu = targetAmount.divide(feeMultiplier, 8, RoundingMode.UP)
-
-            val qdd = tfd.divide(price, 8, RoundingMode.DOWN)
-            val qdu = tfd.divide(price, 8, RoundingMode.UP)
-            val qud = tfu.divide(price, 8, RoundingMode.DOWN)
-            val quu = tfu.divide(price, 8, RoundingMode.UP)
-
-            val a = sellBaseAmount(qdd, price, feeMultiplier)
-            val b = sellBaseAmount(qdu, price, feeMultiplier)
-            val c = sellBaseAmount(qud, price, feeMultiplier)
-            val d = sellBaseAmount(quu, price, feeMultiplier)
-
-            return list(tuple(qdd, a), tuple(qdu, b), tuple(qud, c), tuple(quu, d))
-                .iterator()
-                .filter { it._1 <= fromAmount && it._2 <= targetAmount }
-                .map { it._1 }
-                .max()
-                .getOrElseThrow { Exception("Can't find quote amount that matches target price") }
+        private fun sellBaseAmountAdj(quoteAmount: BigDecimal, price: BigDecimal, feeMultiplier: BigDecimal): BigDecimal {
+            return if (price.compareTo(BigDecimal.ZERO) == 0 && feeMultiplier.compareTo(BigDecimal.ZERO) == 0) {
+                quoteAmount
+            } else {
+                sellBaseAmount(quoteAmount, price, feeMultiplier)
+            }
         }
 
-        private fun splitTrade(trade: BareTrade, orderType: OrderType, targetAmount: Amount): Tuple2<BareTrade, List<BareTrade>> = if (orderType == OrderType.Buy) {
-            val commitQuoteAmount = run {
-                var expectedQuote = targetAmount.divide(trade.feeMultiplier, 8, RoundingMode.DOWN)
-                val boughtQuote = buyQuoteAmount(expectedQuote, trade.feeMultiplier)
-                if (boughtQuote.compareTo(targetAmount) != 0) {
-                    expectedQuote = targetAmount.divide(trade.feeMultiplier, 8, RoundingMode.UP)
-                }
-                expectedQuote
+        private fun splitTradeHandleAdjustment(trade: BareTrade, fromOrToAmount: Amount): Tuple2<BareTrade, List<BareTrade>> {
+            val q0 = fromOrToAmount
+            val q1 = trade.quoteAmount - q0
+
+            if (q1 < BigDecimal.ZERO) throw RuntimeException("Adjustment trade $trade is not supported")
+
+            val commitTrade = BareTrade(q0, trade.price, trade.feeMultiplier)
+            val updateTrade = BareTrade(q1, trade.price, trade.feeMultiplier)
+
+            return tuple(commitTrade, list(updateTrade))
+        }
+
+        private fun splitTradeForwardBuy(trade: BareTrade, fromAmount: Amount): Tuple2<BareTrade, List<BareTrade>> {
+            if (isAdjustmentTrade(trade)) return splitTradeHandleAdjustment(trade, fromAmount)
+
+            val tradeWithdraw = buyBaseAmount(trade.quoteAmount, trade.price)
+            val tradeDeposit = buyQuoteAmount(trade.quoteAmount, trade.feeMultiplier)
+
+            val commitQuoteAmount = fromAmount.divide(trade.price, 8, RoundingMode.DOWN)
+            val updateQuoteAmount = (tradeWithdraw - fromAmount).divide(trade.price, 8, RoundingMode.DOWN)
+
+            val withdrawDelta = tradeWithdraw - buyBaseAmount(commitQuoteAmount, trade.price) - buyBaseAmount(updateQuoteAmount, trade.price)
+            val depositDelta = tradeDeposit - buyQuoteAmount(commitQuoteAmount, trade.feeMultiplier) - buyQuoteAmount(updateQuoteAmount, trade.feeMultiplier)
+
+            val updateTrade = BareTrade(updateQuoteAmount, trade.price, trade.feeMultiplier)
+            val commitTrade = BareTrade(commitQuoteAmount, trade.price, trade.feeMultiplier)
+
+            val commitTradeWithdrawAdj = if (withdrawDelta.compareTo(BigDecimal.ZERO) != 0) adjustFromAmount(withdrawDelta) else null
+            val commitTradeDepositAdj = if (depositDelta.compareTo(BigDecimal.ZERO) != 0) adjustTargetAmount(depositDelta, OrderType.Buy) else null
+
+            val commitTrades = listOfNotNull(commitTrade, commitTradeWithdrawAdj, commitTradeDepositAdj).toVavrList()
+
+            return tuple(updateTrade, commitTrades)
+        }
+
+        private fun splitTradeForwardSell(trade: BareTrade, fromAmount: Amount): Tuple2<BareTrade, List<BareTrade>> {
+            if (isAdjustmentTrade(trade)) return splitTradeHandleAdjustment(trade, fromAmount)
+
+            val tradeWithdraw = sellQuoteAmount(trade.quoteAmount)
+            val tradeDeposit = sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
+
+            val commitQuoteAmount = fromAmount
+            val updateQuoteAmount = tradeWithdraw - fromAmount
+
+            val depositDelta = run {
+                val a = sellBaseAmount(commitQuoteAmount, trade.price, trade.feeMultiplier)
+                val b = sellBaseAmount(updateQuoteAmount, trade.price, trade.feeMultiplier)
+                tradeDeposit - a - b
             }
-            val l = BareTrade(trade.quoteAmount - commitQuoteAmount, trade.price, trade.feeMultiplier)
-            val r = BareTrade(commitQuoteAmount, trade.price, trade.feeMultiplier)
 
-            tuple(l, list(r))
-        } else {
-            val commitQuoteAmount: Amount
-            val targetAmountDelta: Amount
+            val updateTrade = BareTrade(updateQuoteAmount, trade.price, trade.feeMultiplier)
+            val commitTrade = BareTrade(commitQuoteAmount, trade.price, trade.feeMultiplier)
 
-            if (trade.price.compareTo(BigDecimal.ZERO) == 0 && trade.feeMultiplier.compareTo(BigDecimal.ZERO) == 0) {
-                commitQuoteAmount = targetAmount
-                targetAmountDelta = BigDecimal.ZERO
+            val commitTradeDepositAdj = if (depositDelta.compareTo(BigDecimal.ZERO) != 0) adjustTargetAmount(depositDelta, OrderType.Sell) else null
+
+            val commitTrades = listOfNotNull(commitTrade, commitTradeDepositAdj).toVavrList()
+
+            return tuple(updateTrade, commitTrades)
+        }
+
+        private fun splitTradeForward(trade: BareTrade, orderType: OrderType, fromAmount: Amount): Tuple2<BareTrade, List<BareTrade>> {
+            return if (orderType == OrderType.Buy) {
+                splitTradeForwardBuy(trade, fromAmount)
             } else {
-                commitQuoteAmount = calcQuoteAmountSellTrade(trade.quoteAmount, targetAmount, trade.price, trade.feeMultiplier)
-                targetAmountDelta = sellBaseAmount(commitQuoteAmount, trade.price, trade.feeMultiplier)
+                splitTradeForwardSell(trade, fromAmount)
+            }
+        }
+
+        private fun splitTradeBackwardBuy(trade: BareTrade, targetAmount: Amount): Tuple2<BareTrade, List<BareTrade>> {
+            if (isAdjustmentTrade(trade)) return splitTradeHandleAdjustment(trade, targetAmount)
+
+            val tradeWithdraw = buyBaseAmount(trade.quoteAmount, trade.price)
+            val tradeDeposit = buyQuoteAmount(trade.quoteAmount, trade.feeMultiplier)
+
+            val commitQuoteAmount = targetAmount.divide(trade.feeMultiplier, 8, RoundingMode.DOWN)
+            val updateQuoteAmount = (tradeDeposit - targetAmount).divide(trade.feeMultiplier, 8, RoundingMode.DOWN)
+
+            val withdrawDelta = tradeWithdraw - buyBaseAmount(commitQuoteAmount, trade.price) - buyBaseAmount(updateQuoteAmount, trade.price)
+            val depositDelta = tradeDeposit - buyQuoteAmount(commitQuoteAmount, trade.feeMultiplier) - buyQuoteAmount(updateQuoteAmount, trade.feeMultiplier)
+
+            val updateTrade = BareTrade(updateQuoteAmount, trade.price, trade.feeMultiplier)
+            val commitTrade = BareTrade(commitQuoteAmount, trade.price, trade.feeMultiplier)
+
+            val commitTradeWithdrawAdj = if (withdrawDelta.compareTo(BigDecimal.ZERO) != 0) adjustFromAmount(withdrawDelta) else null
+            val commitTradeDepositAdj = if (depositDelta.compareTo(BigDecimal.ZERO) != 0) adjustTargetAmount(depositDelta, OrderType.Buy) else null
+
+            val commitTrades = listOfNotNull(commitTrade, commitTradeWithdrawAdj, commitTradeDepositAdj).toVavrList()
+
+            return tuple(updateTrade, commitTrades)
+        }
+
+        private fun splitTradeBackwardSell(trade: BareTrade, targetAmount: Amount): Tuple2<BareTrade, List<BareTrade>> {
+            if (isAdjustmentTrade(trade)) return splitTradeHandleAdjustment(trade, targetAmount)
+
+            val tradeWithdraw = sellQuoteAmount(trade.quoteAmount)
+            val tradeDeposit = sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
+
+            val (commitQuoteAmount, updateQuoteAmount) = run {
+                val pf = (trade.price * trade.feeMultiplier).setScale(8, RoundingMode.DOWN)
+                val cQ = targetAmount.divide(pf, 8, RoundingMode.DOWN)
+                val uQ = (tradeDeposit - targetAmount).divide(pf, 8, RoundingMode.DOWN)
+                tuple(cQ, uQ)
             }
 
-            val updateQuoteAmount = trade.quoteAmount - commitQuoteAmount
+            val withdrawDelta = tradeWithdraw - sellQuoteAmount(commitQuoteAmount) - sellQuoteAmount(updateQuoteAmount)
+            val depositDelta = run {
+                val a = sellBaseAmount(commitQuoteAmount, trade.price, trade.feeMultiplier)
+                val b = sellBaseAmount(updateQuoteAmount, trade.price, trade.feeMultiplier)
+                tradeDeposit - a - b
+            }
 
-            val l = BareTrade(updateQuoteAmount, trade.price, trade.feeMultiplier)
-            val r1 = BareTrade(commitQuoteAmount, trade.price, trade.feeMultiplier)
-            val r = if (targetAmountDelta.compareTo(BigDecimal.ZERO) != 0) {
-                val r0 = adjustTargetAmount(targetAmountDelta, OrderType.Sell)
-                list(r0, r1)
+            val updateTrade = BareTrade(updateQuoteAmount, trade.price, trade.feeMultiplier)
+            val commitTrade = BareTrade(commitQuoteAmount, trade.price, trade.feeMultiplier)
+
+            val commitTradeWithdrawAdj = if (withdrawDelta.compareTo(BigDecimal.ZERO) != 0) adjustFromAmount(withdrawDelta) else null
+            val commitTradeDepositAdj = if (depositDelta.compareTo(BigDecimal.ZERO) != 0) adjustTargetAmount(depositDelta, OrderType.Sell) else null
+
+            val commitTrades = listOfNotNull(commitTrade, commitTradeWithdrawAdj, commitTradeDepositAdj).toVavrList()
+
+            return tuple(updateTrade, commitTrades)
+        }
+
+        private fun splitTradeBackward(trade: BareTrade, orderType: OrderType, targetAmount: Amount): Tuple2<BareTrade, List<BareTrade>> {
+            return if (orderType == OrderType.Buy) {
+                splitTradeBackwardBuy(trade, targetAmount)
             } else {
-                list(r1)
+                splitTradeBackwardSell(trade, targetAmount)
             }
-
-            tuple(l, r)
         }
 
         private fun splitMarkets(markets: Array<TranIntentMarket>, currentMarketIdx: Int, trades: Array<BareTrade>): Tuple2<Array<TranIntentMarket>, Array<TranIntentMarket>> {
@@ -669,7 +768,7 @@ class PoloniexTrader(
                     val amount = if (m.orderType == OrderType.Buy) {
                         buyQuoteAmount(trade.quoteAmount, trade.feeMultiplier)
                     } else {
-                        sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
+                        sellBaseAmountAdj(trade.quoteAmount, trade.price, trade.feeMultiplier)
                     }
 
                     if (amount <= targetAmount) {
@@ -679,7 +778,7 @@ class PoloniexTrader(
                         if (targetAmount.compareTo(BigDecimal.ZERO) == 0) {
                             updatedTrades.add(trade)
                         } else {
-                            val (l, r) = splitTrade(trade, m.orderType, targetAmount)
+                            val (l, r) = splitTradeBackward(trade, m.orderType, targetAmount)
                             updatedTrades.add(l)
                             committedTrades.addAll(r)
                             targetAmount = BigDecimal.ZERO
@@ -832,27 +931,29 @@ class PoloniexTrader(
         private val fromAmountInputChannel = Channel<Tuple3<Amount, Amount, CompletableDeferred<Boolean>>>()
         private val generalMutex = Mutex()
 
-        fun start(): Job = TranIntentScope.launch {
+        fun start(): Job = TranIntentScope.launch(CoroutineName("INTENT $id")) {
+            logger.debug { "Start intent ($marketIdx) ${markets.pathString()}" }
+
             val merged = withContext(NonCancellable) {
-                val existingIntent = pathManager.getIntent(markets, marketIdx)
+                val existingIntent = intentManager.get(markets, marketIdx)
                 if (existingIntent != null) {
                     val initFromAmount = markets[0].fromAmount(markets, 0)
                     val currentFromAmount = markets[marketIdx].fromAmount(markets, marketIdx)
 
-                    logger.debug { "Existing intent found. Trying to merge ($marketIdx) ${markets.pathString()} with amount ($initFromAmount, $currentFromAmount) into ($existingIntent.marketIdx) ${existingIntent.markets.pathString()}..." }
+                    logger.debug { "Existing intent found. Trying to merge current intent with an amount ($initFromAmount, $currentFromAmount) into ${existingIntent.id}..." }
 
                     val merged = existingIntent.merge(initFromAmount, currentFromAmount)
 
                     if (merged) {
                         transactionsDao.deleteActive(id)
-                        logger.debug { "Path ($marketIdx) ${markets.pathString()} with amount ($initFromAmount, $currentFromAmount) merged into (${existingIntent.marketIdx}) ${existingIntent.markets.pathString()}" }
+                        logger.debug { "Current intent has been merged into ${existingIntent.id}" }
                     } else {
-                        logger.debug { "Path ($marketIdx) ${markets.pathString()} with amount ($initFromAmount, $currentFromAmount) not merged into (${existingIntent.marketIdx}) ${existingIntent.markets.pathString()}" }
+                        logger.debug { "Current intent has not been merged into ${existingIntent.id}" }
                     }
 
                     merged
                 } else {
-                    logger.debug("Merge intent not found for ($marketIdx) ${markets.pathString()} ")
+                    logger.debug("Merge intent has not been found for current intent")
 
                     false
                 }
@@ -860,9 +961,9 @@ class PoloniexTrader(
 
             if (merged) return@launch
 
-            pathManager.addIntent(this@TransactionIntent)
+            intentManager.add(this@TransactionIntent)
 
-            logger.debug { "Starting path traversal for ($marketIdx) ${markets.pathString()}" }
+            logger.debug { "Starting path traversal" }
 
             val currentMarket = markets[marketIdx] as TranIntentMarketPartiallyCompleted
             val orderBookFlow = data.getOrderBookFlowBy(currentMarket.market)
@@ -880,7 +981,7 @@ class PoloniexTrader(
                         transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
                         unfilledMarketsDao.remove(markets[0].fromCurrency, currentMarket.fromCurrency)
 
-                        logger.debug { "Merged unfilled amounts $unfilledMarkets into ($marketIdx) ${markets.pathString()}" }
+                        logger.debug { "Merged unfilled amounts $unfilledMarkets into current intent. Modified markets: ${modifiedMarkets.pathString()}" }
                     }
 
                     modifiedMarkets
@@ -892,11 +993,11 @@ class PoloniexTrader(
                     generalMutex.withLock {
                         while (!fromAmountInputChannel.isEmpty) {
                             val (initFromAmount, currFromAmount, approve) = fromAmountInputChannel.receive()
-                            modifiedMarkets = mergeMarkets(markets, initFromAmount, currFromAmount)
-                            logger.debug { "Merged amount (init = $initFromAmount, current = $currFromAmount) into $markets => $modifiedMarkets" }
+                            val prevMarkets = modifiedMarkets
+                            modifiedMarkets = mergeMarkets(prevMarkets, initFromAmount, currFromAmount)
                             transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
                             approve.complete(true)
-                            logger.debug { "Path ($marketIdx) ${markets.pathString()} received some amount ($initFromAmount, $currFromAmount)" }
+                            logger.debug { "Merged amount (init = $initFromAmount, current = $currFromAmount) into $prevMarkets => $modifiedMarkets" }
                         }
                         fromAmountInputChannel.close()
                     }
@@ -924,11 +1025,11 @@ class PoloniexTrader(
                             if (!primaryCurrencyUnfilled) {
                                 unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, fromCurrencyCurrentAmount)
 
-                                logger.debug { "Added ($marketIdx) ${markets.pathString()} init=($fromCurrencyInit, $fromCurrencyInitAmount), current=($fromCurrencyCurrent, $fromCurrencyCurrentAmount) to unfilled markets " }
+                                logger.debug { "Added ($marketIdx) ${modifiedMarkets.pathString()} init=($fromCurrencyInit, $fromCurrencyInitAmount), current=($fromCurrencyCurrent, $fromCurrencyCurrentAmount) to unfilled markets " }
                             }
                         }).retry().awaitFirstOrNull()
 
-                        pathManager.removeIntent(id)
+                        intentManager.remove(id)
 
                         return@withContext
                     }
@@ -936,9 +1037,9 @@ class PoloniexTrader(
                     if (trades.length() == 0) {
                         if (marketIdx == 0) {
                             transactionsDao.deleteActive(id)
-                            pathManager.removeIntent(id)
+                            intentManager.remove(id)
 
-                            logger.debug { "Removing instant intent ($marketIdx) ${markets.pathString()} from all storages" }
+                            logger.debug { "Removing current instant intent from all places" }
                         }
                         return@withContext
                     }
@@ -963,7 +1064,7 @@ class PoloniexTrader(
                         if (!primaryCurrencyUnfilled) {
                             unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, unfilledFromAmount)
 
-                            logger.debug { "Added ($marketIdx) ${markets.pathString()} [init = ($fromCurrencyInit, $fromCurrencyInitAmount)], [current = ($fromCurrencyCurrent, $unfilledFromAmount)] to unfilled markets " }
+                            logger.debug { "Added ($marketIdx) ${modifiedMarkets.pathString()} [init = ($fromCurrencyInit, $fromCurrencyInitAmount)], [current = ($fromCurrencyCurrent, $unfilledFromAmount)] to unfilled markets " }
                         }
                     }
 
@@ -974,7 +1075,7 @@ class PoloniexTrader(
                         TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
                             transactionsDao.addCompleted(id, committedMarkets)
                             transactionsDao.deleteActive(id)
-                            pathManager.removeIntent(id)
+                            intentManager.remove(id)
                         }).retry().awaitFirstOrNull()
                     }
                 }
@@ -992,7 +1093,7 @@ class PoloniexTrader(
                         delay(Long.MAX_VALUE)
                     } finally {
                         withContext(NonCancellable) {
-                            logger.debug { "Cancel event received for delayed trade. Trying to unregister intent ($marketIdx) ${markets.pathString()} with id $id..." }
+                            logger.debug { "Cancel event received for delayed trade. Trying to unregister intent..." }
                             delayedProcessor.unregister(id)
                         }
                     }
@@ -1006,33 +1107,30 @@ class PoloniexTrader(
                         withContext(NonCancellable) {
                             run {
                                 val fromAmount = (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
-                                logger.debug { "Trying to add first amount $fromAmount of ($marketIdx) ${markets.pathString()} to trade processor..." }
+                                logger.debug { "Trying to add first amount $fromAmount of current intent to trade processor..." }
 
                                 val approved = delayedProcessor.addAmount(id, fromAmount)
 
                                 if (approved) {
-                                    logger.debug { "First amount $fromAmount of ($marketIdx) ${markets.pathString()} has been added to trade processor." }
+                                    logger.debug { "First amount has been added to trade processor." }
                                 } else {
-                                    logger.debug { "First amount $fromAmount of ($marketIdx) ${markets.pathString()} hasn't been added to trade processor." }
+                                    logger.debug { "First amount hasn't been added to trade processor." }
                                     return@withContext
                                 }
                             }
-
-                            fromAmountInputChannel.consumeEach {
+                            for ((initFromAmount, currFromAmount, approve) in fromAmountInputChannel) {
                                 generalMutex.withLock {
-                                    val (initFromAmount, currFromAmount, approve) = it
-
-                                    logger.debug { "Path ($marketIdx) ${markets.pathString()} has received some amount ($initFromAmount, $currFromAmount). Trying to add it to trade processor..." }
+                                    logger.debug { "Intent has received some amount ($initFromAmount, $currFromAmount). Trying to add it to trade processor..." }
 
                                     val approved = delayedProcessor.addAmount(id, currFromAmount)
 
                                     if (approved) {
-                                        logger.debug { "Merging amount (init = $initFromAmount, current = $currFromAmount) into $updatedMarkets..." }
                                         updatedMarkets = mergeMarkets(updatedMarkets, initFromAmount, currFromAmount)
-                                        logger.debug { "Amount merged (init = $initFromAmount, current = $currFromAmount): $updatedMarkets" }
-                                        logger.debug { "Amount ($initFromAmount, $currFromAmount) of ($marketIdx) ${markets.pathString()} has been added to trade processor." }
+                                        updatedMarketsRef.set(updatedMarkets)
+                                        transactionsDao.updateActive(id, updatedMarkets, marketIdx)
+                                        logger.debug { "Amount ($initFromAmount, $currFromAmount) has been added to trade processor." }
                                     } else {
-                                        logger.debug { "Amount ($initFromAmount, $currFromAmount) of ($marketIdx) ${markets.pathString()} hasn't been added to trade processor." }
+                                        logger.debug { "Amount ($initFromAmount, $currFromAmount) hasn't been added to trade processor." }
                                     }
 
                                     approve.complete(approved)
@@ -1048,43 +1146,43 @@ class PoloniexTrader(
                                 val trades = Array.of(receivedTrades)
 
                                 if (logger.isDebugEnabled) {
-                                    logger.debug("[${currentMarket.market}, ${currentMarket.orderType}] Received delayed trades: $trades")
+                                    logger.debug("Received delayed trades: $trades")
                                     if (soundSignalEnabled) SoundUtil.beep()
                                 }
 
                                 generalMutex.withLock {
                                     val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
+
                                     updatedMarkets = marketSplit._1
                                     val committedMarkets = marketSplit._2
 
-                                    logger.debug { "[${currentMarket.market}, ${currentMarket.orderType}] Splitting markets $updatedMarkets with $trades: [updatedMarkets = $updatedMarkets], [committedMarkets = $committedMarkets]" }
+                                    logger.debug { "Splitting markets: [updatedMarkets = $updatedMarkets], [committedMarkets = $committedMarkets]" }
 
                                     val fromAmount = (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
                                     if (fromAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                        logger.debug { "[${currentMarket.market}, ${currentMarket.orderType}] fromAmount is zero. Cancelling profit monitoring job..." }
+                                        logger.debug { "fromAmount is zero. Cancelling profit monitoring job..." }
 
                                         profitMonitoringJob.cancelAndJoin()
                                         cancelByProfitMonitoringJob.set(false)
 
-                                        logger.debug { "[${currentMarket.market}, ${currentMarket.orderType}] Profit monitoring job has been cancelled." }
+                                        logger.debug { "Profit monitoring job has been cancelled." }
                                     } else {
-                                        logger.debug { "[${currentMarket.market}, ${currentMarket.orderType}] fromAmount isn't zero $fromAmount. Continue..." }
+                                        logger.debug { "fromAmount isn't zero $fromAmount. Continue..." }
 
                                         updatedMarketsRef.set(updatedMarkets)
                                     }
 
-                                    if (newMarketIdx != modifiedMarkets.length()) {
+                                    if (newMarketIdx != updatedMarkets.length()) {
                                         val newId = UUID.randomUUID()
 
-                                        TransactionalOperator.create(tranManager)
-                                            .transactional(mono(Dispatchers.Unconfined) {
-                                                if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
-                                                    transactionsDao.updateActive(id, updatedMarkets, marketIdx)
-                                                }
+                                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                                            if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
+                                                transactionsDao.updateActive(id, updatedMarkets, marketIdx)
+                                            }
 
-                                                transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
-                                            }).retry().awaitFirstOrNull()
+                                            transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
+                                        }).retry().awaitFirstOrNull()
 
                                         TransactionIntent(newId, committedMarkets, newMarketIdx, TranIntentScope).start()
                                     } else {
@@ -1093,12 +1191,12 @@ class PoloniexTrader(
                                 }
                             }
 
-                        logger.debug { "[${currentMarket.market}, ${currentMarket.orderType}] Trades channel has closed successfully" }
+                        logger.debug { "Trades channel has been closed successfully" }
                     }
                 } catch (e: CancellationException) {
                 } catch (e: Throwable) {
                     finishedWithError = true
-                    logger.debug { "[${currentMarket.market}, ${currentMarket.orderType}] Path has finished with exception: ${e.message}" }
+                    logger.debug { "Path has finished with exception: ${e.message}" }
                 } finally {
                     val isCancelled = !isActive
 
@@ -1112,7 +1210,7 @@ class PoloniexTrader(
                         delayedProcessor.unregister(id)
 
                         if (cancelByProfitMonitoringJob.get()) {
-                            logger.debug { "[${currentMarket.market}, ${currentMarket.orderType}] Cancelled by profit monitoring job." }
+                            logger.debug { "Cancelled by profit monitoring job." }
                             return@withContext
                         }
 
@@ -1139,19 +1237,19 @@ class PoloniexTrader(
                                     if (!primaryCurrencyUnfilled) {
                                         unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, fromCurrencyCurrentAmount)
 
-                                        logger.debug { "Added [${currentMarket.market}, ${currentMarket.orderType}] [init = ($fromCurrencyInit, $fromCurrencyInitAmount)], [current = ($fromCurrencyCurrent, $fromCurrencyCurrentAmount)] to unfilled markets " }
+                                        logger.debug { "Added to unfilled markets [init = ($fromCurrencyInit, $fromCurrencyInitAmount)], [current = ($fromCurrencyCurrent, $fromCurrencyCurrentAmount)]" }
                                     }
                                 }).retry().awaitFirstOrNull()
 
-                                pathManager.removeIntent(id)
+                                intentManager.remove(id)
                             } else {
-                                logger.debug { "Path ($marketIdx) ${markets.pathString()} has not been added to unfilled markets because it is cancelled and finished without error " }
+                                logger.debug { "Current intent has not been added to unfilled markets because it is cancelled and finished without error " }
                             }
                         } else {
                             transactionsDao.deleteActive(id)
-                            pathManager.removeIntent(id)
+                            intentManager.remove(id)
 
-                            logger.debug { "Removed path ($marketIdx) ${markets.pathString()} from all stores because marketIdx == 0 || fromAmount == 0" }
+                            logger.debug { "Removed intent from all places because marketIdx == 0 || fromAmount == 0" }
                         }
                     }
                 }
@@ -1332,7 +1430,7 @@ class PoloniexTrader(
         ): Job {
             val parentJob = coroutineContext[Job]
 
-            return TranIntentScope.launch {
+            return launch(Job()) {
                 val startTime = Instant.now()
 
                 while (isActive) {
@@ -1369,7 +1467,7 @@ class PoloniexTrader(
                     var bestPath: Array<TranIntentMarket>?
 
                     while (true) {
-                        logger.debug { "Trying to find a new path for ${updatedMarkets.pathString()}..." }
+                        logger.debug { "Trying to find a new path..." }
 
                         bestPath = findNewPath(
                             initAmount,
@@ -1383,7 +1481,7 @@ class PoloniexTrader(
                             logger.debug { "A new path found ${bestPath.pathString()}" }
                             break
                         } else {
-                            logger.debug { "Path not found for ${updatedMarkets.pathString()}" }
+                            logger.debug { "Path not found" }
                         }
 
                         delay(60000)
@@ -1436,7 +1534,7 @@ class PoloniexTrader(
             get() = regStateCounter.get()
 
         suspend fun register(id: PathId, outputTrades: Channel<BareTrade>) {
-            logger.debug { "Trying to register path $id in Trade Scheduler..." }
+            logger.debug { "Trying to register path in Trade Scheduler..." }
 
             commonFromAmountMutex.withLock {
                 ids.addLast(id)
@@ -1445,19 +1543,19 @@ class PoloniexTrader(
                 regStateCounter.incrementAndGet()
             }
 
-            logger.debug { "Path $id has been successfully registered in Trade Scheduler..." }
+            logger.debug { "Path has been successfully registered in Trade Scheduler..." }
         }
 
         suspend fun unregister(id: PathId) {
             val approval = CompletableDeferred<Unit>()
 
-            logger.debug { "Trying to unregister path $id from Trade Scheduler..." }
+            logger.debug { "Trying to unregister path from Trade Scheduler..." }
 
             withContext(NonCancellable) {
                 unregisterMutex.withLock {
                     commonFromAmountMutex.withLock {
                         if (!ids.contains(id)) {
-                            logger.debug { "Path $id was already unregistered from Trade Scheduler earlier." }
+                            logger.debug { "Path was already unregistered from Trade Scheduler earlier." }
                             return@withContext
                         }
                         exitIntent.set(tuple(id, approval))
@@ -1465,9 +1563,9 @@ class PoloniexTrader(
                         commonFromAmountChannel.send(commonFromAmount)
                     }
 
-                    logger.debug { "Sending unregister request for path $id. Waiting for approval..." }
+                    logger.debug { "Sending unregister request for a path. Waiting for an approval..." }
                     approval.await()
-                    logger.debug { "Unregister request for $id has been approved." }
+                    logger.debug { "Unregister request has been approved." }
 
                     commonFromAmountMutex.withLock {
                         ids.remove(id)
@@ -1476,7 +1574,7 @@ class PoloniexTrader(
                         exitIntent.set(null)
                     }
 
-                    logger.debug { "Path $id has been successfully removed from Trade Scheduler" }
+                    logger.debug { "Path has been successfully removed from Trade Scheduler" }
                 }
             }
         }
@@ -1487,7 +1585,7 @@ class PoloniexTrader(
             withContext(NonCancellable) {
                 val unregisterIntentJob = launch(start = CoroutineStart.UNDISPATCHED) {
                     commonFromAmountChannel.consumeEach {
-                        logger.debug { "Unregister Job: Common from amount was changed. Approving any exit intents..." }
+                        logger.debug { "Unregister Job: commonFromAmount was changed. Approving any exit intents..." }
                         approveExitIntent()
                     }
                 }
@@ -1498,6 +1596,7 @@ class PoloniexTrader(
                     commonFromAmountMutex.withLock {
                         if (regStateId != null && regStateId != this@TradeScheduler.regStateCounter.get()) {
                             logger.debug { "Ignoring UnregisterAll job because stateId does not match" }
+                            unregisterIntentJob.cancelAndJoin()
                             return@withContext
                         }
 
@@ -1518,7 +1617,7 @@ class PoloniexTrader(
         }
 
         suspend fun addAmount(id: PathId, fromAmount: Amount): Boolean {
-            logger.debug { "Trying to add amount $fromAmount of $id to trade scheduler..." }
+            logger.debug { "Trying to add amount $fromAmount to trade scheduler..." }
 
             val added = commonFromAmountMutex.withLock {
                 val output = idOutput[id]
@@ -1531,9 +1630,9 @@ class PoloniexTrader(
             }
 
             if (added) {
-                logger.debug { "Amount $fromAmount of $id has been added to trade scheduler" }
+                logger.debug { "Amount $fromAmount has been added to trade scheduler" }
             } else {
-                logger.debug { "Amount $fromAmount of $id has not been added to trade scheduler" }
+                logger.debug { "Amount $fromAmount has not been added to trade scheduler" }
             }
 
             return added
@@ -1599,7 +1698,7 @@ class PoloniexTrader(
             }
 
             if (tradeFromAmount.compareTo(BigDecimal.ZERO) != 0) {
-                logger.debug { "Can't find path for received trade. Splitting received trade $trade with left paths $ids..." }
+                logger.debug { "Can't find path for received trade. Splitting received trade $trade with rest paths $ids..." }
 
                 for (id in ids) {
                     logger.debug { "Trying to split $id..." }
@@ -1614,15 +1713,9 @@ class PoloniexTrader(
                         if (exitIntent.get()?._1 != id) commonFromAmount -= idFromAmountValue
                         tradeFromAmount -= idFromAmountValue
 
-                        val idTargetAmountValue = if (orderType == OrderType.Buy) {
-                            buyQuoteAmount(trade.quoteAmount, trade.feeMultiplier)
-                        } else {
-                            sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
-                        }
+                        val (lTrade, rTrades) = splitTradeForward(trade, orderType, idFromAmountValue)
 
-                        val (lTrade, rTrades) = splitTrade(trade, orderType, idTargetAmountValue)
-
-                        logger.debug { "Splitted trade for $id: splitTrade(trade = $trade, orderType = $orderType, targetAmount = $idTargetAmountValue) => (lTrade = $lTrade, rTrade = $rTrades)" }
+                        logger.debug { "Splitted trade for $id: splitTrade(trade = $trade, orderType = $orderType, fromAmount = $idFromAmountValue) => (lTrade = $lTrade, rTrade = $rTrades)" }
 
                         trade = lTrade
 
@@ -1697,16 +1790,16 @@ class PoloniexTrader(
         }
 
         private suspend fun stopTradeWorker() {
-            logger.debug { "Trying to stop Delayed Trade Processor for ($market, $orderType)..." }
+            logger.debug { "Trying to stop Delayed Trade Processor..." }
             tradeWorkerJob?.cancelAndJoin()
             tradeWorkerJob = null
-            logger.debug { "Delayed Trade Processor for ($market, $orderType) has been stopped" }
+            logger.debug { "Delayed Trade Processor has been stopped" }
         }
 
         private fun startTradeWorker() {
             if (tradeWorkerJob != null) return
             tradeWorkerJob = launchTradeWorker()
-            logger.debug { "Delayed Trade Processor for ($market, $orderType) has been launched" }
+            logger.debug { "Delayed Trade Processor has been launched" }
         }
 
         private fun launchTradeWorker(): Job = scope.launch(Job()) {
@@ -1777,9 +1870,13 @@ class PoloniexTrader(
                     connectionError = false
                     prevRegStateId = scheduler.regStateId
 
+                    logger.debug { "Start market maker trade process" }
+
                     try {
                         coroutineScope {
                             launch(start = CoroutineStart.UNDISPATCHED) {
+                                logger.debug { "Start connection monitoring" }
+
                                 poloniexApi.connection.collect { connected ->
                                     if (!connected) throw DisconnectedException
                                 }
@@ -1790,6 +1887,8 @@ class PoloniexTrader(
                                     commonStateMutex.withLock {
                                         prevRegStateId = scheduler.regStateId
                                         val placeOrderResult = placeOrder(scheduler.commonFromAmountChannel.value)
+
+                                        logger.debug { "Order has been placed" }
 
                                         currOrderId = placeOrderResult._1
                                         prevPrice = placeOrderResult._2
@@ -1808,6 +1907,8 @@ class PoloniexTrader(
                             val timeoutMillis = timeout.toMillis()
                             var bookUpdateTime = System.currentTimeMillis()
                             var bookChangeCounter = 0
+
+                            logger.debug { "Start market maker movement process" }
 
                             scheduler.commonFromAmountChannel
                                 .asFlow()
@@ -1836,6 +1937,8 @@ class PoloniexTrader(
                                                     fixPriceGaps
                                                 ) ?: return@withContext
 
+                                                logger.debug { "Moved order (q = $quoteAmount, p = $price)" }
+
                                                 prevOrderId = currOrderId
                                                 currOrderId = orderId
                                                 prevPrice = price
@@ -1854,12 +1957,12 @@ class PoloniexTrader(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: DisconnectedException) {
-                        logger.debug { "TradeProcessor[$market, $orderType] Disconnected from Poloniex" }
+                        logger.debug { "Disconnected from Poloniex" }
 
                         withContext(NonCancellable) {
                             connectionError = true
                             poloniexApi.connection.filter { it }.first()
-                            logger.debug { "TradeProcessor[$market, $orderType] Connected to Poloniex" }
+                            logger.debug { "Connected to Poloniex" }
 
                             if (currOrderId != null) {
                                 cancelOrder(currOrderId!!)
@@ -1872,7 +1975,7 @@ class PoloniexTrader(
                     } finally {
                         withContext(NonCancellable) {
                             if (currOrderId == null) {
-                                logger.debug { "TradeProcessor[$market, $orderType] Don't have any opened orders" }
+                                logger.debug { "Don't have any opened orders" }
                                 return@withContext
                             }
 
@@ -1880,13 +1983,13 @@ class PoloniexTrader(
                             val cancelConfirmed = connectionError || cancelConfirmedDef?.isCompleted ?: true
                             if (!cancelConfirmed) cancelOrder(currOrderId!!)
                             val cancelConfirmTimeout = withTimeoutOrNull(Duration.ofMinutes(1).toMillis()) {
-                                logger.debug { "TradeProcessor[$market, $orderType] Waiting for order cancel confirmation..." }
+                                logger.debug { "Waiting for order cancel confirmation..." }
                                 cancelConfirmedDef?.await()
-                                logger.debug { "TradeProcessor[$market, $orderType] Order cancel confirmation event was received." }
+                                logger.debug { "Order cancel confirmation event has been received." }
                             }
 
                             if (cancelConfirmTimeout == null) {
-                                logger.warn { "TradeProcessor[$market, $orderType] Haven't received any cancel events within specified timeout" }
+                                logger.warn { "Haven't received any cancel events within specified timeout" }
                             }
 
                             currOrderId = null
@@ -1902,7 +2005,8 @@ class PoloniexTrader(
 
                     if (connectionError) continue
 
-                    // waiting for any balance changes
+                    logger.debug { "Waiting for any balance changes" }
+
                     withTimeoutOrNull(Duration.ofMinutes(2).toMillis()) {
                         scheduler.commonFromAmountChannel.asFlow()
                             .onStart { scheduler.approveExitIntent() }
@@ -2127,7 +2231,7 @@ class PoloniexTrader(
                     poloniexApi.cancelOrder(orderId)
                     break
                 } catch (e: OrderCompletedOrNotExistException) {
-                    logger.debug("[$market, $orderType] ${e.message}")
+                    logger.debug(e.message)
                     break
                 } catch (e: UnknownHostException) {
                     delay(2000)
@@ -2139,11 +2243,11 @@ class PoloniexTrader(
                 }
             }
 
-            logger.debug { "[$market, $orderType] Order $orderId is cancelled" }
+            logger.debug { "Order $orderId has been cancelled" }
         }
 
         private suspend fun recoverAfterPowerOff() {
-            logger.debug { "Trying to recover after power off on market ($market, $orderType)..." }
+            logger.debug { "Trying to recover after power off..." }
             val (orderId, tradeId) = transactionsDao.getLatestOrderAndTradeId(market, orderType) ?: run {
                 logger.debug { "Recover after power off is not required." }
                 return
@@ -2156,7 +2260,7 @@ class PoloniexTrader(
         private suspend fun processMissedTrades(orderId: Long, latestTradeId: Long) {
             while (true) {
                 try {
-                    logger.debug { "[$market, $orderType] Trying to process missed trades..." }
+                    logger.debug { "Trying to process missed trades..." }
 
                     val tradeList = poloniexApi.orderTrades(orderId).asSequence()
                         .filter { it.tradeId > latestTradeId }
@@ -2164,7 +2268,7 @@ class PoloniexTrader(
                         .toList()
 
                     if (tradeList.isNotEmpty()) {
-                        logger.debug { "[$market, $orderType] Processing missed trades $tradeList..." }
+                        logger.debug { "Processing missed trades $tradeList..." }
                         scheduler.addTrades(tradeList)
                     }
 
@@ -2221,12 +2325,12 @@ class PoloniexTrader(
                 logger.debug { "Creating new Delayed Trade Processor for ($market, $orderType)..." }
 
                 val orderBook = data.getOrderBookFlowBy(market)
-                val newProcessor = DelayedTradeProcessor(market, orderType, orderBook, scope)
+                val newProcessor = DelayedTradeProcessor(market, orderType, orderBook, scope + CoroutineName("DELAYED_TRADE_PROCESSOR_${market}_$orderType"))
                 processors[key] = newProcessor
 
                 val processorJob = newProcessor.start()
 
-                scope.launch(Job(), CoroutineStart.UNDISPATCHED) {
+                scope.launch(Job() + CoroutineName("DELAYED_TRADE_MANAGER_${market}_$orderType"), CoroutineStart.UNDISPATCHED) {
                     withContext(NonCancellable) {
                         processorJob.join()
                         logger.debug { "Delayed Trade Processor has completed its job in ($market, $orderType) market." }
@@ -2244,37 +2348,37 @@ class PoloniexTrader(
         }
     }
 
-    private class PathManager {
+    private class IntentManager {
         private val paths = mutableListOf<TransactionIntent>()
         private val mutex = Mutex()
 
-        suspend fun getIntent(markets: Array<TranIntentMarket>, marketIdx: Int): TransactionIntent? {
+        suspend fun get(markets: Array<TranIntentMarket>, marketIdx: Int): TransactionIntent? {
             return mutex.withLock {
-                logger.debug { "Trying to find intent in path manager for ($marketIdx) ${markets.pathString()}..." }
+                logger.debug { "Trying to find similar intent in path manager..." }
 
                 val intent = paths.find { it.marketIdx == marketIdx && areEqual(it.markets, markets) }
 
                 if (intent != null) {
-                    logger.debug { "Intent ${intent.id} was found in path manager for ($marketIdx) ${markets.pathString()}" }
+                    logger.debug { "Intent has been found in path manager" }
                 } else {
-                    logger.debug { "Intent was not found in path manager for ($marketIdx) ${markets.pathString()}" }
+                    logger.debug { "Intent has not been found in path manager" }
                 }
 
                 intent
             }
         }
 
-        suspend fun addIntent(intent: TransactionIntent) {
+        suspend fun add(intent: TransactionIntent) {
             mutex.withLock {
                 paths.add(intent)
-                logger.debug { "Intent ${intent.id} has been added to path manager" }
+                logger.debug { "Intent has been added to path manager" }
             }
         }
 
-        suspend fun removeIntent(intentId: UUID) {
+        suspend fun remove(intentId: UUID) {
             mutex.withLock {
                 paths.removeIf { it.id == intentId }
-                logger.debug { "Intent $intentId has been removed from path manager" }
+                logger.debug { "Intent has been removed from path manager" }
             }
         }
 

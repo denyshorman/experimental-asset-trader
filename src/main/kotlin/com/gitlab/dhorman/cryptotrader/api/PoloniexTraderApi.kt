@@ -18,6 +18,7 @@ import io.vavr.kotlin.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.reactive.awaitSingle
+import kotlinx.coroutines.withTimeout
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.*
 import reactor.core.publisher.Flux
@@ -174,7 +175,9 @@ class PoloniexTraderApi(
 
         val path = ExhaustivePath(tuple(fromCurrency, targetCurrency), chain.toVavrList())
 
-        poloniexTrader.tranRequests.send(path)
+        withTimeout(30000) {
+            poloniexTrader.tranRequests.send(path)
+        }
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active"])

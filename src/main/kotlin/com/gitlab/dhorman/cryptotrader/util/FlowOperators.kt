@@ -21,7 +21,7 @@ private open class ShareOperator<T>(
     private val upstream: Flow<T>,
     private val replayCount: Int = 0,
     private val gracePeriod: Duration? = null
-) : AbstractFlow<T>() {
+) {
     private var subscribers = 0L
     private val upstreamSubscriptionLock = Mutex()
     private val channel = BroadcastChannel<T>(Channel.BUFFERED)
@@ -40,24 +40,20 @@ private open class ShareOperator<T>(
         }
     }
 
-    override suspend fun collectSafely(collector: FlowCollector<T>) {
+    val shareOperator = channelFlow {
         try {
             coroutineScope {
                 launch {
                     if (replayCount > 0) {
                         queueLock?.withLock {
-                            withContext(this@coroutineScope.coroutineContext) {
-                                queue?.forEach {
-                                    collector.emit(it)
-                                }
+                            queue?.forEach {
+                                this@channelFlow.send(it)
                             }
                         }
                     }
 
-                    channel.consumeEach {
-                        withContext(this@coroutineScope.coroutineContext) {
-                            collector.emit(it)
-                        }
+                    this@ShareOperator.channel.consumeEach {
+                        this@channelFlow.send(it)
                     }
                 }
 
@@ -75,7 +71,7 @@ private open class ShareOperator<T>(
                                         }
                                     }
 
-                                    channel.send(it)
+                                    this@ShareOperator.channel.send(it)
                                 }
 
                                 logger.warn("Downstream flow completed in share operator $upstream")
@@ -109,7 +105,7 @@ private open class ShareOperator<T>(
 }
 
 fun <T> Flow<T>.share(replayCount: Int = 0, gracePeriod: Duration? = null): Flow<T> {
-    return ShareOperator(this, replayCount, gracePeriod)
+    return ShareOperator(this, replayCount, gracePeriod).shareOperator
 }
 
 fun <T> Channel<T>.buffer(scope: CoroutineScope, timespan: Duration): Channel<List<T>> {

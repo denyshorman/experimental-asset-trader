@@ -30,3 +30,6 @@ spring:
 #    server:
 #      mapping-path: /api/ws
 #      transport: websocket
+logging:
+  pattern:
+    console: "%clr(%date{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(%5level) %clr(--){faint} %clr([%thread]){faint} %clr(%.40logger{39}){cyan} %clr(:){faint} %msg%n%wEx"
