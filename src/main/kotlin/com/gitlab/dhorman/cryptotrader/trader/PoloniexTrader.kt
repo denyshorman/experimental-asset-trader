@@ -279,7 +279,7 @@ class PoloniexTrader(
                 return
             }
 
-        val updatedMarkets = Array.of<TranIntentMarket>(
+        val updatedMarkets = Array.of(
             TranIntentMarketCompleted(
                 Market(initCurrency, currentCurrency),
                 OrderSpeed.Instant,
@@ -1100,7 +1100,7 @@ class PoloniexTrader(
                 }
 
                 try {
-                    val tradesChannel = Channel<BareTrade>(Channel.UNLIMITED)
+                    val tradesChannel = Channel<List<BareTrade>>(Channel.UNLIMITED)
                     delayedProcessor.register(id, tradesChannel)
 
                     launch {
@@ -1143,7 +1143,7 @@ class PoloniexTrader(
                         tradesChannel
                             .asFlow()
                             .collect { receivedTrades ->
-                                val trades = Array.of(receivedTrades)
+                                val trades = receivedTrades.toArray()
 
                                 if (logger.isDebugEnabled) {
                                     logger.debug("Received delayed trades: $trades")
@@ -1394,28 +1394,6 @@ class PoloniexTrader(
                         }
 
                         trades.addLast(BareTrade(trade.amount, trade.price, takerFee))
-
-
-                        // Verify balance calculation and add adjustments
-
-                        val targetAmount = if (orderType == OrderType.Buy) {
-                            buyQuoteAmount(trade.amount, takerFee)
-                        } else {
-                            sellBaseAmount(trade.amount, trade.price, takerFee)
-                        }
-
-                        if (trade.takerAdjustment.compareTo(targetAmount) != 0) {
-                            logger.warn(
-                                "Not consistent amount calculation. " +
-                                    "Instant $orderType trade: $trade. " +
-                                    "Exchange amount: ${trade.takerAdjustment}. " +
-                                    "Calculated amount: $targetAmount"
-                            )
-
-                            /*val adjAmount = trade.takerAdjustment - targetAmount
-                            val adjTrade = adjustTargetAmount(adjAmount, orderType)
-                            trades.addLast(adjTrade)*/
-                        }
                     }
                 }
             } catch (e: CancellationException) {
@@ -1521,7 +1499,7 @@ class PoloniexTrader(
     private class TradeScheduler(private val orderType: OrderType) {
         private val ids = LinkedList<PathId>()
         private val idFromAmount = hashMapOf<PathId, Amount>()
-        private val idOutput = hashMapOf<PathId, Channel<BareTrade>>()
+        private val idOutput = hashMapOf<PathId, Channel<List<BareTrade>>>()
         private var commonFromAmount = BigDecimal.ZERO
         private val unregisterMutex = Mutex()
         private val exitIntent = AtomicReference<Tuple2<PathId, CompletableDeferred<Unit>>>(null)
@@ -1533,7 +1511,7 @@ class PoloniexTrader(
         val regStateId: Long
             get() = regStateCounter.get()
 
-        suspend fun register(id: PathId, outputTrades: Channel<BareTrade>) {
+        suspend fun register(id: PathId, outputTrades: Channel<List<BareTrade>>) {
             logger.debug { "Trying to register path in Trade Scheduler..." }
 
             commonFromAmountMutex.withLock {
@@ -1649,94 +1627,90 @@ class PoloniexTrader(
             logger.debug { "Trying to add trades $tradeList to trade scheduler..." }
 
             commonFromAmountMutex.withLock {
-                for (trade in tradeList) {
-                    addTrade(trade)
+                val idTrade = mutableMapOf<PathId, MutableList<BareTrade>>()
+
+                for (bareTrade in tradeList) {
+                    var trade = bareTrade
+
+                    var tradeFromAmount = if (orderType == OrderType.Buy) {
+                        buyBaseAmount(trade.quoteAmount, trade.price)
+                    } else {
+                        sellQuoteAmount(trade.quoteAmount)
+                    }
+
+                    logger.debug { "Trying to find client for received trade $bareTrade..." }
+
+                    for (id in ids) {
+                        if (tradeFromAmount.compareTo(BigDecimal.ZERO) == 0) {
+                            logger.debug { "tradeFromAmount is equal to zero. Exiting..." }
+                            break
+                        }
+
+                        val idFromAmountValue = idFromAmount.getValue(id)
+
+                        if (tradeFromAmount > idFromAmountValue) continue
+
+                        logger.debug { "Path $id matched received trade: tradeFromAmount=$tradeFromAmount, idFromAmountValue=$idFromAmountValue" }
+
+                        val newIdFromAmount = idFromAmountValue - tradeFromAmount
+                        idFromAmount[id] = newIdFromAmount
+                        if (exitIntent.get()?._1 != id) commonFromAmount -= tradeFromAmount
+                        tradeFromAmount = BigDecimal.ZERO
+
+                        idTrade.getOrPut(id, { mutableListOf() }).add(trade)
+                    }
+
+                    if (tradeFromAmount.compareTo(BigDecimal.ZERO) != 0) {
+                        logger.debug { "Can't find path for received trade. Splitting received trade $trade with available paths $ids..." }
+
+                        for (id in ids) {
+                            logger.debug { "Trying to split $id..." }
+
+                            if (tradeFromAmount.compareTo(BigDecimal.ZERO) == 0) break
+                            val idFromAmountValue = idFromAmount.getValue(id)
+
+                            if (idFromAmountValue.compareTo(BigDecimal.ZERO) == 0 || tradeFromAmount < idFromAmountValue) {
+                                logger.debug { "idFromAmount ($idFromAmountValue) == 0 or tradeFromAmount < idFromAmount ($tradeFromAmount < $idFromAmountValue)" }
+                                continue
+                            }
+
+                            idFromAmount[id] = BigDecimal.ZERO
+                            if (exitIntent.get()?._1 != id) commonFromAmount -= idFromAmountValue
+                            tradeFromAmount -= idFromAmountValue
+
+                            val (lTrade, rTrades) = splitTradeForward(trade, orderType, idFromAmountValue)
+
+                            logger.debug { "Split trade for $id: splitTrade(trade = $trade, orderType = $orderType, fromAmount = $idFromAmountValue) => (lTrade = $lTrade, rTrade = $rTrades)" }
+
+                            trade = lTrade
+                            idTrade.getOrPut(id, { mutableListOf() }).addAll(rTrades)
+                        }
+                    }
+
+                    if (tradeFromAmount.compareTo(BigDecimal.ZERO) != 0) {
+                        logger.error("No receiver found for received trade $trade.")
+                    }
                 }
-            }
 
-            logger.debug { "All trades $tradeList have been processed by trade scheduler." }
-        }
-
-        private suspend fun addTrade(bareTrade: BareTrade) {
-            var trade = bareTrade
-
-            var tradeFromAmount = if (orderType == OrderType.Buy) {
-                buyBaseAmount(trade.quoteAmount, trade.price)
-            } else {
-                sellQuoteAmount(trade.quoteAmount)
-            }
-
-            logger.debug { "Trying to find client for received trade $bareTrade..." }
-
-            for (id in ids) {
-                if (tradeFromAmount.compareTo(BigDecimal.ZERO) == 0) {
-                    logger.debug { "From amount of trade is equal to zero. Exiting..." }
-                    break
-                }
-
-                val idFromAmountValue = idFromAmount.getValue(id)
-
-                if (tradeFromAmount <= idFromAmountValue) {
-                    logger.debug { "Path $id matched received trade: tradeFromAmount=$tradeFromAmount, idFromAmountValue=$idFromAmountValue" }
-
-                    val newIdFromAmount = idFromAmountValue - tradeFromAmount
-                    idFromAmount[id] = newIdFromAmount
-                    if (exitIntent.get()?._1 != id) commonFromAmount -= tradeFromAmount
-                    tradeFromAmount = BigDecimal.ZERO
+                idTrade.forEach { (id, trades) ->
                     val output = idOutput.getValue(id)
+                    val fromAmount = idFromAmount[id]!!
 
-                    logger.debug { "Sending trade $trade to $id..." }
-                    output.send(trade)
-                    logger.debug { "Path $id has been processed the trade $trade" }
+                    logger.debug { "Sending trade $trades to $id..." }
+                    output.send(trades.toVavrList())
+                    logger.debug { "Path $id has been processed the trade $trades" }
 
-                    if (newIdFromAmount.compareTo(BigDecimal.ZERO) == 0) {
+                    if (fromAmount.compareTo(BigDecimal.ZERO) == 0) {
                         logger.debug { "Path's amount $id is equal to zero. Closing output channel..." }
                         output.close()
                         logger.debug { "Output channel for $id has been closed" }
                     }
                 }
+
+                commonFromAmountChannel.send(commonFromAmount)
             }
 
-            if (tradeFromAmount.compareTo(BigDecimal.ZERO) != 0) {
-                logger.debug { "Can't find path for received trade. Splitting received trade $trade with rest paths $ids..." }
-
-                for (id in ids) {
-                    logger.debug { "Trying to split $id..." }
-
-                    if (tradeFromAmount.compareTo(BigDecimal.ZERO) == 0) break
-                    val idFromAmountValue = idFromAmount.getValue(id)
-
-                    if (idFromAmountValue.compareTo(BigDecimal.ZERO) == 0) continue
-
-                    if (tradeFromAmount > idFromAmountValue) {
-                        idFromAmount[id] = BigDecimal.ZERO
-                        if (exitIntent.get()?._1 != id) commonFromAmount -= idFromAmountValue
-                        tradeFromAmount -= idFromAmountValue
-
-                        val (lTrade, rTrades) = splitTradeForward(trade, orderType, idFromAmountValue)
-
-                        logger.debug { "Splitted trade for $id: splitTrade(trade = $trade, orderType = $orderType, fromAmount = $idFromAmountValue) => (lTrade = $lTrade, rTrade = $rTrades)" }
-
-                        trade = lTrade
-
-                        val output = idOutput.getValue(id)
-
-                        for (rTrade in rTrades) {
-                            output.send(rTrade)
-                        }
-
-                        output.close()
-
-                        logger.debug { "Output channel for $id has been closed" }
-                    }
-                }
-            }
-
-            commonFromAmountChannel.send(commonFromAmount)
-
-            if (tradeFromAmount.compareTo(BigDecimal.ZERO) != 0) {
-                logger.error("No receiver found for received trade $trade.")
-            }
+            logger.debug { "All trades $tradeList have been processed by a trade scheduler." }
         }
 
         companion object {
@@ -1769,7 +1743,7 @@ class PoloniexTrader(
             }
         }
 
-        suspend fun register(id: PathId, outputTrades: Channel<BareTrade>) {
+        suspend fun register(id: PathId, outputTrades: Channel<List<BareTrade>>) {
             scheduler.register(id, outputTrades)
         }
 
@@ -1851,7 +1825,6 @@ class PoloniexTrader(
                     }
 
                     if (tradeList != null && !tradeList!!.isEmpty()) {
-                        adjustTrades(tradeList!!)
                         scheduler.addTrades(tradeList!!)
                     }
 
@@ -2279,31 +2252,6 @@ class PoloniexTrader(
                     if (logger.isDebugEnabled) logger.debug(e.message)
                     delay(1000)
                 }
-            }
-        }
-
-        private fun adjustTrades(trades: LinkedList<BareTrade>) {
-            if (orderType == OrderType.Sell || trades.size < 2) return
-
-            var fromAmountExpected = BigDecimal.ZERO
-            var fromAmountActual = BigDecimal.ZERO
-
-            trades.forEach { trade ->
-                fromAmountExpected += (trade.quoteAmount * trade.price).setScale(8, RoundingMode.DOWN)
-                fromAmountActual += (trade.quoteAmount * trade.price).setScale(8, RoundingMode.HALF_EVEN)
-            }
-
-            if (fromAmountExpected.compareTo(fromAmountActual) != 0) {
-                logger.warn(
-                    "Poloniex uses unexpected calculation for fromAmount. " +
-                        "Expected: $fromAmountExpected. " +
-                        "Actual*: $fromAmountActual. " +
-                        "Trades: $trades. " +
-                        "Please adjust trades accordingly"
-                )
-
-                val adjTrade = adjustFromAmount(fromAmountActual - fromAmountExpected)
-                trades.add(adjTrade)
             }
         }
     }

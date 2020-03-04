@@ -177,9 +177,20 @@ class PoloniexApi(
             jacksonTypeRef<List<AccountNotification>>(),
             privateApi = true
         )
-            .onEach {
+            .onEach { notifications ->
                 if (logger.isDebugEnabled) {
-                    logger.debug("Account Notifications: $it")
+                    var tradeNotificationExist = false
+                    for (notification in notifications) {
+                        if (notification is TradeNotification) {
+                            tradeNotificationExist = true
+                            break
+                        }
+                    }
+
+                    if (tradeNotificationExist) {
+                        val data = notifications.filter { it is TradeNotification || it is BalanceUpdate }
+                        logger.debug("Trade notifications: $data")
+                    }
                 }
             }
             .share()
