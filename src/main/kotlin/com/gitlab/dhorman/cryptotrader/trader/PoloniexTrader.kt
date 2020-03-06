@@ -21,8 +21,6 @@ import io.vavr.collection.Map
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ConflatedBroadcastChannel
-import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.awaitFirst
 import kotlinx.coroutines.reactive.awaitFirstOrNull
@@ -46,7 +44,6 @@ import java.time.Duration
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.Comparator
 
@@ -279,15 +276,26 @@ class PoloniexTrader(
                 return
             }
 
+        val f = BigDecimal("0.99910000")
+        val q = currentCurrencyAmount.divide(f, 8, RoundingMode.DOWN)
+        val p = if (q.compareTo(BigDecimal.ZERO) == 0) BigDecimal.ZERO else initCurrencyAmount.divide(q, 8, RoundingMode.DOWN)
+
+        val fr = buyBaseAmount(q, p)
+        val tr = buyQuoteAmount(q, f)
+
+        val fd = initCurrencyAmount - fr
+        val td = currentCurrencyAmount - tr
+
         val updatedMarkets = Array.of(
             TranIntentMarketCompleted(
                 Market(initCurrency, currentCurrency),
                 OrderSpeed.Instant,
                 CurrencyType.Base,
-                Array.of(
-                    adjustFromAmount(initCurrencyAmount),
-                    adjustTargetAmount(currentCurrencyAmount, OrderType.Buy)
-                )
+                listOfNotNull(
+                    BareTrade(q, p, f),
+                    if (fd.compareTo(BigDecimal.ZERO) != 0) adjustFromAmount(fd) else null,
+                    if (td.compareTo(BigDecimal.ZERO) != 0) adjustTargetAmount(td, OrderType.Buy) else null
+                ).toVavrList().toArray()
             ),
             TranIntentMarketPartiallyCompleted(
                 Market(initCurrency, currentCurrency),
@@ -826,50 +834,130 @@ class PoloniexTrader(
             val currMarketIdx = partiallyCompletedMarketIndex(currentMarkets)!!
             val prevMarketIdx = currMarketIdx - 1
 
-            if (prevMarketIdx >= 0) {
-                // 1. Add amount to trades of init market
-
-                if (initCurrencyAmount.compareTo(BigDecimal.ZERO) != 0) {
-                    val initMarket = updatedMarkets[0] as TranIntentMarketCompleted
-                    val newTrade = adjustFromAmount(currentCurrencyAmount)
-                    val newTrades = initMarket.trades.append(newTrade)
-                    val newMarket = TranIntentMarketCompleted(
-                        initMarket.market,
-                        initMarket.orderSpeed,
-                        initMarket.fromCurrencyType,
-                        newTrades
-                    )
-                    updatedMarkets = updatedMarkets.update(0, newMarket)
-                }
-
-
-                // 2. Add an amount to trades of previous market
-
-                val oldMarket = updatedMarkets[prevMarketIdx] as TranIntentMarketCompleted
-                val newTrade = adjustTargetAmount(currentCurrencyAmount, oldMarket.orderType)
-                val newTrades = oldMarket.trades.append(newTrade)
-                val newMarket = TranIntentMarketCompleted(
-                    oldMarket.market,
-                    oldMarket.orderSpeed,
-                    oldMarket.fromCurrencyType,
-                    newTrades
-                )
-                updatedMarkets = updatedMarkets.update(prevMarketIdx, newMarket)
+            val oldCurrentMarket = updatedMarkets[currMarketIdx] as TranIntentMarketPartiallyCompleted
+            var targetAmount = if (prevMarketIdx >= 0) {
+                (updatedMarkets[prevMarketIdx] as TranIntentMarketCompleted).targetAmount + currentCurrencyAmount
+            } else {
+                oldCurrentMarket.fromAmount + initCurrencyAmount + currentCurrencyAmount
             }
 
-            // 3. Update current market
-
-            val oldCurrentMarket = updatedMarkets[currMarketIdx] as TranIntentMarketPartiallyCompleted
+            // 1. Update current market.
             val newCurrentMarket = TranIntentMarketPartiallyCompleted(
                 oldCurrentMarket.market,
                 oldCurrentMarket.orderSpeed,
                 oldCurrentMarket.fromCurrencyType,
-                if (prevMarketIdx >= 0)
-                    (updatedMarkets[prevMarketIdx] as TranIntentMarketCompleted).targetAmount
-                else
-                    oldCurrentMarket.fromAmount + initCurrencyAmount + currentCurrencyAmount
+                targetAmount
             )
             updatedMarkets = updatedMarkets.update(currMarketIdx, newCurrentMarket)
+
+            // 2. Update another markets.
+
+            for (i in prevMarketIdx downTo 0) {
+                val market = updatedMarkets[i] as TranIntentMarketCompleted
+                val targetAmountDelta = targetAmount - market.targetAmount
+
+                if (targetAmountDelta.compareTo(BigDecimal.ZERO) == 0) break
+
+                if (market.orderType == OrderType.Buy) {
+                    val price = market.trades.asSequence().filter { !isAdjustmentTrade(it) }.map { it.price }.max() ?: BigDecimal.ONE
+                    val fee = market.trades.asSequence().filter { !isAdjustmentTrade(it) }.map { it.feeMultiplier }.max() ?: BigDecimal.ONE
+                    val quoteAmount = targetAmountDelta.divide(fee, 8, RoundingMode.DOWN)
+                    val trade = BareTrade(quoteAmount, price, fee)
+                    var newTrades = market.trades.append(trade)
+                    val targetAmountNew = newTrades.asSequence()
+                        .map { buyQuoteAmount(it.quoteAmount, it.feeMultiplier) }
+                        .fold(BigDecimal.ZERO, { a, b -> a + b })
+                    val targetAmountNewDelta = targetAmount - targetAmountNew
+                    if (targetAmountNewDelta.compareTo(BigDecimal.ZERO) != 0) {
+                        val adjTrade = adjustTargetAmount(targetAmountNewDelta, OrderType.Buy)
+                        newTrades = newTrades.append(adjTrade)
+                    }
+                    val newMarket = TranIntentMarketCompleted(market.market, market.orderSpeed, market.fromCurrencyType, newTrades)
+                    updatedMarkets = updatedMarkets.update(i, newMarket)
+                    targetAmount = newMarket.fromAmount
+                } else {
+                    val price = market.trades.asSequence().filter { !isAdjustmentTrade(it) }.map { it.price }.min() ?: BigDecimal.ONE
+                    val fee = market.trades.asSequence().filter { !isAdjustmentTrade(it) }.map { it.feeMultiplier }.min() ?: BigDecimal.ONE
+                    val quoteAmount = targetAmountDelta.divide(price, 8, RoundingMode.UP).divide(fee, 8, RoundingMode.UP)
+                    val trade = BareTrade(quoteAmount, price, fee)
+                    var newTrades = market.trades.append(trade)
+                    val targetAmountNew = newTrades.asSequence()
+                        .map {
+                            if (it.price.compareTo(BigDecimal.ZERO) == 0 && it.quoteAmount.compareTo(BigDecimal.ZERO) == 0)
+                                it.quoteAmount
+                            else
+                                sellBaseAmount(it.quoteAmount, it.price, it.feeMultiplier)
+                        }
+                        .fold(BigDecimal.ZERO, { a, b -> a + b })
+                    val targetAmountNewDelta = targetAmount - targetAmountNew
+                    if (targetAmountNewDelta.compareTo(BigDecimal.ZERO) != 0) {
+                        val adjTrade = adjustTargetAmount(targetAmountNewDelta, OrderType.Sell)
+                        newTrades = newTrades.append(adjTrade)
+                    }
+                    val newMarket = TranIntentMarketCompleted(market.market, market.orderSpeed, market.fromCurrencyType, newTrades)
+                    updatedMarkets = updatedMarkets.update(i, newMarket)
+                    targetAmount = newMarket.fromAmount
+                }
+            }
+
+            // 3. Add an amount to trades of init market.
+
+            if (prevMarketIdx >= 0 && initCurrencyAmount.compareTo(BigDecimal.ZERO) != 0) {
+                val initMarket = updatedMarkets[0] as TranIntentMarketCompleted
+
+                val fromAmountAllInitial = (currentMarkets[0] as TranIntentMarketCompleted).fromAmount
+                val fromAmountCalculated = initMarket.fromAmount
+                val deltaAmount = fromAmountAllInitial + initCurrencyAmount - fromAmountCalculated
+
+                val firstTradeIdx = initMarket.trades.asSequence()
+                    .filter { !isAdjustmentTrade(it) }
+                    .mapIndexed { i, _ -> i }
+                    .firstOrNull()
+
+                if (deltaAmount.compareTo(BigDecimal.ZERO) != 0 && firstTradeIdx != null) {
+                    val trade = initMarket.trades[firstTradeIdx]
+                    val newTradesList = if (initMarket.orderType == OrderType.Buy) {
+                        val fromAmount = buyBaseAmount(trade.quoteAmount, trade.price)
+                        val newFromAmount = fromAmount + deltaAmount
+                        val newPrice = newFromAmount.divide(trade.quoteAmount, 8, RoundingMode.DOWN)
+                        val newTrade = BareTrade(trade.quoteAmount, newPrice, trade.feeMultiplier)
+                        val calcNewFromAmount = buyBaseAmount(newTrade.quoteAmount, newTrade.price)
+                        val newFromAmountDelta = newFromAmount - calcNewFromAmount
+                        if (newFromAmountDelta.compareTo(BigDecimal.ZERO) != 0) {
+                            val adjTrade = adjustFromAmount(newFromAmountDelta)
+                            listOf(newTrade, adjTrade)
+                        } else {
+                            listOf(newTrade)
+                        }
+                    } else {
+                        val tradeFromAmount = sellQuoteAmount(trade.quoteAmount)
+                        val tradeTargetAmount = if (trade.price.compareTo(BigDecimal.ZERO) == 0 && trade.quoteAmount.compareTo(BigDecimal.ZERO) == 0) {
+                            trade.quoteAmount
+                        } else {
+                            sellBaseAmount(trade.quoteAmount, trade.price, trade.feeMultiplier)
+                        }
+                        val newFromAmount = tradeFromAmount + deltaAmount
+                        val newPrice = tradeTargetAmount.divide(newFromAmount, 8, RoundingMode.DOWN).divide(trade.feeMultiplier, 8, RoundingMode.DOWN)
+                        val newTrade = BareTrade(newFromAmount, newPrice, trade.feeMultiplier)
+                        val calcNewTargetAmount = sellBaseAmount(newTrade.quoteAmount, newTrade.price, newTrade.feeMultiplier)
+                        val newTargetAmountDelta = tradeTargetAmount - calcNewTargetAmount
+                        if (newTargetAmountDelta.compareTo(BigDecimal.ZERO) != 0) {
+                            val adjTrade = adjustTargetAmount(newTargetAmountDelta, OrderType.Sell)
+                            listOf(newTrade, adjTrade)
+                        } else {
+                            listOf(newTrade)
+                        }
+                    }
+                    val newTrades = initMarket.trades.removeAt(firstTradeIdx).appendAll(newTradesList)
+                    val newMarket = TranIntentMarketCompleted(initMarket.market, initMarket.orderSpeed, initMarket.fromCurrencyType, newTrades)
+                    updatedMarkets = updatedMarkets.update(0, newMarket)
+                } else {
+                    val newTrade = adjustFromAmount(currentCurrencyAmount)
+                    val newTrades = initMarket.trades.append(newTrade)
+                    val newMarket = TranIntentMarketCompleted(initMarket.market, initMarket.orderSpeed, initMarket.fromCurrencyType, newTrades)
+                    updatedMarkets = updatedMarkets.update(0, newMarket)
+                }
+            }
 
             return updatedMarkets
         }
@@ -973,13 +1061,13 @@ class PoloniexTrader(
                 TransactionalOperator.create(tranManager, object : TransactionDefinition {
                     override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
                 }).transactional(mono(Dispatchers.Unconfined) {
-                    val unfilledMarkets = unfilledMarketsDao.get(markets[0].fromCurrency, currentMarket.fromCurrency)
+                    val unfilledMarkets = unfilledMarketsDao.get(primaryCurrencies, currentMarket.fromCurrency)
 
                     val modifiedMarkets = mergeMarkets(markets, unfilledMarkets)
 
                     if (unfilledMarkets.length() != 0) {
                         transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
-                        unfilledMarketsDao.remove(markets[0].fromCurrency, currentMarket.fromCurrency)
+                        unfilledMarketsDao.remove(primaryCurrencies, currentMarket.fromCurrency)
 
                         logger.debug { "Merged unfilled amounts $unfilledMarkets into current intent. Modified markets: ${modifiedMarkets.pathString()}" }
                     }
@@ -1500,133 +1588,87 @@ class PoloniexTrader(
         private val ids = LinkedList<PathId>()
         private val idFromAmount = hashMapOf<PathId, Amount>()
         private val idOutput = hashMapOf<PathId, Channel<List<BareTrade>>>()
-        private var commonFromAmount = BigDecimal.ZERO
-        private val unregisterMutex = Mutex()
-        private val exitIntent = AtomicReference<Tuple2<PathId, CompletableDeferred<Unit>>>(null)
-        private val regStateCounter = AtomicLong(0)
+        private val idStatusNew = hashMapOf<PathId, Boolean>()
+        private val mutex = Mutex()
 
-        val commonFromAmountChannel = ConflatedBroadcastChannel(BigDecimal.ZERO)
-        val commonFromAmountMutex = Mutex()
-
-        val regStateId: Long
-            get() = regStateCounter.get()
-
-        suspend fun register(id: PathId, outputTrades: Channel<List<BareTrade>>) {
-            logger.debug { "Trying to register path in Trade Scheduler..." }
-
-            commonFromAmountMutex.withLock {
-                ids.addLast(id)
-                idFromAmount[id] = BigDecimal.ZERO
-                idOutput[id] = outputTrades
-                regStateCounter.incrementAndGet()
+        val fromAmount: Amount
+            get() {
+                return idFromAmount.asSequence().map { it.value }.fold(BigDecimal.ZERO) { a, b -> a + b }
             }
 
-            logger.debug { "Path has been successfully registered in Trade Scheduler..." }
+        suspend fun register(id: PathId, outputTrades: Channel<List<BareTrade>>) {
+            mutex.withLock {
+                logger.debug { "Trying to register path in Trade Scheduler..." }
+
+                ids.addLast(id)
+                idStatusNew[id] = true
+                idFromAmount[id] = BigDecimal.ZERO
+                idOutput[id] = outputTrades
+
+                logger.debug { "Path has been successfully registered in Trade Scheduler..." }
+            }
         }
 
         suspend fun unregister(id: PathId) {
-            val approval = CompletableDeferred<Unit>()
+            mutex.withLock {
+                logger.debug { "Trying to unregister path from Trade Scheduler..." }
 
-            logger.debug { "Trying to unregister path from Trade Scheduler..." }
-
-            withContext(NonCancellable) {
-                unregisterMutex.withLock {
-                    commonFromAmountMutex.withLock {
-                        if (!ids.contains(id)) {
-                            logger.debug { "Path was already unregistered from Trade Scheduler earlier." }
-                            return@withContext
-                        }
-                        exitIntent.set(tuple(id, approval))
-                        commonFromAmount -= idFromAmount.getValue(id)
-                        commonFromAmountChannel.send(commonFromAmount)
-                    }
-
-                    logger.debug { "Sending unregister request for a path. Waiting for an approval..." }
-                    approval.await()
-                    logger.debug { "Unregister request has been approved." }
-
-                    commonFromAmountMutex.withLock {
-                        ids.remove(id)
-                        idFromAmount.remove(id)
-                        idOutput.remove(id)?.close()
-                        exitIntent.set(null)
-                    }
-
-                    logger.debug { "Path has been successfully removed from Trade Scheduler" }
+                if (!ids.contains(id)) {
+                    logger.debug { "Path was already unregistered from Trade Scheduler earlier." }
+                    return
                 }
+
+                ids.remove(id)
+                idStatusNew.remove(id)
+                idFromAmount.remove(id)
+                idOutput.remove(id)?.close()
+
+                logger.debug { "Path has been successfully removed from Trade Scheduler" }
             }
         }
 
-        suspend fun unregisterAll(error: Throwable? = null, regStateId: Long? = null) {
-            logger.debug("Trying to unregister all paths...")
+        suspend fun unregisterAll(error: Throwable? = null) {
+            mutex.withLock {
+                logger.debug { "Start unregistering all paths..." }
+                for (id in ids) {
+                    if (idStatusNew[id] == true) continue
 
-            withContext(NonCancellable) {
-                val unregisterIntentJob = launch(start = CoroutineStart.UNDISPATCHED) {
-                    commonFromAmountChannel.consumeEach {
-                        logger.debug { "Unregister Job: commonFromAmount was changed. Approving any exit intents..." }
-                        approveExitIntent()
-                    }
+                    ids.remove(id)
+                    idStatusNew.remove(id)
+                    idFromAmount.remove(id)
+                    idOutput.remove(id)?.close(error)
                 }
-
-                var commonFromAmountChanged = false
-
-                unregisterMutex.withLock {
-                    commonFromAmountMutex.withLock {
-                        if (regStateId != null && regStateId != this@TradeScheduler.regStateCounter.get()) {
-                            logger.debug { "Ignoring UnregisterAll job because stateId does not match" }
-                            unregisterIntentJob.cancelAndJoin()
-                            return@withContext
-                        }
-
-                        logger.debug { "Start unregistering all paths..." }
-                        ids.forEach { id ->
-                            commonFromAmount -= idFromAmount.remove(id) ?: BigDecimal.ZERO
-                            idOutput.remove(id)?.close(error)
-                            commonFromAmountChanged = true
-                        }
-                        ids.clear()
-                        logger.debug { "All paths have been unregistered" }
-                    }
-                }
-
-                unregisterIntentJob.cancelAndJoin()
-                if (commonFromAmountChanged) commonFromAmountChannel.send(commonFromAmount)
+                logger.debug { "All paths have been unregistered" }
             }
         }
 
         suspend fun addAmount(id: PathId, fromAmount: Amount): Boolean {
-            logger.debug { "Trying to add amount $fromAmount to trade scheduler..." }
+            mutex.withLock {
+                logger.debug { "Trying to add amount $fromAmount to trade scheduler..." }
 
-            val added = commonFromAmountMutex.withLock {
-                val output = idOutput[id]
-                val idAmount = idFromAmount[id]
-                if (output == null || idAmount == null || output.isClosedForSend) return@withLock false
-                idFromAmount[id] = idAmount + fromAmount
-                commonFromAmount += fromAmount
-                commonFromAmountChannel.send(commonFromAmount)
-                return@withLock true
+                val added = run {
+                    val output = idOutput[id]
+                    val idAmount = idFromAmount[id]
+                    if (output == null || idAmount == null || output.isClosedForSend) return@run false
+                    idFromAmount[id] = idAmount + fromAmount
+                    return@run true
+                }
+
+                if (added) {
+                    idStatusNew[id] = false
+                    logger.debug { "Amount $fromAmount has been added to trade scheduler" }
+                } else {
+                    logger.debug { "Amount $fromAmount has not been added to trade scheduler" }
+                }
+
+                return added
             }
-
-            if (added) {
-                logger.debug { "Amount $fromAmount has been added to trade scheduler" }
-            } else {
-                logger.debug { "Amount $fromAmount has not been added to trade scheduler" }
-            }
-
-            return added
-        }
-
-        fun approveExitIntent() {
-            val exit = exitIntent.get() ?: return
-            val (id, approvement) = exit
-            approvement.complete(Unit)
-            logger.debug { "Trade scheduler has approved exit intent for $id" }
         }
 
         suspend fun addTrades(tradeList: kotlin.collections.List<BareTrade>) {
-            logger.debug { "Trying to add trades $tradeList to trade scheduler..." }
+            mutex.withLock {
+                logger.debug { "Trying to add trades $tradeList to trade scheduler..." }
 
-            commonFromAmountMutex.withLock {
                 val idTrade = mutableMapOf<PathId, MutableList<BareTrade>>()
 
                 for (bareTrade in tradeList) {
@@ -1654,7 +1696,6 @@ class PoloniexTrader(
 
                         val newIdFromAmount = idFromAmountValue - tradeFromAmount
                         idFromAmount[id] = newIdFromAmount
-                        if (exitIntent.get()?._1 != id) commonFromAmount -= tradeFromAmount
                         tradeFromAmount = BigDecimal.ZERO
 
                         idTrade.getOrPut(id, { mutableListOf() }).add(trade)
@@ -1675,7 +1716,6 @@ class PoloniexTrader(
                             }
 
                             idFromAmount[id] = BigDecimal.ZERO
-                            if (exitIntent.get()?._1 != id) commonFromAmount -= idFromAmountValue
                             tradeFromAmount -= idFromAmountValue
 
                             val (lTrade, rTrades) = splitTradeForward(trade, orderType, idFromAmountValue)
@@ -1707,10 +1747,8 @@ class PoloniexTrader(
                     }
                 }
 
-                commonFromAmountChannel.send(commonFromAmount)
+                logger.debug { "All trades $tradeList have been processed by a trade scheduler." }
             }
-
-            logger.debug { "All trades $tradeList have been processed by a trade scheduler." }
         }
 
         companion object {
@@ -1726,40 +1764,41 @@ class PoloniexTrader(
     ) {
         private val scheduler = TradeScheduler(orderType)
         private var tradeWorkerJob: Job? = null
+        private val mutex = Mutex()
 
         fun start(): Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
-                if (scheduler.commonFromAmountChannel.value.compareTo(BigDecimal.ZERO) != 0) {
-                    startTradeWorker()
-                }
-
-                scheduler.commonFromAmountChannel.consumeEach { fromAmount ->
-                    toggleTradeWorker(fromAmount)
-                }
+                delay(Long.MAX_VALUE)
             } finally {
                 withContext(NonCancellable) {
-                    stopTradeWorker()
+                    mutex.withLock {
+                        stopTradeWorker()
+                        scheduler.unregisterAll()
+                    }
                 }
             }
         }
 
         suspend fun register(id: PathId, outputTrades: Channel<List<BareTrade>>) {
-            scheduler.register(id, outputTrades)
+            mutex.withLock {
+                scheduler.register(id, outputTrades)
+            }
         }
 
         suspend fun unregister(id: PathId) {
-            scheduler.unregister(id)
+            mutex.withLock {
+                stopTradeWorker()
+                scheduler.unregister(id)
+                startTradeWorker()
+            }
         }
 
         suspend fun addAmount(id: PathId, fromAmount: Amount): Boolean {
-            return scheduler.addAmount(id, fromAmount)
-        }
-
-        private suspend fun toggleTradeWorker(fromAmount: Amount) {
-            if (fromAmount.compareTo(BigDecimal.ZERO) == 0) {
+            return mutex.withLock {
                 stopTradeWorker()
-            } else {
+                val amountAdded = scheduler.addAmount(id, fromAmount)
                 startTradeWorker()
+                amountAdded
             }
         }
 
@@ -1771,12 +1810,24 @@ class PoloniexTrader(
         }
 
         private fun startTradeWorker() {
-            if (tradeWorkerJob != null) return
-            tradeWorkerJob = launchTradeWorker()
+            if (tradeWorkerJob != null || scheduler.fromAmount.compareTo(BigDecimal.ZERO) == 0) return
+
+            val workerJob = launchTradeWorker()
+            tradeWorkerJob = workerJob
+            scope.launch(Job(), CoroutineStart.UNDISPATCHED) {
+                workerJob.join()
+                logger.debug { "Delayed Trade Processor has been stopped" }
+
+                mutex.withLock {
+                    if (tradeWorkerJob == workerJob) tradeWorkerJob = null
+                    startTradeWorker()
+                }
+            }
             logger.debug { "Delayed Trade Processor has been launched" }
         }
 
         private fun launchTradeWorker(): Job = scope.launch(Job()) {
+            val thisJob = coroutineContext[Job]
             var prevOrderId: Long? = null
             var currOrderId: Long? = null
             var latestTradeId: Long = -1
@@ -1786,7 +1837,8 @@ class PoloniexTrader(
             val orderCancelConfirmed = AtomicReference<CompletableDeferred<OrderUpdateType>?>(null)
             val commonStateMutex = Mutex()
 
-            recoverAfterPowerOff()
+            // TODO: Rethink recover mechanism
+            // recoverAfterPowerOff()
 
             val tradeMonitoringJob = launch(Job(), CoroutineStart.UNDISPATCHED) {
                 poloniexApi.accountNotificationStream.collect { notifications ->
@@ -1794,54 +1846,53 @@ class PoloniexTrader(
                     var orderCreateReceived: LimitOrderCreated? = null
                     var orderCancelReceived: OrderUpdate? = null
 
-                    commonStateMutex.withLock {
-                        for (notification in notifications) {
-                            when (notification) {
-                                is TradeNotification -> run {
-                                    if (currOrderId != null && notification.orderId == currOrderId || prevOrderId != null && notification.orderId == prevOrderId) {
-                                        if (notification.tradeId > latestTradeId) {
-                                            latestTradeId = notification.tradeId
-                                        }
+                    withContext(NonCancellable) {
+                        commonStateMutex.withLock {
+                            for (notification in notifications) {
+                                when (notification) {
+                                    is TradeNotification -> run {
+                                        if (currOrderId != null && notification.orderId == currOrderId || prevOrderId != null && notification.orderId == prevOrderId) {
+                                            if (notification.tradeId > latestTradeId) {
+                                                latestTradeId = notification.tradeId
+                                            }
 
-                                        if (tradeList == null) {
-                                            tradeList = LinkedList()
-                                        }
+                                            if (tradeList == null) {
+                                                tradeList = LinkedList()
+                                            }
 
-                                        tradeList!!.add(BareTrade(notification.amount, notification.price, notification.feeMultiplier))
+                                            tradeList!!.add(BareTrade(notification.amount, notification.price, notification.feeMultiplier))
+                                        }
                                     }
-                                }
-                                is LimitOrderCreated -> run {
-                                    if (notification.orderId == currOrderId) {
-                                        orderCreateReceived = notification
+                                    is LimitOrderCreated -> run {
+                                        if (notification.orderId == currOrderId) {
+                                            orderCreateReceived = notification
+                                        }
                                     }
-                                }
-                                is OrderUpdate -> run {
-                                    if (notification.orderId == currOrderId && notification.newAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                        orderCancelReceived = notification
+                                    is OrderUpdate -> run {
+                                        if (notification.orderId == currOrderId && notification.newAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                            orderCancelReceived = notification
+                                        }
                                     }
                                 }
                             }
+
+                            if (tradeList != null && !tradeList!!.isEmpty()) {
+                                scheduler.addTrades(tradeList!!)
+                                thisJob?.cancel()
+                            }
+
+                            if (orderCreateReceived != null) orderCreateConfirmed.get()?.complete(Unit)
+                            if (orderCancelReceived != null) orderCancelConfirmed.get()?.complete(orderCancelReceived!!.orderType)
                         }
                     }
-
-                    if (tradeList != null && !tradeList!!.isEmpty()) {
-                        scheduler.addTrades(tradeList!!)
-                    }
-
-                    if (orderCreateReceived != null) orderCreateConfirmed.get()?.complete(Unit)
-                    if (orderCancelReceived != null) orderCancelConfirmed.get()?.complete(orderCancelReceived!!.orderType)
                 }
             }
 
             try {
-                var connectionError: Boolean
                 var closeAllError: Throwable?
-                var prevRegStateId: Long
 
                 while (isActive) {
                     closeAllError = null
-                    connectionError = false
-                    prevRegStateId = scheduler.regStateId
 
                     logger.debug { "Start market maker trade process" }
 
@@ -1856,26 +1907,25 @@ class PoloniexTrader(
                             }
 
                             withContext(NonCancellable) {
-                                scheduler.commonFromAmountMutex.withLock {
-                                    commonStateMutex.withLock {
-                                        prevRegStateId = scheduler.regStateId
-                                        val placeOrderResult = placeOrder(scheduler.commonFromAmountChannel.value)
+                                commonStateMutex.withLock {
+                                    if (thisJob?.isCancelled == true) return@withContext
 
-                                        logger.debug { "Order has been placed" }
+                                    val placeOrderResult = placeOrder(scheduler.fromAmount)
 
-                                        currOrderId = placeOrderResult._1
-                                        prevPrice = placeOrderResult._2
-                                        prevQuoteAmount = placeOrderResult._3
+                                    logger.debug { "Order has been placed" }
 
-                                        orderCreateConfirmed.set(CompletableDeferred())
-                                        orderCancelConfirmed.set(CompletableDeferred())
-                                    }
+                                    currOrderId = placeOrderResult._1
+                                    prevPrice = placeOrderResult._2
+                                    prevQuoteAmount = placeOrderResult._3
+
+                                    orderCreateConfirmed.set(CompletableDeferred())
+                                    orderCancelConfirmed.set(CompletableDeferred())
                                 }
                             }
 
                             orderCreateConfirmed.get()?.await()
 
-                            var prevFromAmount = scheduler.commonFromAmountChannel.value
+                            var prevFromAmount = scheduler.fromAmount
                             val timeout = Duration.ofSeconds(4)
                             val timeoutMillis = timeout.toMillis()
                             var bookUpdateTime = System.currentTimeMillis()
@@ -1883,49 +1933,61 @@ class PoloniexTrader(
 
                             logger.debug { "Start market maker movement process" }
 
-                            scheduler.commonFromAmountChannel
-                                .asFlow()
-                                .combine(orderBook.returnLastIfNoValueWithinSpecifiedTime(timeout)) { _, book -> book }
-                                .conflate()
-                                .collect { book ->
+                            orderBook.returnLastIfNoValueWithinSpecifiedTime(timeout).conflate().collect { book ->
+                                try {
                                     withContext(NonCancellable) {
-                                        scheduler.commonFromAmountMutex.withLock {
-                                            commonStateMutex.withLock {
-                                                bookChangeCounter = if (bookChangeCounter >= 10) 0 else bookChangeCounter + 1
-                                                val currFromAmount = scheduler.commonFromAmountChannel.value
-                                                val forceMove = prevFromAmount.compareTo(currFromAmount) != 0
-                                                val now = System.currentTimeMillis()
-                                                val fixPriceGaps = now - bookUpdateTime >= timeoutMillis || bookChangeCounter == 0
-                                                bookUpdateTime = now
-                                                prevFromAmount = currFromAmount
-                                                prevRegStateId = scheduler.regStateId
+                                        commonStateMutex.withLock {
+                                            if (thisJob?.isCancelled == true) return@withContext
 
-                                                val (orderId, price, quoteAmount) = moveOrder(
-                                                    book,
-                                                    currOrderId!!,
-                                                    prevPrice!!,
-                                                    prevQuoteAmount!!,
-                                                    currFromAmount,
-                                                    forceMove,
-                                                    fixPriceGaps
-                                                ) ?: return@withContext
+                                            bookChangeCounter = if (bookChangeCounter >= 10) 0 else bookChangeCounter + 1
+                                            val currFromAmount = scheduler.fromAmount
+                                            val forceMove = prevFromAmount.compareTo(currFromAmount) != 0
+                                            val now = System.currentTimeMillis()
+                                            val fixPriceGaps = now - bookUpdateTime >= timeoutMillis || bookChangeCounter == 0
+                                            bookUpdateTime = now
+                                            prevFromAmount = currFromAmount
 
-                                                logger.debug { "Moved order (q = $quoteAmount, p = $price)" }
+                                            val (orderId, price, quoteAmount) = moveOrder(
+                                                book,
+                                                currOrderId!!,
+                                                prevPrice!!,
+                                                prevQuoteAmount!!,
+                                                currFromAmount,
+                                                forceMove,
+                                                fixPriceGaps
+                                            ) ?: return@withContext
 
-                                                prevOrderId = currOrderId
-                                                currOrderId = orderId
-                                                prevPrice = price
-                                                prevQuoteAmount = quoteAmount
+                                            logger.debug { "Moved order (q = $quoteAmount, p = $price)" }
 
-                                                orderCreateConfirmed.set(CompletableDeferred())
-                                                orderCancelConfirmed.set(CompletableDeferred())
-                                            }
+                                            prevOrderId = currOrderId
+                                            currOrderId = orderId
+                                            prevPrice = price
+                                            prevQuoteAmount = quoteAmount
+
+                                            orderCreateConfirmed.set(CompletableDeferred())
+                                            orderCancelConfirmed.set(CompletableDeferred())
                                         }
                                     }
-
-                                    orderCreateConfirmed.get()?.await()
-                                    scheduler.approveExitIntent()
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Throwable) {
+                                    when (e) {
+                                        is OrderCompletedOrNotExistException,
+                                        is InvalidOrderNumberException,
+                                        is NotEnoughCryptoException,
+                                        is AmountMustBeAtLeastException,
+                                        is TotalMustBeAtLeastException,
+                                        is RateMustBeLessThanException -> run {
+                                            logger.debug(e.message)
+                                            delay(60000)
+                                            throw e
+                                        }
+                                        else -> throw e
+                                    }
                                 }
+
+                                orderCreateConfirmed.get()?.await()
+                            }
                         }
                     } catch (e: CancellationException) {
                         throw e
@@ -1933,65 +1995,53 @@ class PoloniexTrader(
                         logger.debug { "Disconnected from Poloniex" }
 
                         withContext(NonCancellable) {
-                            connectionError = true
                             poloniexApi.connection.filter { it }.first()
                             logger.debug { "Connected to Poloniex" }
-
-                            if (currOrderId != null) {
-                                cancelOrder(currOrderId!!)
-                                processMissedTrades(currOrderId!!, latestTradeId)
-                            }
                         }
                     } catch (e: Throwable) {
                         logger.debug(e.message)
                         closeAllError = e
                     } finally {
                         withContext(NonCancellable) {
-                            if (currOrderId == null) {
-                                logger.debug { "Don't have any opened orders" }
-                                return@withContext
-                            }
+                            try {
+                                if (currOrderId == null) {
+                                    logger.debug { "Don't have any opened orders" }
+                                    return@withContext
+                                }
 
-                            val cancelConfirmedDef = orderCancelConfirmed.get()
-                            val cancelConfirmed = connectionError || cancelConfirmedDef?.isCompleted ?: true
-                            if (!cancelConfirmed) cancelOrder(currOrderId!!)
-                            val cancelConfirmTimeout = withTimeoutOrNull(Duration.ofMinutes(1).toMillis()) {
-                                logger.debug { "Waiting for order cancel confirmation..." }
-                                cancelConfirmedDef?.await()
-                                logger.debug { "Order cancel confirmation event has been received." }
-                            }
+                                val cancelConfirmedDef = orderCancelConfirmed.get()
+                                val cancelConfirmed = cancelConfirmedDef?.isCompleted ?: true
+                                if (!cancelConfirmed) cancelOrder(currOrderId!!)
+                                val cancelConfirmTimeout = withTimeoutOrNull(Duration.ofMinutes(1).toMillis()) {
+                                    logger.debug { "Waiting for order cancel confirmation..." }
+                                    cancelConfirmedDef?.await()
+                                    logger.debug { "Order cancel confirmation event has been received." }
+                                }
 
-                            if (cancelConfirmTimeout == null) {
-                                logger.warn { "Haven't received any cancel events within specified timeout" }
-                            }
+                                if (cancelConfirmTimeout == null) {
+                                    logger.warn { "Haven't received any cancel events within specified timeout" }
+                                }
 
-                            currOrderId = null
-                            prevOrderId = null
+                                val processedMissedTrades = processMissedTrades(currOrderId!!, latestTradeId)
+
+                                if (processedMissedTrades) {
+                                    thisJob?.cancel()
+                                }
+
+                                currOrderId = null
+                                prevOrderId = null
+                            } finally {
+                                if (closeAllError != null) {
+                                    scheduler.unregisterAll(closeAllError)
+                                    thisJob?.cancel()
+                                }
+                            }
                         }
-
-                        scheduler.approveExitIntent()
-
-                        if (closeAllError != null) {
-                            scheduler.unregisterAll(closeAllError, prevRegStateId)
-                        }
-                    }
-
-                    if (connectionError) continue
-
-                    logger.debug { "Waiting for any balance changes" }
-
-                    withTimeoutOrNull(Duration.ofMinutes(2).toMillis()) {
-                        scheduler.commonFromAmountChannel.asFlow()
-                            .onStart { scheduler.approveExitIntent() }
-                            .onEach { scheduler.approveExitIntent() }
-                            .filter { it.compareTo(BigDecimal.ZERO) != 0 }
-                            .first()
                     }
                 }
             } finally {
                 withContext(NonCancellable) {
                     tradeMonitoringJob.cancelAndJoin()
-                    scheduler.unregisterAll()
                 }
             }
         }
@@ -2230,7 +2280,7 @@ class PoloniexTrader(
             processMissedTrades(orderId, tradeId)
         }
 
-        private suspend fun processMissedTrades(orderId: Long, latestTradeId: Long) {
+        private suspend fun processMissedTrades(orderId: Long, latestTradeId: Long): Boolean {
             while (true) {
                 try {
                     logger.debug { "Trying to process missed trades..." }
@@ -2240,12 +2290,13 @@ class PoloniexTrader(
                         .map { trade -> BareTrade(trade.amount, trade.price, trade.fee) }
                         .toList()
 
-                    if (tradeList.isNotEmpty()) {
+                    return if (tradeList.isNotEmpty()) {
                         logger.debug { "Processing missed trades $tradeList..." }
                         scheduler.addTrades(tradeList)
+                        true
+                    } else {
+                        false
                     }
-
-                    break
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
