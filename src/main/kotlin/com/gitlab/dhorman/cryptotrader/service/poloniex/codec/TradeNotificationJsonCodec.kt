@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.JsonDeserializer
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.module.kotlin.treeToValue
-import com.gitlab.dhorman.cryptotrader.core.oneMinus
+import com.gitlab.dhorman.cryptotrader.core.oneMinusAdjPoloniex
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.TradeNotification
 import java.math.BigDecimal
 import java.time.LocalDateTime
@@ -23,7 +23,7 @@ object TradeNotificationJsonCodec {
                 arrayNode[1].asLong(),
                 codec.treeToValue(arrayNode[2])!!,
                 codec.treeToValue(arrayNode[3])!!,
-                codec.treeToValue<BigDecimal>(arrayNode[4])!!.oneMinus,
+                codec.treeToValue<BigDecimal>(arrayNode[4])!!.oneMinusAdjPoloniex,
                 codec.treeToValue(arrayNode[5])!!,
                 arrayNode[6].asLong(),
                 codec.treeToValue(arrayNode[7])!!, // TODO: Investigate Can't parse websocket message: arrayNode[7] must not be null

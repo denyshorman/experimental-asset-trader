@@ -467,7 +467,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
     val fee: Flow<FeeMultiplier> = run {
         suspend fun fetchFee(): FeeMultiplier {
             val fee = poloniexApi.feeInfo()
-            return FeeMultiplier(fee.makerFee.oneMinus, fee.takerFee.oneMinus)
+            return FeeMultiplier(fee.makerFee.oneMinusAdjPoloniex, fee.takerFee.oneMinusAdjPoloniex)
         }
 
         channelFlow {
