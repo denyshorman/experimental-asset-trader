@@ -16,6 +16,27 @@ import java.math.BigDecimal
 
 @Repository
 class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: DatabaseClient) {
+    suspend fun getAll(): List<Tuple4<Currency, Amount, Currency, Amount>> {
+        return databaseClient.execute(
+            """
+            SELECT init_currency, init_currency_amount, current_currency, current_currency_amount
+            FROM poloniex_unfilled_markets
+            """.trimIndent()
+        )
+            .fetch().all()
+            .map {
+                tuple(
+                    it["init_currency"] as Currency,
+                    it["init_currency_amount"] as Amount,
+                    it["current_currency"] as Currency,
+                    it["current_currency_amount"] as Amount
+                )
+            }
+            .collectList()
+            .map { it.toVavrList() }
+            .awaitSingle()
+    }
+
     suspend fun get(id: Long): Tuple4<Currency, Amount, Currency, Amount>? {
         return databaseClient.execute(
             """
@@ -82,20 +103,39 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
         initCurrencyAmount: Amount,
         currentCurrency: Currency,
         currentCurrencyAmount: Amount
-    ): Long {
-        return databaseClient.execute(
+    ) {
+        databaseClient.execute(
             """
             INSERT INTO poloniex_unfilled_markets(init_currency, init_currency_amount, current_currency, current_currency_amount)
             VALUES ($1, $2, $3, $4)
-            RETURNING id
+            ON CONFLICT (init_currency, current_currency) DO UPDATE SET
+            init_currency_amount = EXCLUDED.init_currency_amount + poloniex_unfilled_markets.init_currency_amount,
+            current_currency_amount = EXCLUDED.current_currency_amount + poloniex_unfilled_markets.current_currency_amount
             """.trimIndent()
         )
             .bind(0, initCurrency)
             .bind(1, initCurrencyAmount)
             .bind(2, currentCurrency)
             .bind(3, currentCurrencyAmount)
-            .fetch().one()
-            .map { it["id"] as Long }
-            .awaitSingle()
+            .then()
+            .awaitFirstOrNull()
+    }
+
+    suspend fun add(initCurrency: Currency, initCurrencyAmount: Amount, unfilledAmounts: List<Tuple2<Currency, Amount>>) {
+        if (unfilledAmounts.size() == 0) return
+
+        val values = unfilledAmounts.asSequence().map { "('$initCurrency','$initCurrencyAmount','${it._1}','${it._2}')" }.joinToString()
+
+        databaseClient.execute(
+            """
+            INSERT INTO poloniex_unfilled_markets(init_currency, init_currency_amount, current_currency, current_currency_amount)
+            VALUES $values
+            ON CONFLICT (init_currency, current_currency) DO UPDATE SET
+            init_currency_amount = EXCLUDED.init_currency_amount + poloniex_unfilled_markets.init_currency_amount,
+            current_currency_amount = EXCLUDED.current_currency_amount + poloniex_unfilled_markets.current_currency_amount
+            """.trimIndent()
+        )
+            .then()
+            .awaitFirstOrNull()
     }
 }

@@ -83,6 +83,7 @@ class PoloniexTrader(
         tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
         delayedTradeManager = DelayedTradeManager(tranIntentScope)
 
+        collectRoundingLeftovers()
         startMonitoringForTranRequests(tranIntentScope)
         resumeSleepingTransactions(tranIntentScope)
 
@@ -117,6 +118,51 @@ class PoloniexTrader(
             logger.debug { "Trying to cancel all Poloniex transactions..." }
 
             tranIntentScope.cancel()
+        }
+    }
+
+    private suspend fun collectRoundingLeftovers() {
+        coroutineScope {
+            val allBalancesAsync = async {
+                val allBalances = data.balances.first()
+                allBalances.removeAll(primaryCurrencies)
+            }
+            val activePathsAsync = async {
+                transactionsDao.getActive().asSequence()
+                    .map {
+                        val markets = it._2
+                        val idx = partiallyCompletedMarketIndex(markets)!!
+                        val market = markets[idx] as TranIntentMarketPartiallyCompleted
+                        tuple(market.fromCurrency, market.fromAmount)
+                    }
+                    .groupBy({ it._1 }, { it._2 })
+                    .mapValues { it.value.fold(BigDecimal.ZERO) { a, b -> a + b } }
+            }
+            val unfilledAmountsAsync = async {
+                unfilledMarketsDao.getAll()
+                    .groupBy({ it._3 }, { it._4 })
+                    .mapValues { it.value.fold(BigDecimal.ZERO) { a, b -> a + b } }
+            }
+
+            val allBalances = allBalancesAsync.await()
+            val activePaths = activePathsAsync.await()
+            val unfilledAmounts = unfilledAmountsAsync.await()
+
+            val roundingLeftovers = allBalances.toVavrStream().map {
+                val currency = it._1
+                val allAmount = it._2._1
+
+                val activePathAmount = activePaths.getOrDefault(currency, BigDecimal.ZERO)
+                val unfilledAmount = unfilledAmounts.getOrDefault(currency, BigDecimal.ZERO)
+
+                val delta = allAmount - (activePathAmount + unfilledAmount)
+
+                tuple(currency, delta)
+            }.filter { it._2 > BigDecimal.ZERO }.toList()
+
+            unfilledMarketsDao.add(primaryCurrencies.first(), BigDecimal.ZERO, roundingLeftovers)
+
+            logger.debug { "Added rounding leftovers $roundingLeftovers to unfilled amount list " }
         }
     }
 
