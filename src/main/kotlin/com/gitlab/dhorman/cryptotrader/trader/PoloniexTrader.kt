@@ -1320,16 +1320,32 @@ class PoloniexTrader(
                                     && primaryCurrencies.contains(fromCurrencyInit)
                                     && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
 
-                                TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
-                                    transactionsDao.deleteActive(id)
-                                    if (!primaryCurrencyUnfilled) {
-                                        unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, fromCurrencyCurrentAmount)
-
-                                        logger.debug { "Added to unfilled markets [init = ($fromCurrencyInit, $fromCurrencyInitAmount)], [current = ($fromCurrencyCurrent, $fromCurrencyCurrentAmount)]" }
-                                    }
-                                }).retry().awaitFirstOrNull()
-
                                 intentManager.remove(id)
+
+                                if (primaryCurrencyUnfilled) {
+                                    transactionsDao.deleteActive(id)
+                                } else {
+                                    val existingIntentCandidate = intentManager.get(updatedMarkets, marketIdx)
+                                    val mergedToSimilarIntent = existingIntentCandidate?.merge(fromCurrencyInitAmount, fromCurrencyCurrentAmount)
+
+                                    if (mergedToSimilarIntent == true) {
+                                        transactionsDao.deleteActive(id)
+                                        logger.debug { "Current intent has been merged into ${existingIntentCandidate.id}" }
+                                    } else {
+                                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                                            transactionsDao.deleteActive(id)
+                                            unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, fromCurrencyCurrentAmount)
+                                        }).retry().awaitFirstOrNull()
+
+                                        logger.debug {
+                                            """
+                                                Added to unfilled markets
+                                                [init = ($fromCurrencyInit, $fromCurrencyInitAmount)],
+                                                [current = ($fromCurrencyCurrent, $fromCurrencyCurrentAmount)]
+                                            """.trimIndent()
+                                        }
+                                    }
+                                }
                             } else {
                                 logger.debug { "Current intent has not been added to unfilled markets because it is cancelled and finished without error " }
                             }
@@ -1500,7 +1516,7 @@ class PoloniexTrader(
                 val startTime = Instant.now()
 
                 while (isActive) {
-                    delay(10000)
+                    delay(2000)
                     var updatedMarkets = updatedMarketsRef.get()
 
                     val initAmount = updatedMarkets.first().fromAmount(updatedMarkets, 0)
@@ -1509,7 +1525,9 @@ class PoloniexTrader(
                     val profitable = initAmount < targetAmount
                     val timeout = Duration.between(startTime, Instant.now()).toMinutes() > 40
 
-                    if (profitable && !timeout) continue
+                    if (profitable && !timeout) {
+                        continue
+                    }
 
                     logger.debug {
                         val path = updatedMarkets.pathString()
@@ -1591,9 +1609,11 @@ class PoloniexTrader(
         private val idStatusNew = hashMapOf<PathId, Boolean>()
         private val mutex = Mutex()
 
+        private val idFromAmountCommon = AtomicReference(BigDecimal.ZERO)
+
         val fromAmount: Amount
             get() {
-                return idFromAmount.asSequence().map { it.value }.fold(BigDecimal.ZERO) { a, b -> a + b }
+                return idFromAmountCommon.get()
             }
 
         suspend fun register(id: PathId, outputTrades: Channel<List<BareTrade>>) {
@@ -1613,7 +1633,7 @@ class PoloniexTrader(
             mutex.withLock {
                 logger.debug { "Trying to unregister path from Trade Scheduler..." }
 
-                if (!ids.contains(id)) {
+                if (!pathExists(id)) {
                     logger.debug { "Path was already unregistered from Trade Scheduler earlier." }
                     return
                 }
@@ -1622,6 +1642,8 @@ class PoloniexTrader(
                 idStatusNew.remove(id)
                 idFromAmount.remove(id)
                 idOutput.remove(id)?.close()
+
+                recalculateCommonFromAmount()
 
                 logger.debug { "Path has been successfully removed from Trade Scheduler" }
             }
@@ -1637,9 +1659,16 @@ class PoloniexTrader(
                     idStatusNew.remove(id)
                     idFromAmount.remove(id)
                     idOutput.remove(id)?.close(error)
+
+                    logger.debug { "Unregistered path $id" }
                 }
+                recalculateCommonFromAmount()
                 logger.debug { "All paths have been unregistered" }
             }
+        }
+
+        fun pathExists(id: PathId): Boolean {
+            return ids.contains(id)
         }
 
         suspend fun addAmount(id: PathId, fromAmount: Amount): Boolean {
@@ -1656,6 +1685,7 @@ class PoloniexTrader(
 
                 if (added) {
                     idStatusNew[id] = false
+                    recalculateCommonFromAmount()
                     logger.debug { "Amount $fromAmount has been added to trade scheduler" }
                 } else {
                     logger.debug { "Amount $fromAmount has not been added to trade scheduler" }
@@ -1748,7 +1778,14 @@ class PoloniexTrader(
                 }
 
                 logger.debug { "All trades $tradeList have been processed by a trade scheduler." }
+
+                recalculateCommonFromAmount()
             }
+        }
+
+        private fun recalculateCommonFromAmount() {
+            val newFromAmount = idFromAmount.asSequence().map { it.value }.fold(BigDecimal.ZERO) { a, b -> a + b }
+            idFromAmountCommon.set(newFromAmount)
         }
 
         companion object {
@@ -1787,6 +1824,11 @@ class PoloniexTrader(
 
         suspend fun unregister(id: PathId) {
             mutex.withLock {
+                if (!scheduler.pathExists(id)) {
+                    logger.debug { "Unregister is not required because path has already been removed" }
+                    return
+                }
+
                 stopTradeWorker()
                 scheduler.unregister(id)
                 startTradeWorker()
@@ -1978,7 +2020,7 @@ class PoloniexTrader(
                                         is AmountMustBeAtLeastException,
                                         is TotalMustBeAtLeastException,
                                         is RateMustBeLessThanException -> run {
-                                            logger.debug(e.message)
+                                            logger.debug("${e.message}; fromAmount: ${scheduler.fromAmount};")
                                             delay(60000)
                                             throw e
                                         }
@@ -1999,7 +2041,7 @@ class PoloniexTrader(
                             logger.debug { "Connected to Poloniex" }
                         }
                     } catch (e: Throwable) {
-                        logger.debug(e.message)
+                        logger.debug("${e.message}; fromAmount: ${scheduler.fromAmount};")
                         closeAllError = e
                     } finally {
                         withContext(NonCancellable) {
