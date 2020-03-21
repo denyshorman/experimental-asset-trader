@@ -201,7 +201,7 @@ class PoloniexTrader(
             val targetAmount = markets.last().targetAmount(markets, markets.length() - 1)
 
             if (initAmount > targetAmount) {
-                logger.debug { "Restored path $id is not profitable (${targetAmount - initAmount}). Trying to find new path..." }
+                logger.debug { "Restored path $id is not profitable (${targetAmount - initAmount}). Trying to find a new path..." }
 
                 val currMarket = markets[startMarketIdx] as TranIntentMarketPartiallyCompleted
                 val fromCurrency = currMarket.fromCurrency
@@ -1115,7 +1115,7 @@ class PoloniexTrader(
                         transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
                         unfilledMarketsDao.remove(primaryCurrencies, currentMarket.fromCurrency)
 
-                        logger.debug { "Merged unfilled amounts $unfilledMarkets into current intent. Modified markets: ${modifiedMarkets.pathString()}" }
+                        logger.debug { "Merged unfilled amounts $unfilledMarkets into current intent. Before: $markets ; After: $modifiedMarkets" }
                     }
 
                     modifiedMarkets
@@ -1182,7 +1182,10 @@ class PoloniexTrader(
 
                     val (unfilledTradeMarkets, committedMarkets) = splitMarkets(modifiedMarkets, marketIdx, trades)
 
-                    logger.debug { "Splitting markets $modifiedMarkets with $trades: [unfilledTradeMarkets = $unfilledTradeMarkets], [committedMarkets = $committedMarkets]" }
+                    logger.debug {
+                        "Splitting markets (markets = $modifiedMarkets, idx = $marketIdx, trades = $trades) => " +
+                            "[updatedMarkets = $unfilledTradeMarkets], [committedMarkets = $committedMarkets]"
+                    }
 
                     val unfilledFromAmount = unfilledTradeMarkets[marketIdx].fromAmount(unfilledTradeMarkets, marketIdx)
 
@@ -1285,12 +1288,16 @@ class PoloniexTrader(
                                 }
 
                                 generalMutex.withLock {
-                                    val marketSplit = splitMarkets(updatedMarkets, marketIdx, trades)
+                                    val oldMarkets = updatedMarkets
+                                    val marketSplit = splitMarkets(oldMarkets, marketIdx, trades)
 
                                     updatedMarkets = marketSplit._1
                                     val committedMarkets = marketSplit._2
 
-                                    logger.debug { "Splitting markets: [updatedMarkets = $updatedMarkets], [committedMarkets = $committedMarkets]" }
+                                    logger.debug {
+                                        "Splitting markets (markets = $oldMarkets, idx = $marketIdx, trades = $trades) => " +
+                                            "[updatedMarkets = $updatedMarkets], [committedMarkets = $committedMarkets]"
+                                    }
 
                                     val fromAmount = (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
@@ -1384,11 +1391,9 @@ class PoloniexTrader(
                                         }).retry().awaitFirstOrNull()
 
                                         logger.debug {
-                                            """
-                                                Added to unfilled markets
-                                                [init = ($fromCurrencyInit, $fromCurrencyInitAmount)],
-                                                [current = ($fromCurrencyCurrent, $fromCurrencyCurrentAmount)]
-                                            """.trimIndent()
+                                            "Added to unfilled markets " +
+                                            "[init = ($fromCurrencyInit, $fromCurrencyInitAmount)], " +
+                                            "[current = ($fromCurrencyCurrent, $fromCurrencyCurrentAmount)]"
                                         }
                                     }
                                 }
@@ -1560,6 +1565,7 @@ class PoloniexTrader(
 
             return launch(Job()) {
                 val startTime = Instant.now()
+                var counter = 0L
 
                 while (isActive) {
                     delay(2000)
@@ -1572,6 +1578,9 @@ class PoloniexTrader(
                     val timeout = Duration.between(startTime, Instant.now()).toMinutes() > 40
 
                     if (profitable && !timeout) {
+                        if (counter++ % 15 == 0L) {
+                            logger.debug { "Expected profit: +${targetAmount - initAmount}" }
+                        }
                         continue
                     }
 
