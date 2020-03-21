@@ -1698,7 +1698,7 @@ class PoloniexTrader(
         suspend fun unregisterAll(error: Throwable? = null) {
             mutex.withLock {
                 logger.debug { "Start unregistering all paths..." }
-                for (id in ids) {
+                for (id in ids.toVavrList()) {
                     if (idStatusNew[id] == true) continue
 
                     ids.remove(id)
