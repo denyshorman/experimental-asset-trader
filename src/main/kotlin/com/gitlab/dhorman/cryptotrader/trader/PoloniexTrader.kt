@@ -957,7 +957,17 @@ class PoloniexTrader(
 
                 val firstTradeIdx = initMarket.trades.asSequence()
                     .filter { !isAdjustmentTrade(it) }
-                    .mapIndexed { i, _ -> i }
+                    .mapIndexed { i, trade ->
+                        val fromAmount = if (initMarket.orderType == OrderType.Buy) {
+                            buyBaseAmount(trade.quoteAmount, trade.price)
+                        } else {
+                            sellQuoteAmount(trade.quoteAmount)
+                        }
+                        tuple(i, trade, fromAmount + deltaAmount)
+                    }
+                    .filter { it._3 > BigDecimal.ZERO }
+                    .sortedByDescending { it._3 }
+                    .map { it._1 }
                     .firstOrNull()
 
                 if (deltaAmount.compareTo(BigDecimal.ZERO) != 0 && firstTradeIdx != null) {
