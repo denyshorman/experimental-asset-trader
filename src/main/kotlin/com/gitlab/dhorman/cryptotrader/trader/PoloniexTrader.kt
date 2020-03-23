@@ -1442,7 +1442,6 @@ class PoloniexTrader(
         ): Array<BareTrade>? {
             val trades = LinkedList<BareTrade>()
             val feeMultiplier = feeFlow.first() // TODO: Remove when Poloniex will fix the bug with fee
-            var unfilledAmount = fromCurrencyAmount
 
             val orderType = if (market.baseCurrency == fromCurrency) {
                 OrderType.Buy
@@ -1453,40 +1452,38 @@ class PoloniexTrader(
             try {
                 var retryCount = 0
 
-                while (unfilledAmount.compareTo(BigDecimal.ZERO) != 0) {
-                    val firstSimulatedTrade = simulateInstantTrades(unfilledAmount, orderType, orderBookFlow, feeFlow).firstOrNull()?._2
+                while (true) {
+                    val simulatedInstantTrades = simulateInstantTrades(fromCurrencyAmount, orderType, orderBookFlow, feeFlow).toList(LinkedList())
 
-                    if (firstSimulatedTrade == null) {
+                    if (simulatedInstantTrades.isEmpty()) {
                         logger.warn("Can't do instant trade. Wait...")
                         delay(2000)
                         continue
                     }
 
-                    val expectQuoteAmount = firstSimulatedTrade.quoteAmount
+                    logger.debug { "Simulated instant trades before execution: $simulatedInstantTrades" }
+
+                    val lastTradePrice = simulatedInstantTrades.last()._2.price
+
+                    val expectQuoteAmount = if (orderType == OrderType.Buy) {
+                        calcQuoteAmount(fromCurrencyAmount, lastTradePrice)
+                    } else {
+                        fromCurrencyAmount
+                    }
 
                     if (expectQuoteAmount.compareTo(BigDecimal.ZERO) == 0) {
-                        logger.debug("Quote amount for trade is equal to zero. Unfilled amount: $unfilledAmount")
+                        logger.debug("Quote amount for trade is equal to zero. From an amount: $fromCurrencyAmount")
                         if (trades.size == 0) return null else break
                     }
 
                     val transaction = try {
-                        logger.debug { "Trying to $orderType on market $market with price ${firstSimulatedTrade.price} and amount $expectQuoteAmount" }
+                        logger.debug { "Trying to $orderType on market $market with price $lastTradePrice and amount $expectQuoteAmount" }
 
                         withContext(NonCancellable) {
                             if (orderType == OrderType.Buy) {
-                                poloniexApi.buy(
-                                    market,
-                                    firstSimulatedTrade.price,
-                                    expectQuoteAmount,
-                                    BuyOrderType.FillOrKill
-                                )
+                                poloniexApi.buy(market, lastTradePrice, expectQuoteAmount, BuyOrderType.FillOrKill)
                             } else {
-                                poloniexApi.sell(
-                                    market,
-                                    firstSimulatedTrade.price,
-                                    expectQuoteAmount,
-                                    BuyOrderType.FillOrKill
-                                )
+                                poloniexApi.sell(market, lastTradePrice, expectQuoteAmount, BuyOrderType.FillOrKill)
                             }
                         }
                     } catch (e: UnableToFillOrderException) {
@@ -1540,12 +1537,6 @@ class PoloniexTrader(
                     logger.debug { "Instant $orderType trades received: ${transaction.trades}" }
 
                     for (trade in transaction.trades) {
-                        unfilledAmount -= if (orderType == OrderType.Buy) {
-                            buyBaseAmount(trade.amount, trade.price)
-                        } else {
-                            sellQuoteAmount(trade.amount)
-                        }
-
                         val takerFee = if (transaction.feeMultiplier.compareTo(feeMultiplier.taker) != 0) {
                             logger.warn(
                                 "Poloniex still has a bug with fees. " +
@@ -1560,6 +1551,8 @@ class PoloniexTrader(
 
                         trades.addLast(BareTrade(trade.amount, trade.price, takerFee))
                     }
+
+                    break
                 }
             } catch (e: CancellationException) {
             }
