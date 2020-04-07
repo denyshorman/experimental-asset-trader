@@ -2,7 +2,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 group = "com.gitlab.dhorman"
 version = versioning.info.full
-java.sourceCompatibility = JavaVersion.VERSION_1_8
+java.sourceCompatibility = JavaVersion.VERSION_11
 
 val swaggerVersion = "3.0.0-SNAPSHOT"
 
@@ -14,9 +14,9 @@ configurations {
 }
 
 plugins {
-    kotlin("jvm") version "1.3.61"
-    kotlin("plugin.spring") version "1.3.61"
-    id("org.springframework.boot") version "2.2.5.RELEASE"
+    kotlin("jvm") version "1.3.71"
+    kotlin("plugin.spring") version "1.3.71"
+    id("org.springframework.boot") version "2.3.0.M4"
     id("io.spring.dependency-management") version "1.0.9.RELEASE"
     id("net.nemerosa.versioning") version "2.8.2"
 }
@@ -43,9 +43,9 @@ dependencies {
     implementation("io.projectreactor.kotlin:reactor-kotlin-extensions")
     implementation("org.slf4j:slf4j-api:1.7.26")
     implementation("ch.qos.logback:logback-classic:1.2.3")
-    implementation("io.github.microutils:kotlin-logging:1.7.8")
-    implementation("io.vavr:vavr-kotlin:0.10.0")
-    implementation("io.vavr:vavr-jackson:0.10.0")
+    implementation("io.github.microutils:kotlin-logging:1.7.9")
+    implementation("io.vavr:vavr-kotlin:0.10.2")
+    implementation("io.vavr:vavr-jackson:0.10.2")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     implementation("com.fasterxml.jackson.module:jackson-module-parameter-names")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8")
@@ -57,25 +57,18 @@ dependencies {
     implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
     implementation("io.springfox:springfox-bean-validators:$swaggerVersion")
-    implementation("org.springframework.boot.experimental:spring-boot-starter-data-r2dbc")
+    implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
     implementation("org.springframework.plugin:spring-plugin-core:2.0.0.RELEASE") // TODO: Remove when springfox and spring will be released
 
     runtimeOnly("io.r2dbc:r2dbc-postgresql")
     developmentOnly("org.springframework.boot:spring-boot-devtools")
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.4.0")
-    testImplementation("org.mockito:mockito-core:2.26.0")
-    testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.1.0")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.6.1")
+    testImplementation("org.mockito:mockito-core:3.3.3")
+    testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.2.0")
     testImplementation("io.projectreactor:reactor-test")
-    testImplementation("org.springframework.boot.experimental:spring-boot-test-autoconfigure-r2dbc")
     testImplementation("org.springframework.boot:spring-boot-starter-test") {
         exclude(group = "org.junit.vintage", module = "junit-vintage-engine")
-    }
-}
-
-dependencyManagement {
-    imports {
-        mavenBom("org.springframework.boot.experimental:spring-boot-bom-r2dbc:0.1.0.M3")
     }
 }
 
