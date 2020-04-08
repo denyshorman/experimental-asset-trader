@@ -73,7 +73,9 @@ class PoloniexApi(
 
     val connection = run {
         channelFlow {
-            while (true) {
+            logger.debug("Starting Poloniex connection channel")
+
+            while (isActive) {
                 try {
                     val session = webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
                         mono(Dispatchers.Unconfined) {
@@ -156,7 +158,9 @@ class PoloniexApi(
                     logger.info("Connection closed with $PoloniexWebSocketApiUrl")
                 }
             }
-        }.distinctUntilChanged().share(1)
+
+            logger.debug("Closing Poloniex connection channel")
+        }.distinctUntilChanged().share(1, Duration.ofSeconds(60))
     }
 
     /**
@@ -198,7 +202,7 @@ class PoloniexApi(
 
     fun orderBookStream(marketId: MarketId): Flow<Tuple2<PriceAggregatedBook, OrderBookNotification>> {
         return channelFlow {
-            while (true) {
+            while (isActive) {
                 try {
                     coroutineScope {
                         var book = PriceAggregatedBook()

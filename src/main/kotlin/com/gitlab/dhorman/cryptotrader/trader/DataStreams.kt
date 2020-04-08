@@ -33,7 +33,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val currencies: Flow<Tuple2<Map<Currency, CurrencyDetails>, Map<Int, Currency>>> = run {
         channelFlow {
-            while (true) {
+            while (isActive) {
                 try {
                     val currencies = poloniexApi.currencies()
                     send(tuple(currencies, currencies.map { k, v -> tuple(v.id, k) }))
@@ -50,7 +50,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val balances: Flow<Map<Currency, Tuple2<Amount, Amount>>> = run {
         channelFlow {
-            mainLoop@ while (true) {
+            mainLoop@ while (isActive) {
                 try {
                     val rawApiBalances = poloniexApi.completeBalances()
 
@@ -259,7 +259,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         channelFlow {
             var prevMarketsSet = mutableSetOf<Int>()
 
-            while (true) {
+            while (isActive) {
                 try {
                     val tickers = poloniexApi.ticker()
                     var marketIntStringMap: Map<MarketId, Market> = HashMap.empty()
@@ -318,7 +318,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val openOrders: Flow<Map<Long, OpenOrderWithMarket>> = run {
         channelFlow {
-            while (true) {
+            while (isActive) {
                 try {
                     var allOpenOrders = poloniexApi.allOpenOrders()
                     send(allOpenOrders)
@@ -417,7 +417,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         }
 
         channelFlow {
-            while (true) {
+            while (isActive) {
                 try {
                     var allTickers = poloniexApi.ticker().map(::mapTicker)
                     send(allTickers)
@@ -471,7 +471,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
         }
 
         channelFlow {
-            while (true) {
+            while (isActive) {
                 try {
                     send(fetchFee())
                     break
@@ -484,7 +484,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
             }
 
             // TODO: How to get fee instantly without pooling ?
-            while (true) {
+            while (isActive) {
                 delay(10 * 60 * 1000)
 
                 try {
@@ -500,7 +500,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
     val dayVolume: Flow<Map<Market, Tuple2<Amount, Amount>>> = run {
         channelFlow {
-            while (true) {
+            while (isActive) {
                 try {
                     send(poloniexApi.dayVolume())
                     delay(3 * 60 * 1000)

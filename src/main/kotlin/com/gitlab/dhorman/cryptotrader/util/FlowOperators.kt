@@ -43,7 +43,7 @@ private open class ShareOperator<T>(
     val shareOperator = channelFlow {
         try {
             coroutineScope {
-                launch {
+                launch(start = CoroutineStart.UNDISPATCHED) {
                     if (replayCount > 0) {
                         queueLock?.withLock {
                             queue?.forEach {
