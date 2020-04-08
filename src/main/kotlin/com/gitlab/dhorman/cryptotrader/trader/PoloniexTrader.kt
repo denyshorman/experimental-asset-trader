@@ -65,12 +65,14 @@ class PoloniexTrader(
     private val intentManager = IntentManager()
 
     @Volatile
-    var primaryCurrencies: List<Currency> = list("USDT", "USDC")
+    var primaryCurrencies: List<Currency> = list("USDT", "USDC", "USDJ", "PAX")
 
     @Volatile
     var fixedAmount: Map<Currency, Amount> = hashMap(
-        "USDT" to BigDecimal(109),
-        "USDC" to BigDecimal(0)
+        "USDT" to BigDecimal(108),
+        "USDC" to BigDecimal(0),
+        "USDJ" to BigDecimal(0),
+        "PAX" to BigDecimal(0)
     )
 
     val tranRequests = Channel<ExhaustivePath>(Channel.RENDEZVOUS)
