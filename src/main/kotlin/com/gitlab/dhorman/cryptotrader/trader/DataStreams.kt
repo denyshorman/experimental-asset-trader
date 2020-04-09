@@ -26,10 +26,18 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
+import javax.annotation.PostConstruct
+import javax.annotation.PreDestroy
 
 @Component
 class DataStreams(private val poloniexApi: PoloniexApi) {
     private val logger = KotlinLogging.logger {}
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    @PreDestroy
+    fun stop() {
+        scope.cancel()
+    }
 
     val currencies: Flow<Tuple2<Map<Currency, CurrencyDetails>, Map<Int, Currency>>> = run {
         channelFlow {
@@ -45,7 +53,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(2000)
                 }
             }
-        }.share(1, Duration.ofMinutes(30))
+        }.share(1, Duration.ofMinutes(30), scope)
     }
 
     val balances: Flow<Map<Currency, Tuple2<Amount, Amount>>> = run {
@@ -252,7 +260,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(1000)
                 }
             }
-        }.share(1, Duration.ofDays(1024))
+        }.share(1, Duration.ofDays(1024), scope)
     }
 
     val markets: Flow<MarketData> = run {
@@ -287,7 +295,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(2000)
                 }
             }
-        }.share(1, Duration.ofMinutes(30))
+        }.share(1, Duration.ofMinutes(30), scope)
     }
 
     val tradesStat: Flow<Map<MarketId, Flow<TradeStat>>> = run {
@@ -313,7 +321,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                 send(map)
             }
-        }.share(1, Duration.ofMinutes(20))
+        }.share(1, Duration.ofMinutes(20), scope)
     }
 
     val openOrders: Flow<Map<Long, OpenOrderWithMarket>> = run {
@@ -394,7 +402,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(1000)
                 }
             }
-        }.share(1, Duration.ofDays(1024))
+        }.share(1, Duration.ofDays(1024), scope)
     }
 
     val tickers: Flow<Map<Market, Ticker>> = run {
@@ -457,11 +465,11 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                 val newBookStream = bookStream.map { (book, update) ->
                     OrderBookData(marketInfo._1.get(marketId).get(), marketId, book, update)
-                }.share(1, Duration.ofMinutes(2))
+                }.share(1, Duration.ofMinutes(2), scope)
 
                 Tuple2(marketId, newBookStream)
             }
-        }.share(1, Duration.ofMinutes(30))
+        }.share(1, Duration.ofMinutes(30), scope)
     }
 
     val fee: Flow<FeeMultiplier> = run {
@@ -495,7 +503,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
                 }
             }
-        }.share(1, Duration.ofDays(1024))
+        }.share(1, Duration.ofDays(1024), scope)
     }
 
     val dayVolume: Flow<Map<Market, Tuple2<Amount, Amount>>> = run {
@@ -511,7 +519,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     delay(2000)
                 }
             }
-        }.share(1, Duration.ofMinutes(20))
+        }.share(1, Duration.ofMinutes(20), scope)
     }
 
     suspend fun getMarketId(market: Market): MarketId? {

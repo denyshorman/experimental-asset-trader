@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 private val logger = KotlinLogging.logger {}
@@ -20,7 +21,8 @@ private val logger = KotlinLogging.logger {}
 private open class ShareOperator<T>(
     private val upstream: Flow<T>,
     private val replayCount: Int = 0,
-    private val gracePeriod: Duration? = null
+    private val gracePeriod: Duration? = null,
+    private val scope: CoroutineScope? = null
 ) {
     private var subscribers = 0L
     private val upstreamSubscriptionLock = Mutex()
@@ -38,6 +40,11 @@ private open class ShareOperator<T>(
             queue = null
             queueLock = null
         }
+    }
+
+    private suspend fun cancelUpstreamSubscriptionJob() {
+        upstreamSubscriptionJob?.cancelAndJoin()
+        upstreamSubscriptionJob = null
     }
 
     val shareOperator = channelFlow {
@@ -84,18 +91,25 @@ private open class ShareOperator<T>(
             withContext(NonCancellable) {
                 upstreamSubscriptionLock.withLock {
                     if (--subscribers == 0L) {
-                        if (gracePeriod != null) {
-                            gracePeriodTimerJob = GlobalScope.launch {
-                                delay(gracePeriod.toMillis())
+                        if (gracePeriod != null && scope != null && scope.isActive) {
+                            val launched = AtomicBoolean(false)
 
-                                withContext(NonCancellable) {
-                                    upstreamSubscriptionJob?.cancelAndJoin()
-                                    upstreamSubscriptionJob = null
+                            gracePeriodTimerJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                try {
+                                    launched.set(true)
+                                    delay(gracePeriod.toMillis())
+                                } finally {
+                                    if (!scope.isActive || this.isActive) {
+                                        withContext(NonCancellable) {
+                                            cancelUpstreamSubscriptionJob()
+                                        }
+                                    }
                                 }
                             }
+
+                            if (!launched.get()) cancelUpstreamSubscriptionJob()
                         } else {
-                            upstreamSubscriptionJob?.cancelAndJoin()
-                            upstreamSubscriptionJob = null
+                            cancelUpstreamSubscriptionJob()
                         }
                     }
                 }
@@ -104,8 +118,8 @@ private open class ShareOperator<T>(
     }
 }
 
-fun <T> Flow<T>.share(replayCount: Int = 0, gracePeriod: Duration? = null): Flow<T> {
-    return ShareOperator(this, replayCount, gracePeriod).shareOperator
+fun <T> Flow<T>.share(replayCount: Int = 0, gracePeriod: Duration? = null, scope: CoroutineScope? = null): Flow<T> {
+    return ShareOperator(this, replayCount, gracePeriod, scope).shareOperator
 }
 
 fun <T> Channel<T>.buffer(scope: CoroutineScope, timespan: Duration): Channel<List<T>> {

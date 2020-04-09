@@ -160,7 +160,7 @@ class PoloniexApi(
             }
 
             logger.debug("Closing Poloniex connection channel")
-        }.distinctUntilChanged().share(1, Duration.ofSeconds(60))
+        }.distinctUntilChanged().share(1)
     }
 
     /**
