@@ -98,11 +98,12 @@ private open class ShareOperator<T>(
                                 try {
                                     launched.set(true)
                                     delay(gracePeriod.toMillis())
-                                } finally {
-                                    if (!scope.isActive || this.isActive) {
-                                        withContext(NonCancellable) {
-                                            cancelUpstreamSubscriptionJob()
-                                        }
+                                } catch (ignored: Throwable) {
+                                }
+
+                                if (!scope.isActive || this.isActive) {
+                                    withContext(NonCancellable) {
+                                        cancelUpstreamSubscriptionJob()
                                     }
                                 }
                             }
