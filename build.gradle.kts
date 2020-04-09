@@ -27,7 +27,7 @@ repositories {
     maven(url = "https://kotlin.bintray.com/kotlinx")
     maven(url = "https://repo.spring.io/snapshot")
     maven(url = "https://repo.spring.io/milestone")
-    maven(url = "http://oss.jfrog.org/artifactory/oss-snapshot-local/") // swagger
+    maven(url = "https://oss.jfrog.org/artifactory/oss-snapshot-local") // swagger
 }
 
 dependencies {
