@@ -71,97 +71,97 @@ class PoloniexApi(
 
     private val pushNotificationJsonReader = objectMapper.readerFor(PushNotification::class.java)
 
-    val connection = run {
-        channelFlow {
-            logger.debug("Starting Poloniex connection channel")
+    val connection = channelFlow {
+        logger.debug("Starting Poloniex connection channel")
 
-            while (isActive) {
-                try {
-                    val session = webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
-                        mono(Dispatchers.Unconfined) {
-                            send(true)
-                            logger.info("Connection established with $PoloniexWebSocketApiUrl")
+        while (isActive) {
+            logger.debug("Establishing connection with $PoloniexWebSocketApiUrl...")
 
-                            val receive = async {
-                                session.receive().timeout(Duration.ofSeconds(3)).onBackpressureError().collect { msg ->
-                                    val payloadBytes = ByteArray(msg.payload.readableByteCount())
-                                    msg.payload.read(payloadBytes)
+            try {
+                val session = webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
+                    mono(Dispatchers.Unconfined) {
+                        send(true)
+                        logger.info("Connection established with $PoloniexWebSocketApiUrl")
 
-                                    if (logger.isTraceEnabled) {
-                                        val payloadStr = String(payloadBytes, StandardCharsets.UTF_8)
-                                        logger.trace("Received: $payloadStr")
-                                    }
+                        val receive = async {
+                            session.receive().timeout(Duration.ofSeconds(3)).onBackpressureError().collect { msg ->
+                                val payloadBytes = ByteArray(msg.payload.readableByteCount())
+                                msg.payload.read(payloadBytes)
 
+                                if (logger.isTraceEnabled) {
+                                    val payloadStr = String(payloadBytes, StandardCharsets.UTF_8)
+                                    logger.trace("Received: $payloadStr")
+                                }
+
+                                try {
+                                    val payload = pushNotificationJsonReader.readValue<PushNotification>(payloadBytes)
+                                    channels[payload.channel]?.send(payload)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: MismatchedInputException) {
+                                    val error: Error
                                     try {
-                                        val payload = pushNotificationJsonReader.readValue<PushNotification>(payloadBytes)
-                                        channels[payload.channel]?.send(payload)
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: MismatchedInputException) {
-                                        val error: Error
-                                        try {
-                                            error = objectMapper.readValue(payloadBytes)
-                                        } catch (e: Throwable) {
-                                            throw e
-                                        }
-
-                                        if (error.msg != null) {
-                                            if (error.msg == PermissionDeniedMsg) throw PermissionDeniedException
-                                            if (error.msg == InvalidChannelMsg) throw InvalidChannelException
-                                        }
-
-                                        throw e
+                                        error = objectMapper.readValue(payloadBytes)
                                     } catch (e: Throwable) {
-                                        val payloadStr = String(payloadBytes, StandardCharsets.UTF_8)
-                                        logger.error("Can't parse websocket message: ${e.message}. Payload: $payloadStr")
+                                        throw e
                                     }
+
+                                    if (error.msg != null) {
+                                        if (error.msg == PermissionDeniedMsg) throw PermissionDeniedException
+                                        if (error.msg == InvalidChannelMsg) throw InvalidChannelException
+                                    }
+
+                                    throw e
+                                } catch (e: Throwable) {
+                                    val payloadStr = String(payloadBytes, StandardCharsets.UTF_8)
+                                    logger.error("Can't parse websocket message: ${e.message}. Payload: $payloadStr")
                                 }
                             }
-
-                            val send = async {
-                                val output = flux(Dispatchers.Unconfined) {
-                                    for (msgStr in connectionOutput) {
-                                        if (logger.isTraceEnabled) logger.trace("Sent: $msgStr")
-                                        val webSocketMsg = session.textMessage(msgStr)
-                                        send(webSocketMsg)
-                                    }
-                                }
-
-                                session.send(output).awaitFirstOrNull()
-                            }
-
-                            receive.await()
-                            send.await()
                         }
+
+                        val send = async {
+                            val output = flux(Dispatchers.Unconfined) {
+                                for (msgStr in connectionOutput) {
+                                    if (logger.isTraceEnabled) logger.trace("Sent: $msgStr")
+                                    val webSocketMsg = session.textMessage(msgStr)
+                                    send(webSocketMsg)
+                                }
+                            }
+
+                            session.send(output).awaitFirstOrNull()
+                        }
+
+                        receive.await()
+                        send.await()
                     }
-
-                    session.awaitFirstOrNull()
-                } catch (e: CancellationException) {
-                    send(false)
-                    logger.debug("Connection closed because internal job has been cancelled")
-                } catch (e: TimeoutException) {
-                    send(false)
-                    logger.debug("Haven't received any value from $PoloniexWebSocketApiUrl within specified interval")
-                    delay(1000)
-                } catch (e: InvalidChannelException) {
-                    send(false)
-                    logger.error(e.message)
-                    delay(1000)
-                } catch (e: PermissionDeniedException) {
-                    send(false)
-                    logger.debug("WebSocket private channel sent permission denied message")
-                } catch (e: Throwable) {
-                    send(false)
-                    logger.error(e.message)
-                    delay(1000)
-                } finally {
-                    logger.info("Connection closed with $PoloniexWebSocketApiUrl")
                 }
-            }
 
-            logger.debug("Closing Poloniex connection channel")
-        }.distinctUntilChanged().share(1)
-    }
+                session.awaitFirstOrNull()
+            } catch (e: CancellationException) {
+                send(false)
+                logger.debug("Connection closed because internal job has been cancelled")
+            } catch (e: TimeoutException) {
+                send(false)
+                logger.debug("Haven't received any value from $PoloniexWebSocketApiUrl within specified interval")
+                delay(1000)
+            } catch (e: InvalidChannelException) {
+                send(false)
+                logger.error(e.message)
+                delay(1000)
+            } catch (e: PermissionDeniedException) {
+                send(false)
+                logger.debug("WebSocket private channel sent permission denied message")
+            } catch (e: Throwable) {
+                send(false)
+                logger.error(e.message)
+                delay(1000)
+            } finally {
+                logger.info("Connection closed with $PoloniexWebSocketApiUrl")
+            }
+        }
+
+        logger.debug("Closing Poloniex connection channel")
+    }.distinctUntilChanged().share(1)
 
     /**
      * Subscribe to ticker updates for all currency pairs.
