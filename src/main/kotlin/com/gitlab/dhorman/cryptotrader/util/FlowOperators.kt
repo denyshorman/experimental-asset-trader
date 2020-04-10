@@ -45,6 +45,7 @@ private open class ShareOperator<T>(
     private suspend fun cancelUpstreamSubscriptionJob() {
         upstreamSubscriptionJob?.cancelAndJoin()
         upstreamSubscriptionJob = null
+        queue?.clear()
     }
 
     val shareOperator = channelFlow {
