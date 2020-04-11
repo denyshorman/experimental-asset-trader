@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.node.NullNode
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.core.Market
+import com.gitlab.dhorman.cryptotrader.core.oneMinusAdjPoloniex
 import com.gitlab.dhorman.cryptotrader.core.toMarket
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
@@ -40,6 +41,8 @@ import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.socket.client.WebSocketClient
 import reactor.core.publisher.Mono
 import java.math.BigDecimal
+import java.net.ConnectException
+import java.net.SocketException
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.time.Duration
@@ -151,6 +154,14 @@ class PoloniexApi(
             } catch (e: PermissionDeniedException) {
                 send(false)
                 logger.debug("WebSocket private channel sent permission denied message")
+            } catch (e: ConnectException) {
+                send(false)
+                logger.warn(e.message)
+                delay(1000)
+            } catch (e: SocketException) {
+                send(false)
+                logger.warn(e.message)
+                delay(1000)
             } catch (e: Throwable) {
                 send(false)
                 logger.error(e.message)
@@ -318,21 +329,17 @@ class PoloniexApi(
     }
 
     /**
-     * Returns your open orders for a given market, specified by the currencyPair.
+     * Returns open orders for a given market
      */
     suspend fun openOrders(market: Market): List<OpenOrder> {
-        return callPrivateApi(
-            "returnOpenOrders",
-            jacksonTypeRef(),
-            hashMap("currencyPair" to market.toString())
-        )
+        return callPrivateApi("returnOpenOrders", jacksonTypeRef(), hashMap("currencyPair" to market.toString()))
     }
 
     suspend fun allOpenOrders(): Map<Long, OpenOrderWithMarket> {
         val command = "returnOpenOrders"
         val params = hashMap("currencyPair" to "all")
         return callPrivateApi(command, jacksonTypeRef<Map<Market, List<OpenOrder>>>(), params)
-            .flatMap<OpenOrderWithMarket> { marketOrders ->
+            .flatMap { marketOrders ->
                 marketOrders._2.map { order -> OpenOrderWithMarket.from(order, marketOrders._1) }
             }
             .toMap({ it.orderId }, { it })
@@ -344,7 +351,7 @@ class PoloniexApi(
         val json = callPrivateApi(command, jacksonTypeRef<JsonNode>(), params)
 
         try {
-            val res = objectMapper.convertValue<OrderStatusWrapper>(json, jacksonTypeRef<OrderStatusWrapper>())
+            val res = objectMapper.convertValue(json, jacksonTypeRef<OrderStatusWrapper>())
             return if (res.success) {
                 res.result.getOrNull(orderId)
             } else {
@@ -352,8 +359,7 @@ class PoloniexApi(
             }
         } catch (e: Throwable) {
             try {
-                val res =
-                    objectMapper.convertValue<OrderStatusErrorWrapper>(json, jacksonTypeRef<OrderStatusErrorWrapper>())
+                val res = objectMapper.convertValue(json, jacksonTypeRef<OrderStatusErrorWrapper>())
                 val errorMsg = res.result.getOrNull("error")
                 if (logger.isTraceEnabled && errorMsg != null) logger.trace("Can't get order status: $errorMsg")
                 return null
@@ -521,7 +527,7 @@ class PoloniexApi(
         try {
             val res = callPrivateApi(command, jacksonTypeRef<CancelOrderWrapper>(), params)
             if (!res.success) throw Exception(res.message)
-            return CancelOrder(res.amount, res.fee, res.market)
+            return CancelOrder(res.amount, res.fee.oneMinusAdjPoloniex, res.market)
         } catch (e: Throwable) {
             if (e.message == null) throw e
 
@@ -536,6 +542,15 @@ class PoloniexApi(
 
             throw e
         }
+    }
+
+    // note: can be called 1 time per 2 minutes
+    suspend fun cancelAllOrders(market: Market?): CancelAllOrders {
+        val command = "cancelAllOrders"
+        val params = market?.let { hashMap("currencyPair" to it.toString()) } ?: HashMap.empty()
+        val res = callPrivateApi(command, jacksonTypeRef<CancelAllOrdersWrapper>(), params)
+        if (!res.success) throw Exception(res.message)
+        return CancelAllOrders(res.orderNumbers)
     }
 
     /**
@@ -572,7 +587,7 @@ class PoloniexApi(
             ).run {
                 val r = this
                 if (r.success) {
-                    MoveOrderResult(r.orderId!!, r.resultingTrades!!, r.fee, r.market)
+                    MoveOrderResult(r.orderId!!, r.resultingTrades!!, r.fee.oneMinusAdjPoloniex, r.market)
                 } else {
                     throw Exception(r.errorMsg)
                 }

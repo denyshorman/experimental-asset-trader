@@ -39,6 +39,8 @@ import java.io.IOException
 import java.lang.RuntimeException
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.net.ConnectException
+import java.net.SocketException
 import java.net.UnknownHostException
 import java.time.Duration
 import java.time.Instant
@@ -1529,6 +1531,14 @@ class PoloniexTrader(
                         retryCount = 0
                         delay(2000)
                         continue
+                    } catch (e: ConnectException) {
+                        retryCount = 0
+                        delay(2000)
+                        continue
+                    } catch (e: SocketException) {
+                        retryCount = 0
+                        delay(2000)
+                        continue
                     } catch (e: Throwable) {
                         retryCount = 0
                         delay(2000)
@@ -1975,6 +1985,9 @@ class PoloniexTrader(
                                             orderCancelReceived = notification
                                         }
                                     }
+                                    else -> run {
+                                        // ignore other events
+                                    }
                                 }
                             }
 
@@ -2121,7 +2134,7 @@ class PoloniexTrader(
                                 }
 
                                 if (cancelConfirmTimeout == null) {
-                                    logger.warn { "Haven't received any cancel events within specified timeout" }
+                                    logger.warn { "Cancel event has not been received within specified timeout" }
                                 }
 
                                 val processedMissedTrades = processMissedTrades(currOrderId!!, latestTradeId)
@@ -2224,6 +2237,12 @@ class PoloniexTrader(
                     delay(2000)
                     continue
                 } catch (e: IOException) {
+                    delay(2000)
+                    continue
+                } catch (e: ConnectException) {
+                    delay(2000)
+                    continue
+                } catch (e: SocketException) {
                     delay(2000)
                     continue
                 } catch (e: Throwable) {
@@ -2343,6 +2362,10 @@ class PoloniexTrader(
                     delay(2000)
                 } catch (e: IOException) {
                     delay(2000)
+                } catch (e: ConnectException) {
+                    delay(2000)
+                } catch (e: SocketException) {
+                    delay(2000)
                 } catch (e: Throwable) {
                     delay(2000)
                     if (logger.isDebugEnabled) logger.error(e.message)
@@ -2357,10 +2380,15 @@ class PoloniexTrader(
                     break
                 } catch (e: OrderCompletedOrNotExistException) {
                     logger.debug(e.message)
+                    cancelUncaughtOrders()
                     break
                 } catch (e: UnknownHostException) {
                     delay(2000)
                 } catch (e: IOException) {
+                    delay(2000)
+                } catch (e: ConnectException) {
+                    delay(2000)
+                } catch (e: SocketException) {
                     delay(2000)
                 } catch (e: Throwable) {
                     logger.error(e.message)
@@ -2369,6 +2397,40 @@ class PoloniexTrader(
             }
 
             logger.debug { "Order $orderId has been cancelled" }
+        }
+
+        private suspend fun cancelUncaughtOrders() {
+            logger.debug("Trying to find and cancel uncaught orders")
+
+            coroutineScope {
+                forceGetOpenOrders(market)
+                    .asSequence()
+                    .filter { it.type == orderType }
+                    .map { async { cancelOrder(it.orderId) } }
+                    .toList()
+                    .forEach { it.await() }
+            }
+
+            logger.debug("All uncaught orders have been processed")
+        }
+
+        private suspend fun forceGetOpenOrders(market: Market): List<OpenOrder> {
+            while (true) {
+                try {
+                    return poloniexApi.openOrders(market)
+                } catch (e: UnknownHostException) {
+                    delay(2000)
+                } catch (e: IOException) {
+                    delay(2000)
+                } catch (e: ConnectException) {
+                    delay(2000)
+                } catch (e: SocketException) {
+                    delay(2000)
+                } catch (e: Throwable) {
+                    logger.error(e.message)
+                    delay(2000)
+                }
+            }
         }
 
         private suspend fun recoverAfterPowerOff() {
@@ -2389,7 +2451,7 @@ class PoloniexTrader(
 
                     val tradeList = poloniexApi.orderTrades(orderId).asSequence()
                         .filter { it.tradeId > latestTradeId }
-                        .map { trade -> BareTrade(trade.amount, trade.price, trade.fee) }
+                        .map { trade -> BareTrade(trade.amount, trade.price, trade.feeMultiplier) }
                         .toList()
 
                     return if (tradeList.isNotEmpty()) {

@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonValue
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize
 import com.fasterxml.jackson.databind.annotation.JsonSerialize
 import com.gitlab.dhorman.cryptotrader.core.Market
+import com.gitlab.dhorman.cryptotrader.core.oneMinusAdjPoloniex
 import com.gitlab.dhorman.cryptotrader.service.poloniex.codec.BooleanStringNumberJsonCodec
 import io.vavr.collection.Array
 import io.vavr.collection.Map
@@ -123,7 +124,7 @@ data class TradeHistoryPrivate(
     val type: OrderType,
     val category: TradeCategory
 ) {
-    val feeMultiplier get(): BigDecimal = BigDecimal.ONE - fee
+    val feeMultiplier get(): BigDecimal = fee.oneMinusAdjPoloniex
 }
 
 data class OrderTrade(
@@ -136,7 +137,9 @@ data class OrderTrade(
     val total: BigDecimal,
     val fee: BigDecimal,
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") val date: LocalDateTime
-)
+) {
+    val feeMultiplier get(): BigDecimal = fee.oneMinusAdjPoloniex
+}
 
 
 data class AvailableAccountBalance(
@@ -152,7 +155,7 @@ data class BuySell(
     @JsonProperty("currencyPair") val market: Market,
     val amountUnfilled: Amount? // available when ImmediateOrCancel order type is used
 ) {
-    val feeMultiplier get(): BigDecimal = BigDecimal.ONE - fee
+    val feeMultiplier get(): BigDecimal = fee.oneMinusAdjPoloniex
 }
 
 data class BuyResultingTrade(
@@ -187,8 +190,18 @@ data class CancelOrderWrapper(
 
 data class CancelOrder(
     val amount: Amount,
-    val fee: BigDecimal,
+    val feeMultiplier: BigDecimal,
     val market: Market
+)
+
+data class CancelAllOrdersWrapper(
+    val success: Boolean,
+    val message: String,
+    val orderNumbers: Array<Long>
+)
+
+data class CancelAllOrders(
+    val orderNumbers: Array<Long>
 )
 
 data class MoveOrderWrapper(
@@ -203,7 +216,7 @@ data class MoveOrderWrapper(
 data class MoveOrderResult(
     @JsonProperty("orderNumber") val orderId: Long,
     val resultingTrades: Map<Market, Array<BuyResultingTrade>>,
-    val fee: BigDecimal,
+    val feeMultiplier: BigDecimal,
     val market: Market
 )
 
@@ -231,7 +244,9 @@ data class OrderStatus(
     val type: OrderType,
     val startingAmount: Amount,
     val fee: BigDecimal
-)
+) {
+    val feeMultiplier get(): BigDecimal = fee.oneMinusAdjPoloniex
+}
 
 data class OrderStatusWrapper(
     val success: Boolean,
