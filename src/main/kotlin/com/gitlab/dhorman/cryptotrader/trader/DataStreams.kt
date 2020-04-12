@@ -461,7 +461,6 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
             val marketIds = marketInfo._1.keySet()
 
             poloniexApi.orderBooksStream(marketIds).map { marketId, bookStream ->
-
                 val newBookStream = bookStream.map { (book, update) ->
                     OrderBookData(marketInfo._1.get(marketId).get(), marketId, book, update)
                 }.share(1, Duration.ofMinutes(2), scope)

@@ -208,58 +208,57 @@ class PoloniexApi(
             .share()
     }
 
-    fun orderBookStream(marketId: MarketId): Flow<Tuple2<PriceAggregatedBook, OrderBookNotification>> {
-        return channelFlow {
-            while (isActive) {
-                try {
-                    coroutineScope {
-                        var book = PriceAggregatedBook()
+    fun orderBookStream(marketId: MarketId): Flow<Tuple2<PriceAggregatedBook, List<OrderBookNotification>>> = channelFlow {
+        while (true) {
+            try {
+                coroutineScope {
+                    var book = PriceAggregatedBook()
 
-                        launch {
-                            connection.collect { connected ->
-                                if (!connected) throw Exception("Connection closed")
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connection.collect { connected ->
+                            if (!connected) throw Exception("Connection closed")
+                        }
+                    }
+
+                    subscribeTo(marketId, jacksonTypeRef<List<OrderBookNotification>>()).collect { notificationList ->
+                        for (notification in notificationList) {
+                            book = when (notification) {
+                                is OrderBookInit -> run {
+                                    val newAsks = book.asks.merge(notification.asks)
+                                    val newBids = book.bids.merge(notification.bids)
+                                    PriceAggregatedBook(newAsks, newBids)
+                                }
+                                is OrderBookUpdate -> run {
+                                    fun modifyBook(book: TreeMap<Price, Amount>): TreeMap<Price, Amount> =
+                                        if (notification.amount.compareTo(BigDecimal.ZERO) == 0) {
+                                            book.remove(notification.price)
+                                        } else {
+                                            book.put(notification.price, notification.amount)
+                                        }
+
+                                    when (notification.orderType) {
+                                        OrderType.Sell -> PriceAggregatedBook(modifyBook(book.asks), book.bids)
+                                        OrderType.Buy -> PriceAggregatedBook(book.asks, modifyBook(book.bids))
+                                    }
+                                }
+                                is OrderBookTrade -> book
                             }
                         }
 
-                        subscribeTo(marketId, jacksonTypeRef<List<OrderBookNotification>>())
-                            .collect { notificationList ->
-                                for (notification in notificationList) {
-                                    book = when (notification) {
-                                        is OrderBookInit -> run {
-                                            val newAsks = book.asks.merge(notification.asks)
-                                            val newBids = book.bids.merge(notification.bids)
-                                            PriceAggregatedBook(newAsks, newBids)
-                                        }
-                                        is OrderBookUpdate -> run {
-                                            fun modifyBook(book: TreeMap<Price, Amount>): TreeMap<Price, Amount> =
-                                                if (notification.amount.compareTo(BigDecimal.ZERO) == 0) {
-                                                    book.remove(notification.price)
-                                                } else {
-                                                    book.put(notification.price, notification.amount)
-                                                }
-
-                                            when (notification.orderType) {
-                                                OrderType.Sell -> PriceAggregatedBook(modifyBook(book.asks), book.bids)
-                                                OrderType.Buy -> PriceAggregatedBook(book.asks, modifyBook(book.bids))
-                                            }
-                                        }
-                                        is OrderBookTrade -> book
-                                    }
-
-                                    send(tuple(book, notification))
-                                }
-                            }
+                        if (notificationList.size() > 0) {
+                            send(tuple(book, notificationList))
+                        }
                     }
-                } catch (e: CancellationException) {
-                    delay(500)
-                } catch (e: Throwable) {
-                    delay(1000)
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                delay(1000)
             }
-        }.share(1)
+        }
     }
 
-    fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flow<Tuple2<PriceAggregatedBook, OrderBookNotification>>> {
+    fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flow<Tuple2<PriceAggregatedBook, List<OrderBookNotification>>>> {
         return marketIds.map { marketId -> tuple(marketId, orderBookStream(marketId)) }.toMap { it }
     }
 

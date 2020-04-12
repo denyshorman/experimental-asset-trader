@@ -6,6 +6,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderBookNotificat
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.PriceAggregatedBook
 import io.vavr.Tuple2
 import io.vavr.collection.Map
+import io.vavr.collection.List
 import kotlinx.coroutines.flow.Flow
 
 typealias MarketIntMap = Map<MarketId, Market>
@@ -16,6 +17,6 @@ data class OrderBookData(
     val market: Market,
     val marketId: MarketId,
     val book: PriceAggregatedBook,
-    val notification: OrderBookNotification
+    val notification: List<OrderBookNotification>
 )
 typealias OrderBookDataMap = Map<MarketId, Flow<OrderBookData>>
