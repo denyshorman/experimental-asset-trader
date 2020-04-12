@@ -139,31 +139,28 @@ class PoloniexApi(
                     }
                 }
 
-                session.awaitFirstOrNull()
+                try {
+                    session.awaitFirstOrNull()
+                } finally {
+                    send(false)
+                }
             } catch (e: CancellationException) {
-                send(false)
                 logger.debug("Connection closed because internal job has been cancelled")
             } catch (e: TimeoutException) {
-                send(false)
                 logger.debug("Haven't received any value from $PoloniexWebSocketApiUrl within specified interval")
                 delay(1000)
             } catch (e: InvalidChannelException) {
-                send(false)
                 logger.error(e.message)
                 delay(1000)
             } catch (e: PermissionDeniedException) {
-                send(false)
                 logger.debug("WebSocket private channel sent permission denied message")
             } catch (e: ConnectException) {
-                send(false)
                 logger.warn(e.message)
                 delay(1000)
             } catch (e: SocketException) {
-                send(false)
                 logger.warn(e.message)
                 delay(1000)
             } catch (e: Throwable) {
-                send(false)
                 logger.error(e.message)
                 delay(1000)
             } finally {
