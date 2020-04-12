@@ -1,13 +1,17 @@
 package com.gitlab.dhorman.cryptotrader.util
 
 import io.vavr.Tuple2
-import io.vavr.collection.Map
 import io.vavr.collection.HashMap
+import io.vavr.collection.Map
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ProducerScope
+import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.consumeEach
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
@@ -25,93 +29,113 @@ private open class ShareOperator<T>(
     private val scope: CoroutineScope? = null
 ) {
     private var subscribers = 0L
+    private val subscriberChannels = mutableSetOf<SendChannel<T>>()
+    private val subscriberChannelsMutex = Mutex()
     private val upstreamSubscriptionLock = Mutex()
-    private val channel = BroadcastChannel<T>(Channel.BUFFERED)
     private var upstreamSubscriptionJob: Job? = null
-    private val queue: LinkedList<T>?
-    private val queueLock: Mutex?
+    private val queue = if (replayCount > 0) LinkedList<T>() else null
     private var gracePeriodTimerJob: Job? = null
 
-    init {
-        if (replayCount > 0) {
-            queue = LinkedList()
-            queueLock = Mutex()
-        } else {
-            queue = null
-            queueLock = null
+    private suspend fun subscribeToUpstream() {
+        if (upstreamSubscriptionJob != null) return
+
+        upstreamSubscriptionJob = GlobalScope.launch {
+            upstream.collect { data ->
+                subscriberChannelsMutex.withLock {
+                    if (queue != null) {
+                        queue.addLast(data)
+                        if (queue.size > replayCount) queue.removeFirst()
+                    }
+
+                    subscriberChannels.forEach { subscriber ->
+                        try {
+                            subscriber.send(data)
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+            }
+
+            logger.warn("Downstream flow completed in share operator $upstream")
+
+            // TODO: Handle complete event
         }
     }
 
-    private suspend fun cancelUpstreamSubscriptionJob() {
+    private suspend fun cancelUpstreamSubscription() {
         upstreamSubscriptionJob?.cancelAndJoin()
         upstreamSubscriptionJob = null
         queue?.clear()
     }
 
-    val shareOperator = channelFlow {
-        try {
-            coroutineScope {
-                launch(start = CoroutineStart.UNDISPATCHED) {
-                    if (replayCount > 0) {
-                        queueLock?.withLock {
-                            queue?.forEach {
-                                this@channelFlow.send(it)
-                            }
-                        }
-                    }
+    private suspend fun launchGracePeriodTimerJob(): Boolean {
+        if (gracePeriod == null || scope == null || !scope.isActive) return false
 
-                    this@ShareOperator.channel.consumeEach {
-                        this@channelFlow.send(it)
-                    }
-                }
+        val launched = AtomicBoolean(false)
 
-                upstreamSubscriptionLock.withLock {
-                    if (++subscribers == 1L) {
-                        gracePeriodTimerJob?.cancelAndJoin()
+        gracePeriodTimerJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                launched.set(true)
+                delay(gracePeriod.toMillis())
+            } catch (_: Throwable) {
+            }
 
-                        if (upstreamSubscriptionJob == null) {
-                            upstreamSubscriptionJob = GlobalScope.launch {
-                                upstream.collect {
-                                    if (queue != null) {
-                                        queueLock?.withLock {
-                                            queue.addLast(it)
-                                            if (queue.size > replayCount) queue.removeFirst()
-                                        }
-                                    }
-
-                                    this@ShareOperator.channel.send(it)
-                                }
-
-                                logger.warn("Downstream flow completed in share operator $upstream")
-                            }
-                        }
-                    }
+            if (!scope.isActive || this.isActive) {
+                withContext(NonCancellable) {
+                    cancelUpstreamSubscription()
                 }
             }
+        }
+
+        return launched.get()
+    }
+
+    private suspend fun cancelGracePeriodTimerJob() {
+        gracePeriodTimerJob?.cancelAndJoin()
+    }
+
+    private suspend fun ProducerScope<T>.processQueueAndSubscribeSelf() {
+        subscriberChannelsMutex.withLock {
+            queue?.forEach {
+                try {
+                    send(it)
+                } catch (_: Throwable) {
+                }
+            }
+
+            subscriberChannels.add(channel)
+        }
+    }
+
+    private suspend fun ProducerScope<T>.unsubscribeSelf() {
+        subscriberChannelsMutex.withLock {
+            subscriberChannels.remove(channel)
+        }
+    }
+
+    val shareOperator = channelFlow<T> {
+        try {
+            upstreamSubscriptionLock.withLock {
+                if (++subscribers == 1L) {
+                    cancelGracePeriodTimerJob()
+                    processQueueAndSubscribeSelf()
+                    subscribeToUpstream()
+                } else {
+                    processQueueAndSubscribeSelf()
+                }
+            }
+
+            delay(Long.MAX_VALUE)
         } finally {
             withContext(NonCancellable) {
                 upstreamSubscriptionLock.withLock {
+                    unsubscribeSelf()
+
                     if (--subscribers == 0L) {
-                        if (gracePeriod != null && scope != null && scope.isActive) {
-                            val launched = AtomicBoolean(false)
+                        val launched = launchGracePeriodTimerJob()
 
-                            gracePeriodTimerJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                                try {
-                                    launched.set(true)
-                                    delay(gracePeriod.toMillis())
-                                } catch (ignored: Throwable) {
-                                }
-
-                                if (!scope.isActive || this.isActive) {
-                                    withContext(NonCancellable) {
-                                        cancelUpstreamSubscriptionJob()
-                                    }
-                                }
-                            }
-
-                            if (!launched.get()) cancelUpstreamSubscriptionJob()
-                        } else {
-                            cancelUpstreamSubscriptionJob()
+                        if (!launched) {
+                            cancelUpstreamSubscription()
                         }
                     }
                 }
