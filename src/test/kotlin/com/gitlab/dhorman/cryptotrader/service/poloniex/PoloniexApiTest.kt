@@ -4,6 +4,7 @@ import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.buyBaseAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.calcQuoteAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.BuyOrderType
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.ChartDataCandlestickPeriod
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
@@ -14,6 +15,8 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.test.context.ActiveProfiles
 import java.math.BigDecimal
 import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import kotlin.random.Random
 
@@ -96,5 +99,27 @@ class PoloniexApiTest {
                 logger.error("${e.message}: $price, $q, ${buyBaseAmount(q, price)}")
             }
         }
+    }
+
+    @Test
+    fun `Fetch candlestick chart data for TRX_WIN for 12-04-2020 - 13-04-2020 period with 5 min interval`() = runBlocking {
+        val market = Market("TRX", "WIN")
+        val fromTs = LocalDateTime.of(2020, 4, 12, 0, 0, 0).toInstant(ZoneOffset.UTC)
+        val toTs = LocalDateTime.of(2020, 4, 13, 0, 0, 0).toInstant(ZoneOffset.UTC)
+        val period = ChartDataCandlestickPeriod.PERIOD_5_MIN
+        val data = poloniexApi.candlestickChartData(market, fromTs, toTs, period)
+
+        logger.info(data.toString())
+    }
+
+    @Test
+    fun `Fetch candlestick chart data for USDT_BTC for 12-04-2020 - 13-04-2020 period with 30 min interval`() = runBlocking {
+        val market = Market("USDT", "BTC")
+        val fromTs = LocalDateTime.of(2020, 4, 12, 0, 0, 0).toInstant(ZoneOffset.UTC)
+        val toTs = LocalDateTime.of(2020, 4, 13, 0, 0, 0).toInstant(ZoneOffset.UTC)
+        val period = ChartDataCandlestickPeriod.PERIOD_30_MIN
+        val data = poloniexApi.candlestickChartData(market, fromTs, toTs, period)
+
+        logger.info(data.toString())
     }
 }

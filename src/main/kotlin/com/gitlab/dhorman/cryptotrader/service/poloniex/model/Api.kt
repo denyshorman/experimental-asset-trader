@@ -1,9 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniex.model
 
-import com.fasterxml.jackson.annotation.JsonFormat
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.fasterxml.jackson.annotation.JsonProperty
-import com.fasterxml.jackson.annotation.JsonValue
+import com.fasterxml.jackson.annotation.*
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize
 import com.fasterxml.jackson.databind.annotation.JsonSerialize
 import com.gitlab.dhorman.cryptotrader.core.Market
@@ -12,6 +9,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.codec.BooleanStringNumbe
 import io.vavr.collection.Array
 import io.vavr.collection.Map
 import java.math.BigDecimal
+import java.time.Instant
 import java.time.LocalDateTime
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -79,6 +77,32 @@ data class OpenOrderWithMarket(
         }
     }
 }
+
+enum class ChartDataCandlestickPeriod(@get:JsonValue val id: Int) {
+    PERIOD_5_MIN(300),
+    PERIOD_15_MIN(900),
+    PERIOD_30_MIN(1800),
+    PERIOD_2_HOURS(7200),
+    PERIOD_4_HOURS(14400),
+    PERIOD_DAY(86400);
+
+    companion object {
+        @JsonCreator
+        @JvmStatic
+        fun valueById(id: Int) = values().find { it.id == id }
+    }
+}
+
+data class Candlestick(
+    @JsonProperty("date") val date: Instant,
+    @JsonProperty("high") val highestPrice: BigDecimal,
+    @JsonProperty("low") val lowestPrice: BigDecimal,
+    @JsonProperty("open") val openPrice: BigDecimal,
+    @JsonProperty("close") val closePrice: BigDecimal,
+    @JsonProperty("volume") val baseVolume: BigDecimal,
+    @JsonProperty("quoteVolume") val quoteVolume: BigDecimal,
+    @JsonProperty("weightedAverage") val averagePrice: BigDecimal
+)
 
 data class TradeHistory(
     @JsonProperty("globalTradeID") val globalTradeId: Long,

@@ -276,6 +276,17 @@ class PoloniexApi(
             .toMap({ it._1 }, { it._2 })
     }
 
+    suspend fun candlestickChartData(market: Market, fromDate: Instant, toDate: Instant, period: ChartDataCandlestickPeriod): List<Candlestick> {
+        val params = hashMap(
+            "currencyPair" to market.toString(),
+            "start" to fromDate.epochSecond.toString(),
+            "end" to toDate.epochSecond.toString(),
+            "period" to period.id.toString()
+        )
+
+        return callPublicApi("returnChartData", jacksonTypeRef(), params)
+    }
+
     /**
      *
      * @return Returns the ticker for all markets.
