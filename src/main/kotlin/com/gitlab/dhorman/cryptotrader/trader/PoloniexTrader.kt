@@ -1790,30 +1790,8 @@ class PoloniexTrader(
 
                         val idFromAmountValue = idFromAmount.getValue(id)
 
-                        if (tradeFromAmount > idFromAmountValue) continue
-
-                        logger.debug { "Path $id matched received trade: tradeFromAmount=$tradeFromAmount, idFromAmountValue=$idFromAmountValue" }
-
-                        val newIdFromAmount = idFromAmountValue - tradeFromAmount
-                        idFromAmount[id] = newIdFromAmount
-                        tradeFromAmount = BigDecimal.ZERO
-
-                        idTrade.getOrPut(id, { mutableListOf() }).add(trade)
-                    }
-
-                    if (tradeFromAmount.compareTo(BigDecimal.ZERO) != 0) {
-                        logger.debug { "Can't find path for received trade. Splitting received trade $trade with available paths $ids..." }
-
-                        for (id in ids) {
-                            logger.debug { "Trying to split $id..." }
-
-                            if (tradeFromAmount.compareTo(BigDecimal.ZERO) == 0) break
-                            val idFromAmountValue = idFromAmount.getValue(id)
-
-                            if (idFromAmountValue.compareTo(BigDecimal.ZERO) == 0 || tradeFromAmount < idFromAmountValue) {
-                                logger.debug { "idFromAmount ($idFromAmountValue) == 0 or tradeFromAmount < idFromAmount ($tradeFromAmount < $idFromAmountValue)" }
-                                continue
-                            }
+                        if (tradeFromAmount > idFromAmountValue) {
+                            logger.debug { "Trying to split $id [tradeFromAmount ($tradeFromAmount) > idFromAmountValue ($idFromAmountValue)]" }
 
                             idFromAmount[id] = BigDecimal.ZERO
                             tradeFromAmount -= idFromAmountValue
@@ -1824,6 +1802,14 @@ class PoloniexTrader(
 
                             trade = lTrade
                             idTrade.getOrPut(id, { mutableListOf() }).addAll(rTrades)
+                        } else {
+                            logger.debug { "Path $id matched received trade [tradeFromAmount ($tradeFromAmount) <= idFromAmountValue ($idFromAmountValue)]" }
+
+                            val newIdFromAmount = idFromAmountValue - tradeFromAmount
+                            idFromAmount[id] = newIdFromAmount
+                            tradeFromAmount = BigDecimal.ZERO
+
+                            idTrade.getOrPut(id, { mutableListOf() }).add(trade)
                         }
                     }
 
