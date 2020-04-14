@@ -960,8 +960,9 @@ class PoloniexTrader(
                 val deltaAmount = fromAmountAllInitial + initCurrencyAmount - fromAmountCalculated
 
                 val firstTradeIdx = initMarket.trades.asSequence()
-                    .filter { !isAdjustmentTrade(it) }
-                    .mapIndexed { i, trade ->
+                    .mapIndexed { i, trade -> tuple(i, trade) }
+                    .filter { !isAdjustmentTrade(it._2) }
+                    .map { (i, trade) ->
                         val fromAmount = if (initMarket.orderType == OrderType.Buy) {
                             buyBaseAmount(trade.quoteAmount, trade.price)
                         } else {
