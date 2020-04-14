@@ -216,7 +216,7 @@ class PoloniexApi(
 
                     launch(start = CoroutineStart.UNDISPATCHED) {
                         connection.collect { connected ->
-                            if (!connected) throw Exception("Connection closed")
+                            if (!connected) throw DisconnectedException
                         }
                     }
 
@@ -252,6 +252,8 @@ class PoloniexApi(
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: DisconnectedException) {
+                delay(1000)
             } catch (e: Throwable) {
                 delay(1000)
             }

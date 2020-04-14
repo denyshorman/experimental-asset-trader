@@ -7,5 +7,3 @@ class OrderBookEmptyException(bookType: SubBookType) : Throwable("Order book $bo
 }
 
 enum class SubBookType { Buy, Sell }
-
-object DisconnectedException : Throwable("Disconnected from the server", null, true, false)

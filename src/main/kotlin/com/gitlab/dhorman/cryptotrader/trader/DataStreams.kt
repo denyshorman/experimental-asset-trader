@@ -3,6 +3,7 @@ package com.gitlab.dhorman.cryptotrader.trader
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.buyBaseAmount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.DisconnectedException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.exception.BalancesAndCurrenciesNotInSync
 import com.gitlab.dhorman.cryptotrader.trader.model.MarketData
@@ -46,7 +47,6 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     send(tuple(currencies, currencies.map { k, v -> tuple(v.id, k) }))
                     delay(10 * 60 * 1000)
                 } catch (e: CancellationException) {
-                    delay(1000)
                 } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch currencies from Poloniex because ${e.message}")
                     delay(2000)
@@ -80,8 +80,10 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                     for ((currency, balance) in rawApiBalances.iterator().map { (c, b) -> tuple(c, b.onOrders) }) {
                         val orderBalance = balanceOnOrders.getOrDefault(currency, BigDecimal.ZERO)
+                        val balanceDelta = orderBalance - balance
 
-                        if (orderBalance.compareTo(balance) != 0) {
+                        // Compare balance deltas because rounding algorithms used locally can differ from server ones
+                        if (balanceDelta < BigDecimal.ZERO || balanceDelta > SEVEN_ZEROS_AND_ONE) {
                             logger.warn("Balances ($balance, $orderBalance) not equal for currency $currency")
                             continue@mainLoop
                         }
@@ -99,9 +101,13 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                     val currenciesSnapshot = currencies.first()
 
-                    var balanceUpdateDeltaJob: Job? = null
+                    coroutineScope {
+                        launch(start = CoroutineStart.UNDISPATCHED) {
+                            poloniexApi.connection.collect { connected ->
+                                if (!connected) throw DisconnectedException
+                            }
+                        }
 
-                    fun CoroutineScope.balanceDeltaUpdateJob() = this.launch {
                         poloniexApi.accountNotificationStream.collect { deltaUpdates ->
                             var notifySubscribers = false
 
@@ -120,8 +126,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                                         val (available, onOrders) = availableOnOrdersBalance
                                         val newBalance = available + delta.amount
-                                        availableAndOnOrderBalances =
-                                            availableAndOnOrderBalances.put(currency, tuple(newBalance, onOrders))
+                                        availableAndOnOrderBalances = availableAndOnOrderBalances.put(currency, tuple(newBalance, onOrders))
 
                                         notifySubscribers = true
                                     }
@@ -170,8 +175,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                                     val (available, onOrders) = availableOnOrdersBalance
                                     val newOnOrders = onOrders + deltaOnOrdersAmount
-                                    availableAndOnOrderBalances =
-                                        availableAndOnOrderBalances.put(currency, tuple(available, newOnOrders))
+                                    availableAndOnOrderBalances = availableAndOnOrderBalances.put(currency, tuple(available, newOnOrders))
 
                                     notifySubscribers = true
                                 } else if (delta is OrderUpdate) {
@@ -219,8 +223,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                                     // 2. Adjust on orders balance
 
-                                    val availableOnOrdersBalance =
-                                        availableAndOnOrderBalances.getOrNull(balanceCurrency)
+                                    val availableOnOrdersBalance = availableAndOnOrderBalances.getOrNull(balanceCurrency)
 
                                     if (availableOnOrdersBalance == null) {
                                         logger.warn("Balances and currencies are not in sync.")
@@ -229,8 +232,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                                     val (available, onOrders) = availableOnOrdersBalance
                                     val newOnOrders = onOrders - oldOrderAmount + newOrderAmount
-                                    availableAndOnOrderBalances =
-                                        availableAndOnOrderBalances.put(balanceCurrency, tuple(available, newOnOrders))
+                                    availableAndOnOrderBalances = availableAndOnOrderBalances.put(balanceCurrency, tuple(available, newOnOrders))
 
                                     notifySubscribers = true
                                 }
@@ -239,20 +241,8 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                             if (notifySubscribers) this@channelFlow.send(availableAndOnOrderBalances)
                         }
                     }
-
-                    coroutineScope {
-                        poloniexApi.connection.collect { connected ->
-                            if (balanceUpdateDeltaJob != null) {
-                                balanceUpdateDeltaJob!!.cancelAndJoin()
-                                balanceUpdateDeltaJob = null
-                            }
-
-                            if (connected) {
-                                balanceUpdateDeltaJob = balanceDeltaUpdateJob()
-                            }
-                        }
-                    }
                 } catch (e: CancellationException) {
+                } catch (e: DisconnectedException) {
                     delay(1000)
                 } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn(e.message)
@@ -288,7 +278,6 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                     delay(10 * 60 * 1000)
                 } catch (e: CancellationException) {
-                    delay(1000)
                 } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn("Can't fetch markets from Poloniex: ${e.message}")
                     delay(2000)
@@ -331,9 +320,9 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     send(allOpenOrders)
 
                     coroutineScope {
-                        launch {
+                        launch(start = CoroutineStart.UNDISPATCHED) {
                             poloniexApi.connection.collect { connected ->
-                                if (!connected) throw Exception("Connection has been closed")
+                                if (!connected) throw DisconnectedException
                             }
                         }
 
@@ -395,6 +384,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                         }
                     }
                 } catch (e: CancellationException) {
+                } catch (e: DisconnectedException) {
                     delay(1000)
                 } catch (e: Throwable) {
                     if (logger.isDebugEnabled) logger.warn("Can't update open order: ${e.message}")
@@ -430,9 +420,9 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                     send(allTickers)
 
                     coroutineScope {
-                        launch {
+                        launch(start = CoroutineStart.UNDISPATCHED) {
                             poloniexApi.connection.collect { connected ->
-                                if (!connected) throw Exception("Can't trust tickers because connection is closed")
+                                if (!connected) throw DisconnectedException
                             }
                         }
 
@@ -448,8 +438,10 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                         }
                     }
                 } catch (e: CancellationException) {
+                } catch (e: DisconnectedException) {
                     delay(1000)
                 } catch (e: Throwable) {
+                    logger.warn(e.message)
                     delay(1000)
                 }
             }

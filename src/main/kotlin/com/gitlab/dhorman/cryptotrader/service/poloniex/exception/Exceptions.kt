@@ -30,6 +30,7 @@ class NotEnoughCryptoException(val currency: Currency, override val originalMsg:
 class OrderCompletedOrNotExistException(val orderId: Long, override val originalMsg: String) :
     PoloniexException(originalMsg)
 
+object DisconnectedException : PoloniexException("Websocket connection to Poloniex server has been closed")
 object SubscribeErrorException : PoloniexException("")
 object InvalidOrderNumberException : PoloniexException(InvalidOrderNumberMsg)
 object TransactionFailedException : PoloniexException(TransactionFailedMsg)
