@@ -1164,7 +1164,15 @@ class PoloniexTrader(
 
                 withContext(NonCancellable) {
                     val trades = try {
-                        tradeInstantly(currentMarket.market, currentMarket.fromCurrency, fromAmount, orderBookFlow, feeFlow, forceCancel)
+                        val delayedProcessor = delayedTradeManager.get(currentMarket.market, !currentMarket.orderType)
+
+                        try {
+                            delayedProcessor.pause()
+                            tradeInstantly(currentMarket.market, currentMarket.orderType, fromAmount, orderBookFlow, feeFlow, forceCancel)
+                        } finally {
+                            delayedProcessor.resume()
+                            forceCancelJob.cancel()
+                        }
                     } catch (_: CancellationException) {
                         if (marketIdx == 0) {
                             transactionsDao.deleteActive(id)
@@ -1203,8 +1211,6 @@ class PoloniexTrader(
                         intentManager.remove(id)
 
                         return@withContext
-                    } finally {
-                        forceCancelJob.cancel()
                     }
 
                     logger.debug { "Instant ${currentMarket.orderType} has been completed. Trades: $trades}" }
@@ -1456,14 +1462,12 @@ class PoloniexTrader(
 
         private suspend fun tradeInstantly(
             market: Market,
-            fromCurrency: Currency,
+            orderType: OrderType,
             fromCurrencyAmount: Amount,
             orderBookFlow: Flow<OrderBookAbstract>,
             feeFlow: Flow<FeeMultiplier>,
             cancel: AtomicBoolean
         ): Array<BareTrade> {
-            val orderType = if (market.baseCurrency == fromCurrency) OrderType.Buy else OrderType.Sell
-
             while (true) {
                 if (cancel.get()) throw CancellationException()
 
@@ -1885,6 +1889,18 @@ class PoloniexTrader(
                 startTradeWorker()
                 amountAdded
             }
+        }
+
+        suspend fun pause() {
+            logger.debug("Trying to pause Delayed Trade Processor..")
+            mutex.lock()
+            stopTradeWorker()
+        }
+
+        fun resume() {
+            startTradeWorker()
+            mutex.unlock()
+            logger.debug("Delayed Trade Processor has been successfully resumed")
         }
 
         private suspend fun stopTradeWorker() {

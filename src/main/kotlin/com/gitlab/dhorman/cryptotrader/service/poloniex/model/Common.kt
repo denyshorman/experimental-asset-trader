@@ -29,7 +29,12 @@ enum class CurrencyType {
 
 @JsonSerialize(using = OrderTypeJsonCodec.Encoder::class)
 @JsonDeserialize(using = OrderTypeJsonCodec.Decoder::class)
-enum class OrderType { Sell, Buy }
+enum class OrderType {
+    Sell,
+    Buy;
+
+    operator fun not() = if (this == Sell) Buy else Sell
+}
 
 data class PriceAggregatedBook(
     override val asks: TreeMap<Price, Amount> = TreeMap.empty(),
