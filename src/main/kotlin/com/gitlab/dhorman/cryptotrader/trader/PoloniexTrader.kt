@@ -1153,12 +1153,30 @@ class PoloniexTrader(
                 }
 
                 val fromAmount = (modifiedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
-                val trades = tradeInstantly(currentMarket.market, currentMarket.fromCurrency, fromAmount, orderBookFlow, feeFlow)
-
-                logger.debug { "Instant ${currentMarket.orderType} has been completed${if (trades == null) " with error." else ". Trades: $trades"}" }
+                val forceCancel = AtomicBoolean(false)
+                val forceCancelJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        delay(Long.MAX_VALUE)
+                    } finally {
+                        forceCancel.set(true)
+                    }
+                }
 
                 withContext(NonCancellable) {
-                    if (trades == null) {
+                    val trades = try {
+                        tradeInstantly(currentMarket.market, currentMarket.fromCurrency, fromAmount, orderBookFlow, feeFlow, forceCancel)
+                    } catch (_: CancellationException) {
+                        if (marketIdx == 0) {
+                            transactionsDao.deleteActive(id)
+                            intentManager.remove(id)
+
+                            logger.debug { "Removing current instant intent from all places" }
+                        }
+
+                        return@withContext
+                    } catch (e: Throwable) {
+                        logger.debug { "Instant ${currentMarket.orderType} has been completed with error: ${e.message}." }
+
                         val fromCurrencyInit = modifiedMarkets[0].fromCurrency
                         val fromCurrencyInitAmount = modifiedMarkets[0].fromAmount(modifiedMarkets, 0)
                         val fromCurrencyCurrent = modifiedMarkets[marketIdx].fromCurrency
@@ -1174,24 +1192,22 @@ class PoloniexTrader(
                             if (!primaryCurrencyUnfilled) {
                                 unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, fromCurrencyCurrentAmount)
 
-                                logger.debug { "Added ($marketIdx) ${modifiedMarkets.pathString()} init=($fromCurrencyInit, $fromCurrencyInitAmount), current=($fromCurrencyCurrent, $fromCurrencyCurrentAmount) to unfilled markets " }
+                                logger.debug {
+                                    "Added ($marketIdx) ${modifiedMarkets.pathString()} " +
+                                        "init=($fromCurrencyInit, $fromCurrencyInitAmount), " +
+                                        "current=($fromCurrencyCurrent, $fromCurrencyCurrentAmount) to unfilled markets "
+                                }
                             }
                         }).retry().awaitFirstOrNull()
 
                         intentManager.remove(id)
 
                         return@withContext
+                    } finally {
+                        forceCancelJob.cancel()
                     }
 
-                    if (trades.length() == 0) {
-                        if (marketIdx == 0) {
-                            transactionsDao.deleteActive(id)
-                            intentManager.remove(id)
-
-                            logger.debug { "Removing current instant intent from all places" }
-                        }
-                        return@withContext
-                    }
+                    logger.debug { "Instant ${currentMarket.orderType} has been completed. Trades: $trades}" }
 
                     if (logger.isDebugEnabled && soundSignalEnabled) SoundUtil.beep()
 
@@ -1443,134 +1459,104 @@ class PoloniexTrader(
             fromCurrency: Currency,
             fromCurrencyAmount: Amount,
             orderBookFlow: Flow<OrderBookAbstract>,
-            feeFlow: Flow<FeeMultiplier>
-        ): Array<BareTrade>? {
-            val trades = LinkedList<BareTrade>()
-            val feeMultiplier = feeFlow.first() // TODO: Remove when Poloniex will fix the bug with fee
+            feeFlow: Flow<FeeMultiplier>,
+            cancel: AtomicBoolean
+        ): Array<BareTrade> {
+            val orderType = if (market.baseCurrency == fromCurrency) OrderType.Buy else OrderType.Sell
 
-            val orderType = if (market.baseCurrency == fromCurrency) {
-                OrderType.Buy
-            } else {
-                OrderType.Sell
-            }
+            while (true) {
+                if (cancel.get()) throw CancellationException()
 
-            try {
-                var retryCount = 0
+                val feeMultiplier = feeFlow.first() // TODO: Remove when Poloniex will fix the bug with fee
+                val simulatedInstantTrades = simulateInstantTrades(fromCurrencyAmount, orderType, orderBookFlow, feeFlow).toList(LinkedList())
 
-                while (true) {
-                    val simulatedInstantTrades = simulateInstantTrades(fromCurrencyAmount, orderType, orderBookFlow, feeFlow).toList(LinkedList())
-
-                    if (simulatedInstantTrades.isEmpty()) {
-                        logger.warn("Can't do instant trade. Wait...")
-                        delay(2000)
-                        continue
-                    }
-
-                    logger.debug { "Simulated instant trades before execution: $simulatedInstantTrades" }
-
-                    val lastTradePrice = simulatedInstantTrades.last()._2.price
-
-                    val expectQuoteAmount = if (orderType == OrderType.Buy) {
-                        calcQuoteAmount(fromCurrencyAmount, lastTradePrice)
-                    } else {
-                        fromCurrencyAmount
-                    }
-
-                    if (expectQuoteAmount.compareTo(BigDecimal.ZERO) == 0) {
-                        logger.debug("Quote amount for trade is equal to zero. From an amount: $fromCurrencyAmount")
-                        if (trades.size == 0) return null else break
-                    }
-
-                    val transaction = try {
-                        logger.debug { "Trying to $orderType on market $market with price $lastTradePrice and amount $expectQuoteAmount" }
-
-                        withContext(NonCancellable) {
-                            if (orderType == OrderType.Buy) {
-                                poloniexApi.buy(market, lastTradePrice, expectQuoteAmount, BuyOrderType.FillOrKill)
-                            } else {
-                                poloniexApi.sell(market, lastTradePrice, expectQuoteAmount, BuyOrderType.FillOrKill)
-                            }
-                        }
-                    } catch (e: UnableToFillOrderException) {
-                        retryCount = 0
-                        logger.debug(e.originalMsg)
-                        delay(100)
-                        continue
-                    } catch (e: TransactionFailedException) {
-                        retryCount = 0
-                        logger.debug(e.originalMsg)
-                        delay(500)
-                        continue
-                    } catch (e: NotEnoughCryptoException) {
-                        logger.error(e.originalMsg)
-
-                        if (retryCount++ == 3) {
-                            if (trades.size == 0) return null else break
-                        } else {
-                            delay(1000)
-                            continue
-                        }
-                    } catch (e: AmountMustBeAtLeastException) {
-                        logger.debug(e.originalMsg)
-                        if (trades.size == 0) return null else break
-                    } catch (e: TotalMustBeAtLeastException) {
-                        logger.debug(e.originalMsg)
-                        if (trades.size == 0) return null else break
-                    } catch (e: RateMustBeLessThanException) {
-                        logger.debug(e.originalMsg)
-                        if (trades.size == 0) return null else break
-                    } catch (e: MaxOrdersExceededException) {
-                        retryCount = 0
-                        logger.warn(e.originalMsg)
-                        delay(1500)
-                        continue
-                    } catch (e: UnknownHostException) {
-                        retryCount = 0
-                        delay(2000)
-                        continue
-                    } catch (e: IOException) {
-                        retryCount = 0
-                        delay(2000)
-                        continue
-                    } catch (e: ConnectException) {
-                        retryCount = 0
-                        delay(2000)
-                        continue
-                    } catch (e: SocketException) {
-                        retryCount = 0
-                        delay(2000)
-                        continue
-                    } catch (e: Throwable) {
-                        retryCount = 0
-                        delay(2000)
-                        if (logger.isDebugEnabled) logger.error(e.message)
-                        continue
-                    }
-
-                    logger.debug { "Instant $orderType trades received: ${transaction.trades}" }
-
-                    for (trade in transaction.trades) {
-                        val takerFee = if (transaction.feeMultiplier.compareTo(feeMultiplier.taker) != 0) {
-                            logger.warn(
-                                "Poloniex still has a bug with fees. " +
-                                    "Expected: ${feeMultiplier.taker}. " +
-                                    "Actual: ${transaction.feeMultiplier}"
-                            )
-
-                            feeMultiplier.taker
-                        } else {
-                            transaction.feeMultiplier
-                        }
-
-                        trades.addLast(BareTrade(trade.amount, trade.price, takerFee))
-                    }
-
-                    break
+                if (simulatedInstantTrades.isEmpty()) {
+                    logger.warn("Can't do instant trade. Wait...")
+                    delay(2000)
+                    continue
                 }
-            } catch (e: CancellationException) {
-            }
 
-            return Array.ofAll(trades)
+                logger.debug { "Simulated instant trades before execution: $simulatedInstantTrades" }
+
+                val lastTradePrice = simulatedInstantTrades.last()._2.price
+
+                val expectQuoteAmount = if (orderType == OrderType.Buy) {
+                    calcQuoteAmount(fromCurrencyAmount, lastTradePrice)
+                } else {
+                    fromCurrencyAmount
+                }
+
+                if (expectQuoteAmount.compareTo(BigDecimal.ZERO) == 0) {
+                    logger.debug("Quote amount for trade is equal to zero. From an amount: $fromCurrencyAmount")
+                    throw AmountIsZeroException
+                }
+
+                val transaction = try {
+                    logger.debug { "Trying to $orderType on market $market with price $lastTradePrice and amount $expectQuoteAmount" }
+                    poloniexApi.placeLimitOrder(market, orderType, lastTradePrice, expectQuoteAmount, BuyOrderType.FillOrKill)
+                } catch (e: UnableToFillOrderException) {
+                    logger.debug(e.originalMsg)
+                    delay(100)
+                    continue
+                } catch (e: TransactionFailedException) {
+                    logger.debug(e.originalMsg)
+                    delay(500)
+                    continue
+                } catch (e: NotEnoughCryptoException) {
+                    logger.error(e.originalMsg)
+                    throw e
+                } catch (e: AmountMustBeAtLeastException) {
+                    logger.debug(e.originalMsg)
+                    throw e
+                } catch (e: TotalMustBeAtLeastException) {
+                    logger.debug(e.originalMsg)
+                    throw e
+                } catch (e: RateMustBeLessThanException) {
+                    logger.debug(e.originalMsg)
+                    throw e
+                } catch (e: MaxOrdersExceededException) {
+                    logger.warn(e.originalMsg)
+                    delay(1500)
+                    continue
+                } catch (e: UnknownHostException) {
+                    delay(2000)
+                    continue
+                } catch (e: IOException) {
+                    delay(2000)
+                    continue
+                } catch (e: ConnectException) {
+                    delay(2000)
+                    continue
+                } catch (e: SocketException) {
+                    delay(2000)
+                    continue
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    delay(2000)
+                    if (logger.isDebugEnabled) logger.error(e.message)
+                    continue
+                }
+
+                if (transaction.trades.size() == 0) {
+                    logger.warn("Instant $orderType has successfully completed but trades list is empty. Self-trade occurred ?")
+                    delay(1000)
+                    continue
+                }
+
+                logger.debug { "Instant $orderType trades received: ${transaction.trades}" }
+
+                return transaction.trades.toVavrStream().map { trade ->
+                    val takerFee = if (transaction.feeMultiplier.compareTo(feeMultiplier.taker) != 0) {
+                        logger.warn("Poloniex still has a bug with fees. Expected: ${feeMultiplier.taker}. Actual: ${transaction.feeMultiplier}")
+                        feeMultiplier.taker
+                    } else {
+                        transaction.feeMultiplier
+                    }
+
+                    BareTrade(trade.amount, trade.price, takerFee)
+                }.toArray()
+            }
         }
 
         private fun CoroutineScope.startProfitMonitoring(

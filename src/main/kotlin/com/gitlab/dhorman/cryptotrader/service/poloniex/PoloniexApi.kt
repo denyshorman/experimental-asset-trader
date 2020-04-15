@@ -418,6 +418,14 @@ class PoloniexApi(
         }
     }
 
+    suspend fun placeLimitOrder(market: Market, orderType: OrderType, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
+        return if (orderType == OrderType.Buy) {
+            buy(market, price, amount, tpe)
+        } else {
+            sell(market, price, amount, tpe)
+        }
+    }
+
     /**
      * Places a limit buy order in a given market.
      *
