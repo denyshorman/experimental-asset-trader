@@ -80,6 +80,9 @@ class PoloniexTrader(
         "PAX" to BigDecimal(0)
     )
 
+    @Volatile
+    var minTradeAmount = BigDecimal(2)
+
     val tranRequests = Channel<ExhaustivePath>(Channel.RENDEZVOUS)
 
     fun start(scope: CoroutineScope) = scope.launch(CoroutineName("PoloniexTraderStarter")) {
@@ -449,12 +452,13 @@ class PoloniexTrader(
     private suspend fun requestBalanceForTransaction(): Tuple2<Currency, Amount>? {
         logger.trace { "Requesting new balance for transaction" }
 
-        // TODO: Review requestBalanceForTransaction algorithm
         val usedBalances = transactionsDao.balancesInUse(primaryCurrencies)
             .groupBy({ it._1 }, { it._2 })
             .mapValues { it.value.reduce { a, b -> a + b } }
 
         val allBalances = data.balances.first()
+
+        val minAmount = minTradeAmount
 
         val availableBalance = allBalances.toVavrStream()
             .filter { primaryCurrencies.contains(it._1) }
@@ -463,14 +467,13 @@ class PoloniexTrader(
                 val (available, onOrders) = availableAndOnOrders
                 val balanceInUse = usedBalances.getOrDefault(currency, BigDecimal.ZERO)
                 val reservedAmount = onOrders - balanceInUse
-                var availableAmount = available - fixedAmount.getOrElse(
-                    currency,
-                    BigDecimal.ZERO
-                ) + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
+                var availableAmount = (available
+                    - fixedAmount.getOrElse(currency, BigDecimal.ZERO)
+                    + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount)
                 if (availableAmount < BigDecimal.ZERO) availableAmount = BigDecimal.ZERO
                 tuple(currency, availableAmount)
             }
-            .filter { it._2 > BigDecimal(2) }
+            .filter { it._2 >= minAmount }
             .firstOrNull()
 
         logger.trace { "usedBalances: $usedBalances ; allBalances: $allBalances ; availableBalance: $availableBalance" }
@@ -478,12 +481,8 @@ class PoloniexTrader(
         if (availableBalance == null) return null
 
         val (currency, amount) = availableBalance
-
-        return if (amount > BigDecimal(5)) {
-            tuple(currency, BigDecimal(5))
-        } else {
-            availableBalance
-        }
+        val allocatedAmount = if (amount < minAmount + minAmount) amount else minAmount
+        return tuple(currency, allocatedAmount)
     }
 
     companion object {
