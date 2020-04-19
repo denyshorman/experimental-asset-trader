@@ -1,0 +1,36 @@
+image: scratch
+
+stages:
+  - build
+  - package
+
+build:
+  image: openjdk:14-slim-buster
+  stage: build
+  before_script:
+    - chmod +x gradlew
+  script:
+    - ./gradlew bootJar
+  artifacts:
+    paths:
+      - build/libs/*.jar
+    expire_in: 1 day
+
+package:
+  image: docker:19.03.8
+  stage: package
+  variables:
+    DOCKER_CLI_EXPERIMENTAL: enabled
+    BUILDX_URL: https://github.com/docker/buildx/releases/download/v0.3.1/buildx-v0.3.1.linux-amd64
+    BUILD_PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
+  services:
+    - name: docker:19.03.8-dind
+      command: ["--experimental"]
+  before_script:
+    - mkdir -p ~/.docker/cli-plugins/
+    - wget -O ~/.docker/cli-plugins/docker-buildx $BUILDX_URL
+    - chmod a+x ~/.docker/cli-plugins/docker-buildx
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker buildx create --use --name mybuilder
+    - docker buildx build --platform $BUILD_PLATFORMS --push -t $CI_REGISTRY_IMAGE .
