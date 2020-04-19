@@ -238,3 +238,10 @@ fun <T> Flow<T>.returnLastIfNoValueWithinSpecifiedTime(duration: Duration) = cha
         send(value)
     }
 }
+
+fun cancelAll(vararg jobs: Job): Unit = jobs.forEach { it.cancel() }
+
+suspend fun cancelAndJoinAll(vararg jobs: Job) {
+    cancelAll(*jobs)
+    joinAll(*jobs)
+}

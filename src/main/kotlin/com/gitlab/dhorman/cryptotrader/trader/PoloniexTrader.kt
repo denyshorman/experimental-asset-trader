@@ -8,6 +8,9 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
+import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableDeltaException
+import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableException
+import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableTimeoutException
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
@@ -1110,8 +1113,6 @@ class PoloniexTrader(
 
             if (merged) return@launch
 
-            intentManager.add(this@TransactionIntent)
-
             logger.debug { "Starting path traversal" }
 
             val currentMarket = markets[marketIdx] as TranIntentMarketPartiallyCompleted
@@ -1137,312 +1138,353 @@ class PoloniexTrader(
                 }).retry().awaitFirst()
             }
 
-            if (currentMarket.orderSpeed == OrderSpeed.Instant) {
-                withContext(NonCancellable) {
-                    generalMutex.withLock {
-                        while (!fromAmountInputChannel.isEmpty) {
-                            val (initFromAmount, currFromAmount, approve) = fromAmountInputChannel.receive()
-                            val prevMarkets = modifiedMarkets
-                            modifiedMarkets = mergeMarkets(prevMarkets, initFromAmount, currFromAmount)
-                            transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
-                            approve.complete(true)
-                            logger.debug { "Merged amount (init = $initFromAmount, current = $currFromAmount) into $prevMarkets => $modifiedMarkets" }
+            try {
+                try {
+                    intentManager.add(this@TransactionIntent)
+
+                    if (currentMarket.orderSpeed == OrderSpeed.Instant) {
+                        withContext(NonCancellable) {
+                            generalMutex.withLock {
+                                while (!fromAmountInputChannel.isEmpty) {
+                                    val (initFromAmount, currFromAmount, approve) = fromAmountInputChannel.receive()
+                                    val prevMarkets = modifiedMarkets
+                                    modifiedMarkets = mergeMarkets(prevMarkets, initFromAmount, currFromAmount)
+                                    transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
+                                    approve.complete(true)
+                                    logger.debug { "Merged amount (init = $initFromAmount, current = $currFromAmount) into $prevMarkets => $modifiedMarkets" }
+                                }
+                                fromAmountInputChannel.close()
+                            }
                         }
-                        fromAmountInputChannel.close()
-                    }
-                }
 
-                val fromAmount = (modifiedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
-                val forceCancel = AtomicBoolean(false)
-                val forceCancelJob = launch(start = CoroutineStart.UNDISPATCHED) {
-                    try {
-                        delay(Long.MAX_VALUE)
-                    } finally {
-                        forceCancel.set(true)
-                    }
-                }
+                        val fromAmount = (modifiedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
+                        val forceCancel = AtomicBoolean(false)
+                        val forceCancelJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                            try {
+                                delay(Long.MAX_VALUE)
+                            } finally {
+                                forceCancel.set(true)
+                            }
+                        }
 
-                withContext(NonCancellable) {
-                    val trades = try {
-                        val delayedProcessor = delayedTradeManager.get(currentMarket.market, !currentMarket.orderType)
+                        withContext(NonCancellable) {
+                            val delayedProcessor = delayedTradeManager.get(currentMarket.market, !currentMarket.orderType)
+                            val trades = try {
+                                delayedProcessor.pause()
+                                tradeInstantly(modifiedMarkets, currentMarket.market, currentMarket.orderType, fromAmount, orderBookFlow, feeFlow, forceCancel)
+                            } finally {
+                                delayedProcessor.resume()
+                                forceCancelJob.cancel()
+                            }
+
+                            logger.debug { "Instant ${currentMarket.orderType} has been completed. Trades: $trades}" }
+
+                            if (logger.isDebugEnabled && soundSignalEnabled) SoundUtil.beep()
+
+                            val (unfilledTradeMarkets, committedMarkets) = splitMarkets(modifiedMarkets, marketIdx, trades)
+
+                            logger.debug {
+                                "Splitting markets (markets = $modifiedMarkets, idx = $marketIdx, trades = $trades) => " +
+                                    "[updatedMarkets = $unfilledTradeMarkets], [committedMarkets = $committedMarkets]"
+                            }
+
+                            modifiedMarkets = unfilledTradeMarkets
+
+                            if (newMarketIdx != modifiedMarkets.length()) {
+                                val newId = UUID.randomUUID()
+
+                                TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                                    transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
+                                    transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
+                                }).retry().awaitFirstOrNull()
+
+                                logger.debug("Starting new intent...")
+
+                                TransactionIntent(newId, committedMarkets, newMarketIdx, TranIntentScope).start()
+                            } else {
+                                TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                                    transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
+                                    transactionsDao.addCompleted(id, committedMarkets)
+                                }).retry().awaitFirstOrNull()
+
+                                logger.debug("Add current intent to completed transactions list")
+                            }
+
+                            val unfilledFromAmount = modifiedMarkets[marketIdx].fromAmount(modifiedMarkets, marketIdx)
+
+                            if (unfilledFromAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                logger.debug("Delete current intent from active transactions list because unfilled amount is zero")
+                                transactionsDao.deleteActive(id)
+                            } else {
+                                logger.debug("Current intent has unfilled amount $unfilledFromAmount")
+                                throw NotEnoughCryptoException(modifiedMarkets[marketIdx].fromCurrency, "Need to add to unfilled amount list")
+                            }
+                        }
+                    } else {
+                        val delayedProcessor = delayedTradeManager.get(currentMarket.market, currentMarket.orderType)
+                        val tradesChannel = Channel<List<BareTrade>>(Channel.UNLIMITED)
 
                         try {
-                            delayedProcessor.pause()
-                            tradeInstantly(currentMarket.market, currentMarket.orderType, fromAmount, orderBookFlow, feeFlow, forceCancel)
+                            delayedProcessor.register(id, tradesChannel)
+
+                            coroutineScope {
+                                val profitMonitoringJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                                    val startTime = Instant.now()
+                                    var counter = 0L
+
+                                    while (isActive) {
+                                        val updatedMarkets = modifiedMarkets
+
+                                        val initAmount = updatedMarkets.first().fromAmount(updatedMarkets, 0)
+                                        val targetAmount = updatedMarkets.last().targetAmount(updatedMarkets, updatedMarkets.length() - 1)
+
+                                        val profitable = initAmount < targetAmount
+                                        val timeout = Duration.between(startTime, Instant.now()).toMinutes() > 40
+
+                                        if (profitable && !timeout) {
+                                            if (counter++ % 15 == 0L) {
+                                                logger.debug { "Expected profit: +${targetAmount - initAmount}" }
+                                            }
+                                            delay(2000)
+                                            continue
+                                        }
+
+                                        logger.debug {
+                                            val path = updatedMarkets.pathString()
+
+                                            val reason = if (!profitable) {
+                                                "path is not profitable (${targetAmount - initAmount})"
+                                            } else {
+                                                "timeout has occurred"
+                                            }
+
+                                            "Cancelling path ($marketIdx) $path because $reason"
+                                        }
+
+
+                                        if (!profitable) throw NotProfitableDeltaException(initAmount, targetAmount)
+                                        throw NotProfitableTimeoutException
+                                    }
+                                }
+
+                                val cancellationMonitoringJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                                    try {
+                                        delay(Long.MAX_VALUE)
+                                    } finally {
+                                        withContext(NonCancellable) {
+                                            logger.debug { "Cancel event received for delayed trade. Trying to unregister intent..." }
+
+                                            generalMutex.withLock {
+                                                fromAmountInputChannel.close()
+                                            }
+
+                                            delayedProcessor.unregister(id)
+                                        }
+                                    }
+                                }
+
+                                val depositBalanceMonitoringJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                                    withContext(NonCancellable) {
+                                        run {
+                                            val fromAmount = (modifiedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
+                                            logger.debug { "Trying to add first amount $fromAmount of current intent to trade processor..." }
+
+                                            val approved = delayedProcessor.addAmount(id, fromAmount)
+
+                                            if (approved) {
+                                                logger.debug { "First amount has been added to trade processor." }
+                                            } else {
+                                                logger.debug { "First amount hasn't been added to trade processor." }
+                                                return@withContext
+                                            }
+                                        }
+
+                                        for ((initFromAmount, currFromAmount, approve) in fromAmountInputChannel) {
+                                            generalMutex.withLock {
+                                                logger.debug { "Intent has received some amount ($initFromAmount, $currFromAmount). Trying to add it to trade processor..." }
+
+                                                val approved = delayedProcessor.addAmount(id, currFromAmount)
+
+                                                if (approved) {
+                                                    modifiedMarkets = mergeMarkets(modifiedMarkets, initFromAmount, currFromAmount)
+                                                    transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
+                                                    logger.debug { "Amount ($initFromAmount, $currFromAmount) has been added to trade processor." }
+                                                } else {
+                                                    logger.debug { "Amount ($initFromAmount, $currFromAmount) hasn't been added to trade processor." }
+                                                }
+
+                                                approve.complete(approved)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                withContext(NonCancellable) {
+                                    tradesChannel.asFlow().collect { receivedTrades ->
+                                        val trades = receivedTrades.toArray()
+
+                                        if (logger.isDebugEnabled) {
+                                            logger.debug("Received delayed trades: $trades")
+                                            if (soundSignalEnabled) SoundUtil.beep()
+                                        }
+
+                                        generalMutex.withLock {
+                                            val oldMarkets = modifiedMarkets
+                                            val marketSplit = splitMarkets(oldMarkets, marketIdx, trades)
+
+                                            modifiedMarkets = marketSplit._1
+                                            val committedMarkets = marketSplit._2
+
+                                            logger.debug {
+                                                "Splitting markets (markets = $oldMarkets, idx = $marketIdx, trades = $trades) => " +
+                                                    "[updatedMarkets = $modifiedMarkets], [committedMarkets = $committedMarkets]"
+                                            }
+
+                                            if (newMarketIdx != modifiedMarkets.length()) {
+                                                val newId = UUID.randomUUID()
+
+                                                TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                                                    transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
+                                                    transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
+                                                }).retry().awaitFirstOrNull()
+
+                                                logger.debug("Starting new intent...")
+
+                                                TransactionIntent(newId, committedMarkets, newMarketIdx, TranIntentScope).start()
+                                            } else {
+                                                TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                                                    transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
+                                                    transactionsDao.addCompleted(id, committedMarkets)
+                                                }).retry().awaitFirstOrNull()
+
+                                                logger.debug("Add current intent to completed transactions list")
+                                            }
+                                        }
+                                    }
+
+                                    logger.debug("Trades channel has been closed successfully")
+
+                                    val unfilledFromAmount = (modifiedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
+
+                                    if (unfilledFromAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                        logger.debug("From amount is zero. Deleting active transaction...")
+                                        transactionsDao.deleteActive(id)
+                                    }
+
+                                    logger.debug("Cancelling supporting jobs...")
+
+                                    cancelAndJoinAll(profitMonitoringJob, cancellationMonitoringJob, depositBalanceMonitoringJob)
+
+                                    logger.debug("Supporting jobs have been cancelled")
+                                }
+                            }
                         } finally {
-                            delayedProcessor.resume()
-                            forceCancelJob.cancel()
+                            withContext(NonCancellable) {
+                                generalMutex.withLock {
+                                    fromAmountInputChannel.close()
+                                }
+
+                                delayedProcessor.unregister(id)
+                            }
                         }
-                    } catch (_: CancellationException) {
-                        if (marketIdx == 0) {
-                            transactionsDao.deleteActive(id)
-                            intentManager.remove(id)
+                    }
+                } catch (e: NotProfitableException) {
+                    val initAmount = modifiedMarkets.first().fromAmount(modifiedMarkets, 0)
+                    val threshold = BigDecimal.ONE
 
-                            logger.debug { "Removing current instant intent from all places" }
+                    if (initAmount < threshold) {
+                        throw TotalMustBeAtLeastException(threshold, "Cancelled by profit monitoring job. Can't move because $initAmount < $threshold")
+                    } else {
+                        throw e
+                    }
+                } finally {
+                    withContext(NonCancellable) {
+                        intentManager.remove(id)
+                    }
+                }
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    if (marketIdx == 0) {
+                        transactionsDao.deleteActive(id)
+                    }
+                }
+            } catch (e: NotProfitableException) {
+                TranIntentScope.launch(CoroutineName("INTENT $id PATH FINDER")) {
+                    val initAmount = modifiedMarkets.first().fromAmount(modifiedMarkets, 0)
+                    val currMarket = modifiedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted
+                    val fromCurrency = currMarket.fromCurrency
+                    val fromCurrencyAmount = currMarket.fromAmount
+                    var bestPath: Array<TranIntentMarket>?
+
+                    while (true) {
+                        logger.debug { "Trying to find a new path..." }
+
+                        bestPath = findNewPath(initAmount, fromCurrency, fromCurrencyAmount, primaryCurrencies, modifiedMarkets.length() - marketIdx)
+
+                        if (bestPath != null) {
+                            logger.debug { "A new profitable path found ${bestPath.pathString()}" }
+                            break
+                        } else {
+                            logger.debug { "Profitable path not found" }
                         }
 
-                        return@withContext
-                    } catch (e: Throwable) {
-                        logger.debug { "Instant ${currentMarket.orderType} has been completed with error: ${e.message}." }
+                        delay(60000)
+                    }
 
-                        val fromCurrencyInit = modifiedMarkets[0].fromCurrency
-                        val fromCurrencyInitAmount = modifiedMarkets[0].fromAmount(modifiedMarkets, 0)
-                        val fromCurrencyCurrent = modifiedMarkets[marketIdx].fromCurrency
-                        val fromCurrencyCurrentAmount = modifiedMarkets[marketIdx].fromAmount(modifiedMarkets, marketIdx)
+                    val changedMarkets = updateMarketsWithBestPath(modifiedMarkets, marketIdx, bestPath!!)
+
+                    withContext(NonCancellable) {
+                        transactionsDao.updateActive(id, changedMarkets, marketIdx)
+                    }
+
+                    TransactionIntent(id, changedMarkets, marketIdx, TranIntentScope).start()
+                }
+            } catch (e: Throwable) {
+                withContext(NonCancellable) {
+                    val initMarket = modifiedMarkets[0]
+                    val currMarket = modifiedMarkets[marketIdx]
+                    val fromAmount = currMarket.fromAmount(modifiedMarkets, marketIdx)
+
+                    if (marketIdx != 0 && fromAmount.compareTo(BigDecimal.ZERO) != 0) {
+                        val fromCurrencyInit = initMarket.fromCurrency
+                        val fromCurrencyInitAmount = initMarket.fromAmount(modifiedMarkets, 0)
+                        val fromCurrencyCurrent = currMarket.fromCurrency
+                        val fromCurrencyCurrentAmount = currMarket.fromAmount(modifiedMarkets, marketIdx)
 
                         val primaryCurrencyUnfilled = primaryCurrencies.contains(fromCurrencyCurrent)
                             && primaryCurrencies.contains(fromCurrencyInit)
                             && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
 
-                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                        if (primaryCurrencyUnfilled) {
+                            logger.debug("Deleting from active transactions list because primary current is unfilled")
                             transactionsDao.deleteActive(id)
+                        } else {
+                            val existingIntentCandidate = intentManager.get(modifiedMarkets, marketIdx)
+                            val mergedToSimilarIntent = existingIntentCandidate?.merge(fromCurrencyInitAmount, fromCurrencyCurrentAmount)
 
-                            if (!primaryCurrencyUnfilled) {
-                                unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, fromCurrencyCurrentAmount)
+                            if (mergedToSimilarIntent == true) {
+                                transactionsDao.deleteActive(id)
+                                logger.debug { "Current intent has been merged into ${existingIntentCandidate.id}" }
+                            } else {
+                                TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                                    transactionsDao.deleteActive(id)
+                                    unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, fromCurrencyCurrentAmount)
+                                }).retry().awaitFirstOrNull()
 
                                 logger.debug {
-                                    "Added ($marketIdx) ${modifiedMarkets.pathString()} " +
-                                        "init=($fromCurrencyInit, $fromCurrencyInitAmount), " +
-                                        "current=($fromCurrencyCurrent, $fromCurrencyCurrentAmount) to unfilled markets "
+                                    "Added to unfilled markets " +
+                                        "[init = ($fromCurrencyInit, $fromCurrencyInitAmount)], " +
+                                        "[current = ($fromCurrencyCurrent, $fromCurrencyCurrentAmount)]"
                                 }
                             }
-                        }).retry().awaitFirstOrNull()
-
-                        intentManager.remove(id)
-
-                        return@withContext
-                    }
-
-                    logger.debug { "Instant ${currentMarket.orderType} has been completed. Trades: $trades}" }
-
-                    if (logger.isDebugEnabled && soundSignalEnabled) SoundUtil.beep()
-
-                    val (unfilledTradeMarkets, committedMarkets) = splitMarkets(modifiedMarkets, marketIdx, trades)
-
-                    logger.debug {
-                        "Splitting markets (markets = $modifiedMarkets, idx = $marketIdx, trades = $trades) => " +
-                            "[updatedMarkets = $unfilledTradeMarkets], [committedMarkets = $committedMarkets]"
-                    }
-
-                    val unfilledFromAmount = unfilledTradeMarkets[marketIdx].fromAmount(unfilledTradeMarkets, marketIdx)
-
-                    if (unfilledFromAmount.compareTo(BigDecimal.ZERO) != 0 && marketIdx != 0) {
-                        val fromCurrencyInit = unfilledTradeMarkets[0].fromCurrency
-                        val fromCurrencyInitAmount = unfilledTradeMarkets[0].fromAmount(unfilledTradeMarkets, 0)
-                        val fromCurrencyCurrent = unfilledTradeMarkets[marketIdx].fromCurrency
-
-                        val primaryCurrencyUnfilled = primaryCurrencies.contains(fromCurrencyCurrent)
-                            && primaryCurrencies.contains(fromCurrencyInit)
-                            && fromCurrencyInitAmount <= unfilledFromAmount
-
-                        if (!primaryCurrencyUnfilled) {
-                            unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, unfilledFromAmount)
-
-                            logger.debug { "Added ($marketIdx) ${modifiedMarkets.pathString()} [init = ($fromCurrencyInit, $fromCurrencyInitAmount)], [current = ($fromCurrencyCurrent, $unfilledFromAmount)] to unfilled markets " }
                         }
-                    }
-
-                    if (newMarketIdx != modifiedMarkets.length()) {
-                        transactionsDao.updateActive(id, committedMarkets, newMarketIdx)
-                        TransactionIntent(id, committedMarkets, newMarketIdx, TranIntentScope).start()
                     } else {
-                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
-                            transactionsDao.addCompleted(id, committedMarkets)
-                            transactionsDao.deleteActive(id)
-                            intentManager.remove(id)
-                        }).retry().awaitFirstOrNull()
-                    }
-                }
-            } else {
-                var updatedMarkets = modifiedMarkets
-                val updatedMarketsRef = AtomicReference(updatedMarkets)
-                val cancelByProfitMonitoringJob = AtomicBoolean(false)
-                val profitMonitoringJob = startProfitMonitoring(updatedMarketsRef, cancelByProfitMonitoringJob)
-                var finishedWithError = false
-
-                val delayedProcessor = delayedTradeManager.get(currentMarket.market, currentMarket.orderType)
-
-                val cancellationMonitorJob = launch {
-                    try {
-                        delay(Long.MAX_VALUE)
-                    } finally {
-                        withContext(NonCancellable) {
-                            logger.debug { "Cancel event received for delayed trade. Trying to unregister intent..." }
-                            delayedProcessor.unregister(id)
+                        logger.debug {
+                            "Delete from active transactions list because " +
+                                "marketIdx equal to zero (${marketIdx == 0}) " +
+                                "or fromAmount ($fromAmount) is equal to zero (${fromAmount.compareTo(BigDecimal.ZERO) == 0})"
                         }
-                    }
-                }
-
-                try {
-                    val tradesChannel = Channel<List<BareTrade>>(Channel.UNLIMITED)
-                    delayedProcessor.register(id, tradesChannel)
-
-                    launch {
-                        withContext(NonCancellable) {
-                            run {
-                                val fromAmount = (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
-                                logger.debug { "Trying to add first amount $fromAmount of current intent to trade processor..." }
-
-                                val approved = delayedProcessor.addAmount(id, fromAmount)
-
-                                if (approved) {
-                                    logger.debug { "First amount has been added to trade processor." }
-                                } else {
-                                    logger.debug { "First amount hasn't been added to trade processor." }
-                                    return@withContext
-                                }
-                            }
-                            for ((initFromAmount, currFromAmount, approve) in fromAmountInputChannel) {
-                                generalMutex.withLock {
-                                    logger.debug { "Intent has received some amount ($initFromAmount, $currFromAmount). Trying to add it to trade processor..." }
-
-                                    val approved = delayedProcessor.addAmount(id, currFromAmount)
-
-                                    if (approved) {
-                                        updatedMarkets = mergeMarkets(updatedMarkets, initFromAmount, currFromAmount)
-                                        updatedMarketsRef.set(updatedMarkets)
-                                        transactionsDao.updateActive(id, updatedMarkets, marketIdx)
-                                        logger.debug { "Amount ($initFromAmount, $currFromAmount) has been added to trade processor." }
-                                    } else {
-                                        logger.debug { "Amount ($initFromAmount, $currFromAmount) hasn't been added to trade processor." }
-                                    }
-
-                                    approve.complete(approved)
-                                }
-                            }
-                        }
-                    }
-
-                    withContext(NonCancellable) {
-                        tradesChannel
-                            .asFlow()
-                            .collect { receivedTrades ->
-                                val trades = receivedTrades.toArray()
-
-                                if (logger.isDebugEnabled) {
-                                    logger.debug("Received delayed trades: $trades")
-                                    if (soundSignalEnabled) SoundUtil.beep()
-                                }
-
-                                generalMutex.withLock {
-                                    val oldMarkets = updatedMarkets
-                                    val marketSplit = splitMarkets(oldMarkets, marketIdx, trades)
-
-                                    updatedMarkets = marketSplit._1
-                                    val committedMarkets = marketSplit._2
-
-                                    logger.debug {
-                                        "Splitting markets (markets = $oldMarkets, idx = $marketIdx, trades = $trades) => " +
-                                            "[updatedMarkets = $updatedMarkets], [committedMarkets = $committedMarkets]"
-                                    }
-
-                                    val fromAmount = (updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
-
-                                    if (fromAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                        logger.debug { "fromAmount is zero. Cancelling profit monitoring job..." }
-
-                                        profitMonitoringJob.cancelAndJoin()
-                                        cancelByProfitMonitoringJob.set(false)
-
-                                        logger.debug { "Profit monitoring job has been cancelled." }
-                                    } else {
-                                        logger.debug { "fromAmount isn't zero $fromAmount. Continue..." }
-
-                                        updatedMarketsRef.set(updatedMarkets)
-                                    }
-
-                                    if (newMarketIdx != updatedMarkets.length()) {
-                                        val newId = UUID.randomUUID()
-
-                                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
-                                            if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {
-                                                transactionsDao.updateActive(id, updatedMarkets, marketIdx)
-                                            }
-
-                                            transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
-                                        }).retry().awaitFirstOrNull()
-
-                                        TransactionIntent(newId, committedMarkets, newMarketIdx, TranIntentScope).start()
-                                    } else {
-                                        transactionsDao.addCompleted(id, committedMarkets)
-                                    }
-                                }
-                            }
-
-                        logger.debug { "Trades channel has been closed successfully" }
-                    }
-                } catch (e: CancellationException) {
-                } catch (e: Throwable) {
-                    finishedWithError = true
-                    logger.debug { "Path has finished with exception: ${e.message}" }
-                } finally {
-                    val isCancelled = !isActive
-
-                    withContext(NonCancellable) {
-                        cancellationMonitorJob.cancelAndJoin()
-
-                        generalMutex.withLock {
-                            fromAmountInputChannel.close()
-                        }
-
-                        delayedProcessor.unregister(id)
-
-                        if (cancelByProfitMonitoringJob.get()) {
-                            logger.debug { "Cancelled by profit monitoring job." }
-                            return@withContext
-                        }
-
-                        profitMonitoringJob.cancel()
-
-                        // Handle an unfilled amount
-                        val initMarket = updatedMarkets[0]
-                        val currMarket = updatedMarkets[marketIdx]
-                        val fromAmount = currMarket.fromAmount(updatedMarkets, marketIdx)
-
-                        if (marketIdx != 0 && fromAmount.compareTo(BigDecimal.ZERO) != 0) {
-                            if (!isCancelled || finishedWithError) {
-                                val fromCurrencyInit = initMarket.fromCurrency
-                                val fromCurrencyInitAmount = initMarket.fromAmount(updatedMarkets, 0)
-                                val fromCurrencyCurrent = currMarket.fromCurrency
-                                val fromCurrencyCurrentAmount = currMarket.fromAmount(updatedMarkets, marketIdx)
-
-                                val primaryCurrencyUnfilled = primaryCurrencies.contains(fromCurrencyCurrent)
-                                    && primaryCurrencies.contains(fromCurrencyInit)
-                                    && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
-
-                                intentManager.remove(id)
-
-                                if (primaryCurrencyUnfilled) {
-                                    transactionsDao.deleteActive(id)
-                                } else {
-                                    val existingIntentCandidate = intentManager.get(updatedMarkets, marketIdx)
-                                    val mergedToSimilarIntent = existingIntentCandidate?.merge(fromCurrencyInitAmount, fromCurrencyCurrentAmount)
-
-                                    if (mergedToSimilarIntent == true) {
-                                        transactionsDao.deleteActive(id)
-                                        logger.debug { "Current intent has been merged into ${existingIntentCandidate.id}" }
-                                    } else {
-                                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
-                                            transactionsDao.deleteActive(id)
-                                            unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, fromCurrencyCurrentAmount)
-                                        }).retry().awaitFirstOrNull()
-
-                                        logger.debug {
-                                            "Added to unfilled markets " +
-                                            "[init = ($fromCurrencyInit, $fromCurrencyInitAmount)], " +
-                                            "[current = ($fromCurrencyCurrent, $fromCurrencyCurrentAmount)]"
-                                        }
-                                    }
-                                }
-                            } else {
-                                logger.debug { "Current intent has not been added to unfilled markets because it is cancelled and finished without error " }
-                            }
-                        } else {
-                            transactionsDao.deleteActive(id)
-                            intentManager.remove(id)
-
-                            logger.debug { "Removed intent from all places because marketIdx == 0 || fromAmount == 0" }
-                        }
+                        transactionsDao.deleteActive(id)
                     }
                 }
             }
@@ -1461,6 +1503,7 @@ class PoloniexTrader(
         }
 
         private suspend fun tradeInstantly(
+            path: Array<TranIntentMarket>,
             market: Market,
             orderType: OrderType,
             fromCurrencyAmount: Amount,
@@ -1470,6 +1513,10 @@ class PoloniexTrader(
         ): Array<BareTrade> {
             while (true) {
                 if (cancel.get()) throw CancellationException()
+
+                val initAmount = path.first().fromAmount(path, 0)
+                val targetAmount = path.last().targetAmount(path, path.length() - 1)
+                if (initAmount >= targetAmount) throw NotProfitableDeltaException(initAmount, targetAmount)
 
                 val feeMultiplier = feeFlow.first() // TODO: Remove when Poloniex will fix the bug with fee
                 val simulatedInstantTrades = simulateInstantTrades(fromCurrencyAmount, orderType, orderBookFlow, feeFlow).toList(LinkedList())
@@ -1560,90 +1607,6 @@ class PoloniexTrader(
 
                     BareTrade(trade.amount, trade.price, takerFee)
                 }.toArray()
-            }
-        }
-
-        private fun CoroutineScope.startProfitMonitoring(
-            updatedMarketsRef: AtomicReference<Array<TranIntentMarket>>,
-            cancelByProfitMonitoringJob: AtomicBoolean
-        ): Job {
-            val parentJob = coroutineContext[Job]
-
-            return launch(Job()) {
-                val startTime = Instant.now()
-                var counter = 0L
-
-                while (isActive) {
-                    delay(2000)
-                    var updatedMarkets = updatedMarketsRef.get()
-
-                    val initAmount = updatedMarkets.first().fromAmount(updatedMarkets, 0)
-                    val targetAmount = updatedMarkets.last().targetAmount(updatedMarkets, updatedMarkets.length() - 1)
-
-                    val profitable = initAmount < targetAmount
-                    val timeout = Duration.between(startTime, Instant.now()).toMinutes() > 40
-
-                    if (profitable && !timeout) {
-                        if (counter++ % 15 == 0L) {
-                            logger.debug { "Expected profit: +${targetAmount - initAmount}" }
-                        }
-                        continue
-                    }
-
-                    logger.debug {
-                        val path = updatedMarkets.pathString()
-
-                        val reason = if (!profitable) {
-                            "path is not profitable (${targetAmount - initAmount})"
-                        } else {
-                            "timeout has occurred"
-                        }
-
-                        "Cancelling path ($marketIdx) $path because $reason"
-                    }
-
-                    cancelByProfitMonitoringJob.set(true)
-                    parentJob?.cancelAndJoin()
-
-                    updatedMarkets = updatedMarketsRef.get()
-                    val currMarket = updatedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted
-                    val fromCurrency = currMarket.fromCurrency
-                    val fromCurrencyAmount = currMarket.fromAmount
-                    var bestPath: Array<TranIntentMarket>?
-
-                    while (true) {
-                        logger.debug { "Trying to find a new path..." }
-
-                        bestPath = findNewPath(
-                            initAmount,
-                            fromCurrency,
-                            fromCurrencyAmount,
-                            primaryCurrencies,
-                            updatedMarkets.length() - marketIdx
-                        )
-
-                        if (bestPath != null) {
-                            logger.debug { "A new path found ${bestPath.pathString()}" }
-                            break
-                        } else {
-                            logger.debug { "Path not found" }
-                        }
-
-                        delay(60000)
-                    }
-
-                    val changedMarkets = updateMarketsWithBestPath(updatedMarkets, marketIdx, bestPath!!)
-
-                    withContext(NonCancellable) {
-                        transactionsDao.updateActive(id, changedMarkets, marketIdx)
-                    }
-
-                    if (!isActive) break
-
-                    TransactionIntent(id, changedMarkets, marketIdx, TranIntentScope).start()
-
-                    break
-                }
             }
         }
 
