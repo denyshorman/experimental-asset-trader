@@ -12,4 +12,4 @@ pluginManagement {
     }
 }
 
-rootProject.name = "crypto-trader"
+rootProject.name = "trading-robot"

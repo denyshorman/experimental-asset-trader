@@ -1,12 +1,12 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 group = "com.gitlab.dhorman"
-version = versioning.info.full
+version = versioning.info.build
 java.sourceCompatibility = JavaVersion.VERSION_11
 
 val swaggerVersion = "3.0.0-SNAPSHOT"
 
-val developmentOnly by configurations.creating
+val developmentOnly: Configuration by configurations.creating
 configurations {
     runtimeClasspath {
         extendsFrom(developmentOnly)
