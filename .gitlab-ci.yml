@@ -36,12 +36,7 @@ package:
   script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - docker buildx create --use --name mybuilder
-    - >
-      docker buildx build
-      --build-arg LIBERICA_VARIANT=jre
-      --build-arg LIBERICA_ROOT=/usr/lib/jvm/jre
-      --platform $BUILD_PLATFORMS
-      --push -t $CI_REGISTRY_IMAGE .
+    - docker buildx build --platform $BUILD_PLATFORMS --push -t $CI_REGISTRY_IMAGE .
   interruptible: true
   only:
     - master
