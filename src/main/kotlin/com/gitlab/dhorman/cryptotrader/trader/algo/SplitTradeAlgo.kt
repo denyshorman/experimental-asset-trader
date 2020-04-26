@@ -13,7 +13,6 @@ import io.vavr.Tuple2
 import io.vavr.collection.Array
 import io.vavr.collection.List
 import io.vavr.kotlin.*
-import java.lang.RuntimeException
 import java.math.BigDecimal
 import java.math.RoundingMode
 
@@ -58,6 +57,18 @@ class SplitTradeAlgo(
         if (update + delta >= BigDecimal.ZERO) return tuple(delta.adjust(amountType, orderType), null)
         if (commit + update + delta < BigDecimal.ZERO) throw RuntimeException("Resulting amount can't be negative")
         return tuple(update.adjust(amountType, orderType), (update + delta).adjust(amountType, orderType))
+    }
+
+    private fun Iterable<BareTrade>.fromAmount(orderType: OrderType): BigDecimal {
+        return this.asSequence()
+            .map { amountCalculator.fromAmount(orderType, it) }
+            .fold(BigDecimal.ZERO) { x, y -> x + y }
+    }
+
+    private fun Iterable<BareTrade>.targetAmount(orderType: OrderType): BigDecimal {
+        return this.asSequence()
+            .map { amountCalculator.targetAmount(orderType, it) }
+            .fold(BigDecimal.ZERO) { x, y -> x + y }
     }
 
     fun splitTrade(amountType: AmountType, orderType: OrderType, amount: Amount, trade: BareTrade): Tuple2<List<BareTrade>, List<BareTrade>> {
@@ -190,6 +201,8 @@ class SplitTradeAlgo(
             var targetAmount = tranIntentMarketExtensions.fromAmount(committedMarkets[i + 1] as TranIntentMarketCompleted)
 
             for (trade in m.trades) {
+                if (tradeAdjuster.isAdjustmentTrade(trade)) continue
+
                 val amount = amountCalculator.targetAmount(m.orderType, trade)
 
                 if (amount <= targetAmount) {
@@ -203,6 +216,46 @@ class SplitTradeAlgo(
                         updatedTrades.addAll(l)
                         committedTrades.addAll(r)
                         targetAmount = BigDecimal.ZERO
+                    }
+                }
+            }
+
+            var updatedTradesFromAmount = updatedTrades.fromAmount(m.orderType)
+            var updatedTradesTargetAmount = updatedTrades.targetAmount(m.orderType)
+            var committedTradesFromAmount = committedTrades.fromAmount(m.orderType)
+            var committedTradesTargetAmount = committedTrades.targetAmount(m.orderType)
+
+            for (trade in m.trades) {
+                if (!tradeAdjuster.isAdjustmentTrade(trade)) continue
+
+                val tradeFromAmount = amountCalculator.fromAmount(m.orderType, trade)
+                val tradeTargetAmount = amountCalculator.targetAmount(m.orderType, trade)
+
+                if (tradeFromAmount + committedTradesFromAmount >= BigDecimal.ZERO && tradeTargetAmount + committedTradesTargetAmount >= BigDecimal.ZERO) {
+                    committedTradesFromAmount += tradeFromAmount
+                    committedTradesTargetAmount += tradeTargetAmount
+                    committedTrades.add(trade)
+                } else if (tradeFromAmount + updatedTradesFromAmount >= BigDecimal.ZERO && tradeTargetAmount + updatedTradesTargetAmount >= BigDecimal.ZERO) {
+                    updatedTradesFromAmount += tradeFromAmount
+                    updatedTradesTargetAmount += tradeTargetAmount
+                    updatedTrades.add(trade)
+                } else {
+                    if (tradeFromAmount < BigDecimal.ZERO && tradeTargetAmount.compareTo(BigDecimal.ZERO) == 0) {
+                        val delta = committedTradesFromAmount + tradeFromAmount
+                        committedTradesFromAmount = BigDecimal.ZERO
+                        updatedTradesFromAmount += delta
+                        if (updatedTradesFromAmount < BigDecimal.ZERO) throw RuntimeException("amount can't be negative")
+                        updatedTrades.add(tradeAdjuster.adjustFromAmount(delta))
+                        committedTrades.add(tradeAdjuster.adjustFromAmount(tradeFromAmount - delta))
+                    } else if (tradeFromAmount.compareTo(BigDecimal.ZERO) == 0 && tradeTargetAmount < BigDecimal.ZERO) {
+                        val delta = committedTradesTargetAmount + tradeTargetAmount
+                        committedTradesTargetAmount = BigDecimal.ZERO
+                        updatedTradesTargetAmount += delta
+                        if (updatedTradesTargetAmount < BigDecimal.ZERO) throw RuntimeException("amount can't be negative")
+                        updatedTrades.add(tradeAdjuster.adjustTargetAmount(delta, m.orderType))
+                        committedTrades.add(tradeAdjuster.adjustTargetAmount(tradeTargetAmount - delta, m.orderType))
+                    } else {
+                        throw RuntimeException("Impossible case for adjustment trades. Both from and to amounts are non zero ($tradeFromAmount $tradeTargetAmount)")
                     }
                 }
             }
