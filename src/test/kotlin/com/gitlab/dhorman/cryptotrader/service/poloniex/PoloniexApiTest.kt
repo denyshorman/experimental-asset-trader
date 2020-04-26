@@ -6,6 +6,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.core.fromAmountBuy
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.quoteAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.BuyOrderType
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.ChartDataCandlestickPeriod
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
@@ -44,8 +45,9 @@ class PoloniexApiTest {
         val price = BigDecimal("0.9966")
         val baseAmount = BigDecimal("10.14628578")
         val quoteAmount = amountCalculator.quoteAmount(baseAmount, price)
-        val buyResult = poloniexApi.buy(
+        val buyResult = poloniexApi.placeLimitOrder(
             Market("USDC", "USDT"),
+            OrderType.Buy,
             price,
             quoteAmount,
             BuyOrderType.FillOrKill
@@ -97,7 +99,7 @@ class PoloniexApiTest {
 
             try {
                 logger.info("Placing order: $price, $q")
-                val res = poloniexApi.buy(Market("USDT", "BTC"), price, q, BuyOrderType.PostOnly)
+                val res = poloniexApi.placeLimitOrder(Market("USDT", "BTC"), OrderType.Buy, price, q, BuyOrderType.PostOnly)
                 poloniexApi.cancelOrder(res.orderId)
             } catch (e: Throwable) {
                 logger.error("${e.message}: $price, $q, ${amountCalculator.fromAmountBuy(q, price)}")

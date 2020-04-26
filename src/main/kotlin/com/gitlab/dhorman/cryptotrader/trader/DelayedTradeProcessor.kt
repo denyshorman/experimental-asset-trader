@@ -383,10 +383,7 @@ class DelayedTradeProcessor(
 
                 if (quoteAmount.compareTo(BigDecimal.ZERO) == 0) throw AmountIsZeroException
 
-                val result = when (orderType) {
-                    OrderType.Buy -> poloniexApi.buy(market, price, quoteAmount, BuyOrderType.PostOnly)
-                    OrderType.Sell -> poloniexApi.sell(market, price, quoteAmount, BuyOrderType.PostOnly)
-                }
+                val result = poloniexApi.placeLimitOrder(market, orderType, price, quoteAmount, BuyOrderType.PostOnly)
 
                 return tuple(result.orderId, price, quoteAmount)
             } catch (e: CancellationException) {
@@ -406,6 +403,8 @@ class DelayedTradeProcessor(
             } catch (e: TotalMustBeAtLeastException) {
                 throw e
             } catch (e: RateMustBeLessThanException) {
+                throw e
+            } catch (e: MarketDisabledException) {
                 throw e
             } catch (e: OrderBookEmptyException) {
                 logger.warn(e.message)

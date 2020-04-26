@@ -40,3 +40,4 @@ object AlreadyCalledMoveOrderException : PoloniexException(AlreadyCalledMoveOrde
 object PermissionDeniedException : PoloniexException(PermissionDeniedMsg)
 object InvalidChannelException : PoloniexException(InvalidChannelMsg)
 object AmountIsZeroException : AmountMustBeAtLeastException(BigDecimal.ZERO, "Quote amount is zero")
+object MarketDisabledException : PoloniexException(MarketDisabledMsg)

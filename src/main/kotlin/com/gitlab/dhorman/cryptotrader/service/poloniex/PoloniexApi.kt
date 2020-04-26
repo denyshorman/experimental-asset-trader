@@ -419,28 +419,10 @@ class PoloniexApi(
     }
 
     suspend fun placeLimitOrder(market: Market, orderType: OrderType, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
-        return if (orderType == OrderType.Buy) {
-            buy(market, price, amount, tpe)
-        } else {
-            sell(market, price, amount, tpe)
+        return when (orderType) {
+            OrderType.Buy -> buySell("buy", market, price, amount, tpe)
+            OrderType.Sell -> buySell("sell", market, price, amount, tpe)
         }
-    }
-
-    /**
-     * Places a limit buy order in a given market.
-     *
-     * @param tpe You may optionally set "fillOrKill", "immediateOrCancel", "postOnly".
-     *            A fill-or-kill order will either fill in its entirety or be completely aborted.
-     *            An immediate-or-cancel order can be partially or completely filled, but any portion of the order that cannot be filled immediately will be canceled rather than left on the order book.
-     *            A post-only order will only be placed if no portion of it fills immediately; this guarantees you will never pay the taker fee on any part of the order that fills.
-     * @return If successful, the method will return the order number.
-     */
-    suspend fun buy(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
-        return buySell("buy", market, price, amount, tpe)
-    }
-
-    suspend fun sell(market: Market, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
-        return buySell("sell", market, price, amount, tpe)
     }
 
     /**
@@ -533,6 +515,10 @@ class PoloniexApi(
 
         if (AlreadyCalledMoveOrderMsg == msg) {
             return AlreadyCalledMoveOrderException
+        }
+
+        if (MarketDisabledMsg == msg) {
+            return MarketDisabledException
         }
 
         return e

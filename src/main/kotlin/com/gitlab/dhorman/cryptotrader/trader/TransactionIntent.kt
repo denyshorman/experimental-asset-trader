@@ -195,25 +195,7 @@ class TransactionIntent(
 
                         modifiedMarkets = unfilledTradeMarkets
 
-                        if (newMarketIdx != modifiedMarkets.length()) {
-                            val newId = UUID.randomUUID()
-
-                            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
-                                transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
-                                transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
-                            }).retry().awaitFirstOrNull()
-
-                            logger.debug("Starting new intent...")
-
-                            tranIntentFactory.create(newId, committedMarkets, newMarketIdx).start()
-                        } else {
-                            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
-                                transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
-                                transactionsDao.addCompleted(id, committedMarkets)
-                            }).retry().awaitFirstOrNull()
-
-                            logger.debug("Add current intent to completed transactions list")
-                        }
+                        updateCurrentAndHandleNewMarkets(newMarketIdx, modifiedMarkets, committedMarkets)
 
                         val unfilledFromAmount = tranIntentMarketExtensions.fromAmount(modifiedMarkets[marketIdx], modifiedMarkets, marketIdx)
 
@@ -345,26 +327,7 @@ class TransactionIntent(
                                                 "[updatedMarkets = $modifiedMarkets], [committedMarkets = $committedMarkets]"
                                         }
 
-                                        if (newMarketIdx != modifiedMarkets.length()) {
-                                            val newId = UUID.randomUUID()
-
-                                            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
-                                                transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
-                                                transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
-                                            }).retry().awaitFirstOrNull()
-
-                                            logger.debug("Starting new intent...")
-
-
-                                            tranIntentFactory.create(newId, committedMarkets, newMarketIdx).start()
-                                        } else {
-                                            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
-                                                transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
-                                                transactionsDao.addCompleted(id, committedMarkets)
-                                            }).retry().awaitFirstOrNull()
-
-                                            logger.debug("Add current intent to completed transactions list")
-                                        }
+                                        updateCurrentAndHandleNewMarkets(newMarketIdx, modifiedMarkets, committedMarkets)
                                     }
                                 }
 
@@ -403,6 +366,8 @@ class TransactionIntent(
                 } else {
                     throw e
                 }
+            } catch (e: MarketDisabledException) {
+                throw NotProfitableTimeoutException
             } finally {
                 withContext(NonCancellable) {
                     intentManager.remove(id)
@@ -496,6 +461,28 @@ class TransactionIntent(
         }
     }
 
+    private suspend fun updateCurrentAndHandleNewMarkets(newMarketIdx: Int, currentMarkets: Array<TranIntentMarket>, committedMarkets: Array<TranIntentMarket>) {
+        if (newMarketIdx != currentMarkets.length()) {
+            val newId = UUID.randomUUID()
+
+            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                transactionsDao.updateActive(id, currentMarkets, marketIdx)
+                transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
+            }).retry().awaitFirstOrNull()
+
+            logger.debug("Starting new intent...")
+
+            tranIntentFactory.create(newId, committedMarkets, newMarketIdx).start()
+        } else {
+            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                transactionsDao.updateActive(id, currentMarkets, marketIdx)
+                transactionsDao.addCompleted(id, committedMarkets)
+            }).retry().awaitFirstOrNull()
+
+            logger.debug("Add current intent to completed transactions list")
+        }
+    }
+
     private suspend fun merge(initFromAmount: Amount, currentFromAmount: Amount): Boolean {
         return withContext(NonCancellable) {
             var merged: CompletableDeferred<Boolean>? = null
@@ -569,6 +556,9 @@ class TransactionIntent(
                 logger.debug(e.originalMsg)
                 throw e
             } catch (e: RateMustBeLessThanException) {
+                logger.debug(e.originalMsg)
+                throw e
+            } catch (e: MarketDisabledException) {
                 logger.debug(e.originalMsg)
                 throw e
             } catch (e: MaxOrdersExceededException) {
