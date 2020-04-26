@@ -7,6 +7,8 @@ import com.gitlab.dhorman.cryptotrader.core.TradeStat
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
+import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedBuySellAmountCalculator
+import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.ExhaustivePathOrdering
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsUtil
@@ -34,8 +36,12 @@ import java.util.*
 import java.util.function.Function.identity
 
 @Component
-class IndicatorStreams(private val data: DataStreams) {
+class IndicatorStreams(
+    private val data: DataStreams,
+    amountCalculator: AdjustedPoloniexBuySellAmountCalculator
+) {
     private val logger = KotlinLogging.logger {}
+    private val pathsUtil = PathsUtil(amountCalculator)
 
     fun getPaths(settings: PathsSettings): Flux<TreeSet<ExhaustivePath>> {
         return Flux.combineLatest(
@@ -53,9 +59,9 @@ class IndicatorStreams(private val data: DataStreams) {
 
                 val fee = data0[3] as FeeMultiplier
 
-                val pathsPermutations = PathsUtil.generateSimplePaths(marketInfoStringMap.keySet(), settings.currencies)
+                val pathsPermutations = pathsUtil.generateSimplePaths(marketInfoStringMap.keySet(), settings.currencies)
 
-                val uniqueMarkets = PathsUtil.uniqueMarkets(pathsPermutations).map { marketInfoStringMap[it].get() }
+                val uniqueMarkets = pathsUtil.uniqueMarkets(pathsPermutations).map { marketInfoStringMap[it].get() }
 
                 @Suppress("UNCHECKED_CAST")
                 val orderBooks = (data0[1] as OrderBookDataMap)
@@ -92,7 +98,7 @@ class IndicatorStreams(private val data: DataStreams) {
                     .scan(TreeSet.empty(ExhaustivePathOrdering)) { _, bookStatDelta ->
                         val (orderBooks0, stats0) = bookStatDelta
                         var sortedPaths = TreeSet.empty(ExhaustivePathOrdering)
-                        val exhaustivePaths = PathsUtil.map(
+                        val exhaustivePaths = pathsUtil.map(
                             pathsPermutations,
                             orderBooks0,
                             stats0,
@@ -126,7 +132,7 @@ class IndicatorStreams(private val data: DataStreams) {
             MarketPathGenerator(markets.keySet())
                 .generateWithOrders(list(fromCurrency), toCurrencies)
         }
-        val uniqueMarkets = PathsUtil.uniqueMarkets(paths).map { markets[it].get() }
+        val uniqueMarkets = pathsUtil.uniqueMarkets(paths).map { markets[it].get() }
 
         val booksMapDeferrable = async {
             val orderBookMap = data.orderBooks.first()
@@ -149,7 +155,7 @@ class IndicatorStreams(private val data: DataStreams) {
         withContext(Dispatchers.IO) {
             var availablePaths = TreeSet.empty(pathComparator)
 
-            val exhaustivePaths = PathsUtil.map(
+            val exhaustivePaths = pathsUtil.map(
                 paths,
                 booksMapDeferrable.await(),
                 statsMapDeferrable.await(),

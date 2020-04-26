@@ -1,0 +1,76 @@
+package com.gitlab.dhorman.cryptotrader.trader
+
+import com.gitlab.dhorman.cryptotrader.core.Market
+import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
+import com.gitlab.dhorman.cryptotrader.trader.algo.SplitTradeAlgo
+import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
+import com.gitlab.dhorman.cryptotrader.trader.core.PoloniexTradeAdjuster
+import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
+import io.vavr.Tuple2
+import io.vavr.kotlin.tuple
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import mu.KotlinLogging
+
+class DelayedTradeManager(
+    private val scope: CoroutineScope,
+    private val splitAlgo: SplitTradeAlgo,
+    private val poloniexApi: PoloniexApi,
+    private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
+    private val data: DataStreams,
+    private val transactionsDao: TransactionsDao
+) {
+    private val processors = hashMapOf<Tuple2<Market, OrderType>, DelayedTradeProcessor>()
+    private val mutex = Mutex()
+
+    suspend fun get(market: Market, orderType: OrderType): DelayedTradeProcessor {
+        mutex.withLock {
+            val key = tuple(market, orderType)
+            val processor = processors[key]
+
+            if (processor != null) {
+                logger.debug { "Delayed Trade Processor already exists for ($market, $orderType)." }
+                return processor
+            }
+
+            logger.debug { "Creating new Delayed Trade Processor for ($market, $orderType)..." }
+
+            val orderBook = data.getOrderBookFlowBy(market)
+            val newProcessor = DelayedTradeProcessor(
+                market,
+                orderType,
+                orderBook,
+                scope + CoroutineName("DELAYED_TRADE_PROCESSOR_${market}_$orderType"),
+                splitAlgo,
+                poloniexApi,
+                amountCalculator,
+                data,
+                transactionsDao
+            )
+            processors[key] = newProcessor
+
+            val processorJob = newProcessor.start()
+
+            scope.launch(Job() + CoroutineName("DELAYED_TRADE_MANAGER_${market}_$orderType"), CoroutineStart.UNDISPATCHED) {
+                withContext(NonCancellable) {
+                    processorJob.join()
+                    logger.debug { "Delayed Trade Processor has completed its job in ($market, $orderType) market." }
+
+                    mutex.withLock {
+                        processors.remove(key)
+                    }
+
+                    logger.debug { "Delayed Trade Processor for ($market, $orderType) market has been removed from processors list." }
+                }
+            }
+
+            return newProcessor
+        }
+    }
+
+    companion object {
+        private val logger = KotlinLogging.logger {}
+    }
+}

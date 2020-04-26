@@ -2,9 +2,9 @@ package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
-import com.gitlab.dhorman.cryptotrader.service.poloniex.core.buyBaseAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.DisconnectedException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
+import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.exception.BalancesAndCurrenciesNotInSync
 import com.gitlab.dhorman.cryptotrader.trader.model.MarketData
 import com.gitlab.dhorman.cryptotrader.trader.model.OrderBookData
@@ -30,7 +30,10 @@ import java.time.ZoneId
 import javax.annotation.PreDestroy
 
 @Component
-class DataStreams(private val poloniexApi: PoloniexApi) {
+class DataStreams(
+    private val poloniexApi: PoloniexApi,
+    private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator
+) {
     private val logger = KotlinLogging.logger {}
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -72,7 +75,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                         }
                     }, { (_, order) ->
                         if (order.type == OrderType.Buy) {
-                            buyBaseAmount(order.amount, order.price)
+                            amountCalculator.fromAmountBuy(order.amount, order.price, BigDecimal.ONE)
                         } else {
                             order.amount
                         }
@@ -160,7 +163,7 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
 
                                     if (delta.orderType == OrderType.Buy) {
                                         currency = market.baseCurrency
-                                        deltaOnOrdersAmount = buyBaseAmount(delta.amount, delta.price)
+                                        deltaOnOrdersAmount = amountCalculator.fromAmountBuy(delta.amount, delta.price, BigDecimal.ONE)
                                     } else {
                                         currency = market.quoteCurrency
                                         deltaOnOrdersAmount = delta.amount
@@ -192,8 +195,8 @@ class DataStreams(private val poloniexApi: PoloniexApi) {
                                     val balanceCurrency: Currency
 
                                     if (oldOrder.type == OrderType.Buy) {
-                                        oldOrderAmount = buyBaseAmount(oldOrder.amount, oldOrder.price)
-                                        newOrderAmount = buyBaseAmount(delta.newAmount, oldOrder.price)
+                                        oldOrderAmount = amountCalculator.fromAmountBuy(oldOrder.amount, oldOrder.price, BigDecimal.ONE)
+                                        newOrderAmount = amountCalculator.fromAmountBuy(delta.newAmount, oldOrder.price, BigDecimal.ONE)
                                         balanceCurrency = oldOrder.market.baseCurrency
                                     } else {
                                         oldOrderAmount = oldOrder.amount

@@ -2,7 +2,7 @@ package com.gitlab.dhorman.cryptotrader.core
 
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
-import com.gitlab.dhorman.cryptotrader.service.poloniex.core.*
+import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
@@ -13,7 +13,7 @@ import io.vavr.kotlin.component2
 import java.math.BigDecimal
 import java.math.RoundingMode
 
-object Orders {
+class Orders(private val amountCalculator: BuySellAmountCalculator) {
     fun getInstantOrder(
         market: Market,
         targetCurrency: Currency,
@@ -34,17 +34,17 @@ object Orders {
             if (orderBook.asks.length() == 0) return null
 
             for ((basePrice, quoteAmount) in orderBook.asks) {
-                val availableFromAmount = buyBaseAmount(quoteAmount, basePrice)
+                val availableFromAmount = amountCalculator.fromAmountBuy(quoteAmount, basePrice, takerFeeMultiplier)
 
                 if (unusedFromCurrencyAmount <= availableFromAmount) {
-                    val tradeQuoteAmount = calcQuoteAmount(unusedFromCurrencyAmount, basePrice)
-                    targetCurrencyAmount += buyQuoteAmount(tradeQuoteAmount, takerFeeMultiplier)
+                    val tradeQuoteAmount = amountCalculator.quoteAmount(unusedFromCurrencyAmount, basePrice, takerFeeMultiplier)
+                    targetCurrencyAmount += amountCalculator.targetAmountBuy(tradeQuoteAmount, basePrice, takerFeeMultiplier)
                     trades = trades.prepend(BareTrade(tradeQuoteAmount, basePrice, takerFeeMultiplier))
                     unusedFromCurrencyAmount = BigDecimal.ZERO
                     break
                 } else {
                     unusedFromCurrencyAmount -= availableFromAmount
-                    targetCurrencyAmount += buyQuoteAmount(quoteAmount, takerFeeMultiplier)
+                    targetCurrencyAmount += amountCalculator.targetAmountBuy(quoteAmount, basePrice, takerFeeMultiplier)
                     trades = trades.prepend(BareTrade(quoteAmount, basePrice, takerFeeMultiplier))
                 }
             }
@@ -56,13 +56,13 @@ object Orders {
 
             for ((basePrice, quoteAmount) in orderBook.bids) {
                 if (unusedFromCurrencyAmount <= quoteAmount) {
-                    targetCurrencyAmount += sellBaseAmount(unusedFromCurrencyAmount, basePrice, takerFeeMultiplier)
+                    targetCurrencyAmount += amountCalculator.targetAmountSell(unusedFromCurrencyAmount, basePrice, takerFeeMultiplier)
                     trades = trades.prepend(BareTrade(unusedFromCurrencyAmount, basePrice, takerFeeMultiplier))
                     unusedFromCurrencyAmount = BigDecimal.ZERO
                     break
                 } else {
-                    unusedFromCurrencyAmount -= sellQuoteAmount(quoteAmount)
-                    targetCurrencyAmount += sellBaseAmount(quoteAmount, basePrice, takerFeeMultiplier)
+                    unusedFromCurrencyAmount -= amountCalculator.fromAmountSell(quoteAmount, basePrice, takerFeeMultiplier)
+                    targetCurrencyAmount += amountCalculator.targetAmountSell(quoteAmount, basePrice, takerFeeMultiplier)
                     trades = trades.prepend(BareTrade(quoteAmount, basePrice, takerFeeMultiplier))
                 }
             }
@@ -115,8 +115,8 @@ object Orders {
 
             if (orderBook.asks.length() > 0 && basePrice.compareTo(orderBook.asks.head()._1) == 0) return null
 
-            quoteAmount = calcQuoteAmount(fromAmount, basePrice)
-            toAmount = buyQuoteAmount(quoteAmount, makerFeeMultiplier)
+            quoteAmount = amountCalculator.quoteAmount(fromAmount, basePrice, makerFeeMultiplier)
+            toAmount = amountCalculator.targetAmountBuy(quoteAmount, basePrice, makerFeeMultiplier)
         } else {
             if (orderBook.asks.length() == 0) return null
 
@@ -125,7 +125,7 @@ object Orders {
             if (orderBook.bids.length() > 0 && basePrice.compareTo(orderBook.bids.head()._1) == 0) return null
 
             quoteAmount = fromAmount
-            toAmount = sellBaseAmount(quoteAmount, basePrice, makerFeeMultiplier)
+            toAmount = amountCalculator.targetAmountSell(quoteAmount, basePrice, makerFeeMultiplier)
         }
 
         orderMultiplier = if (fromAmount.compareTo(BigDecimal.ZERO) != 0) {

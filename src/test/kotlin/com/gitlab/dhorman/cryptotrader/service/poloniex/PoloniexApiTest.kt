@@ -1,8 +1,9 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniex
 
 import com.gitlab.dhorman.cryptotrader.core.Market
-import com.gitlab.dhorman.cryptotrader.service.poloniex.core.buyBaseAmount
-import com.gitlab.dhorman.cryptotrader.service.poloniex.core.calcQuoteAmount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.core.PoloniexBuySellAmountCalculator
+import com.gitlab.dhorman.cryptotrader.service.poloniex.core.fromAmountBuy
+import com.gitlab.dhorman.cryptotrader.service.poloniex.core.quoteAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.BuyOrderType
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.ChartDataCandlestickPeriod
 import kotlinx.coroutines.flow.collect
@@ -29,6 +30,9 @@ class PoloniexApiTest {
     @Autowired
     private lateinit var poloniexApi: PoloniexApi
 
+    @Autowired
+    private lateinit var amountCalculator: PoloniexBuySellAmountCalculator
+
     @Test
     fun `Get open orders for market USDC_ATOM`() = runBlocking {
         val openOrders = poloniexApi.openOrders(Market("USDC", "ATOM"))
@@ -39,7 +43,7 @@ class PoloniexApiTest {
     fun `Buy USDT on USDC_USDC market`() = runBlocking {
         val price = BigDecimal("0.9966")
         val baseAmount = BigDecimal("10.14628578")
-        val quoteAmount = calcQuoteAmount(baseAmount, price)
+        val quoteAmount = amountCalculator.quoteAmount(baseAmount, price)
         val buyResult = poloniexApi.buy(
             Market("USDC", "USDT"),
             price,
@@ -86,9 +90,9 @@ class PoloniexApiTest {
                         "." +
                         sequence { for (i in 0..7) yield(Random.nextInt(0, 10)) }.joinToString("")
             )
-            val q = calcQuoteAmount(initAmount, price)
+            val q = amountCalculator.quoteAmount(initAmount, price)
 
-            val b = buyBaseAmount(q, price)
+            val b = amountCalculator.fromAmountBuy(q, price)
             if (b.compareTo(BigDecimal.ONE) != 0) continue
 
             try {
@@ -96,7 +100,7 @@ class PoloniexApiTest {
                 val res = poloniexApi.buy(Market("USDT", "BTC"), price, q, BuyOrderType.PostOnly)
                 poloniexApi.cancelOrder(res.orderId)
             } catch (e: Throwable) {
-                logger.error("${e.message}: $price, $q, ${buyBaseAmount(q, price)}")
+                logger.error("${e.message}: $price, $q, ${amountCalculator.fromAmountBuy(q, price)}")
             }
         }
     }

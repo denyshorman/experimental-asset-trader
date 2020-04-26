@@ -18,12 +18,9 @@ enum class CurrencyType {
     Base,
     Quote;
 
-    fun inverse(): CurrencyType {
-        return if (this == Base) {
-            Quote
-        } else {
-            Base
-        }
+    operator fun not() = when (this) {
+        Base -> Quote
+        Quote -> Base
     }
 }
 
@@ -33,7 +30,10 @@ enum class OrderType {
     Sell,
     Buy;
 
-    operator fun not() = if (this == Sell) Buy else Sell
+    operator fun not() = when (this) {
+        Sell -> Buy
+        Buy -> Sell
+    }
 }
 
 data class PriceAggregatedBook(

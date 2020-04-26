@@ -4,12 +4,20 @@ import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Ticker
+import com.gitlab.dhorman.cryptotrader.trader.DataStreams
+import com.gitlab.dhorman.cryptotrader.trader.IndicatorStreams
 import com.gitlab.dhorman.cryptotrader.trader.PoloniexTrader
-import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
+import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
-import io.swagger.annotations.*
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
+import io.swagger.annotations.ApiImplicitParam
+import io.swagger.annotations.ApiImplicitParams
+import io.swagger.annotations.ApiOperation
 import io.vavr.Tuple2
+import io.vavr.Tuple3
 import io.vavr.Tuple4
 import io.vavr.collection.Array
 import io.vavr.collection.Map
@@ -32,8 +40,13 @@ import java.util.*
 @RequestMapping(value = ["/api/traders/poloniex"], produces = [MediaType.APPLICATION_JSON_VALUE])
 class PoloniexTraderApi(
     private val poloniexTrader: PoloniexTrader,
-    private val transactionsDao: TransactionsDao
+    private val transactionsDao: TransactionsDao,
+    private val data: DataStreams,
+    private val indicators: IndicatorStreams,
+    amountCalculator: AdjustedPoloniexBuySellAmountCalculator
 ) {
+    private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, data)
+
     // Example: USDT USDC 40.00 USDT_BTC1BTC_USDC0
     private val execTranBodyPattern =
         """^([a-z]+)\s+([a-z]+)\s+(\d+(?:\.\d+)?)\s+((?:[a-z]+_[a-z]+[01])+)$""".toRegex(RegexOption.IGNORE_CASE)
@@ -48,7 +61,7 @@ class PoloniexTraderApi(
     )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/tickers"])
     suspend fun tickersSnapshot(): Map<Market, Ticker> {
-        return poloniexTrader.data.tickers.first()
+        return data.tickers.first()
     }
 
     @ApiOperation(
@@ -57,12 +70,12 @@ class PoloniexTraderApi(
     )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/balances"])
     suspend fun balancesSnapshot(): Map<Currency, Tuple2<Amount, Amount>> {
-        return poloniexTrader.data.balances.first()
+        return data.balances.first()
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/paths"])
     suspend fun pathsSnapshot(@RequestParam initAmount: Amount, @RequestParam currencies: List<Currency>): List<ExhaustivePath> {
-        return poloniexTrader.indicators.getPaths(PathsSettings(initAmount, currencies.toVavrList()))
+        return indicators.getPaths(PathsSettings(initAmount, currencies.toVavrList()))
             .sampleFirst(Duration.ofSeconds(30))
             .onBackpressureLatest()
             .flatMapSequential({
@@ -80,7 +93,7 @@ class PoloniexTraderApi(
         @RequestParam(defaultValue = "40") fromAmount: Amount,
         @RequestParam(defaultValue = "USDT, USDC") endCurrencies: List<Currency>
     ): TreeSet<ExhaustivePath> {
-        return poloniexTrader.indicators.getPaths(
+        return indicators.getPaths(
             fromCurrency,
             fromAmount,
             endCurrencies.toVavrList(),
@@ -190,6 +203,16 @@ class PoloniexTraderApi(
         return transactionsDao.getCompleted()
     }
 
+    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/completed-short"])
+    suspend fun getCompletedShortTransactions(): List<Tuple3<Amount, Amount, Long>> {
+        return transactionsDao.getCompleted().map { (_, markets, created, completed) ->
+            val fromAmount = tranIntentMarketExtensions.fromAmount(markets[0] as TranIntentMarketCompleted)
+            val targetAmount = tranIntentMarketExtensions.targetAmount(markets[markets.length() - 1] as TranIntentMarketCompleted)
+            val time = completed.epochSecond - created.epochSecond
+            tuple(fromAmount, targetAmount, time)
+        }
+    }
+
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/balances-in-use"])
     suspend fun getBalancesInUse(@RequestParam primaryCurrencies: List<Currency>): List<Tuple2<Currency, BigDecimal>> {
         return transactionsDao.balancesInUse(primaryCurrencies.toVavrList())
@@ -199,7 +222,7 @@ class PoloniexTraderApi(
     //@MessageMapping("/tickers")
     @RequestMapping(method = [RequestMethod.GET], value = ["/tickers"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun tickers() = run {
-        poloniexTrader.data.tickers.sample(Duration.ofSeconds(1).toMillis())
+        data.tickers.sample(Duration.ofSeconds(1).toMillis())
     }
 
     //@MessageMapping("/paths")
@@ -208,7 +231,7 @@ class PoloniexTraderApi(
         @RequestParam(required = true) initAmount: Amount,
         @RequestParam(required = true) currencies: List<Currency>
     ) = run {
-        poloniexTrader.indicators.getPaths(PathsSettings(initAmount, currencies.toVavrList()))
+        indicators.getPaths(PathsSettings(initAmount, currencies.toVavrList()))
             .sampleFirst(Duration.ofSeconds(30))
             .onBackpressureLatest()
             .flatMapSequential({

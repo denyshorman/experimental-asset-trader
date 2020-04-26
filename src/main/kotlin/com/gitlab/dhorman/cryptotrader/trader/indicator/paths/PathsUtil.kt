@@ -19,7 +19,9 @@ import io.vavr.kotlin.toVavrStream
 import java.math.BigDecimal
 import java.util.*
 
-object PathsUtil {
+class PathsUtil(amountCalculator: BuySellAmountCalculator) {
+    private val orders = Orders(amountCalculator)
+
     fun generateSimplePaths(
         markets: Traversable<Market>,
         currencies: Traversable<Currency>
@@ -116,7 +118,7 @@ object PathsUtil {
         takerFee: BigDecimal,
         orderBook: OrderBookAbstract
     ): InstantOrder? {
-        return Orders.getInstantOrder(market, targetCurrency, fromAmount, takerFee, orderBook)
+        return orders.getInstantOrder(market, targetCurrency, fromAmount, takerFee, orderBook)
     }
 
     private fun mapDelayedOrder(
@@ -128,7 +130,7 @@ object PathsUtil {
         stat: TradeStat
     ): DelayedOrder? {
         val stat0 = statOrder(market, targetCurrency, stat)
-        return Orders.getDelayedOrder(market, targetCurrency, fromAmount, makerFee, orderBook, stat0)
+        return orders.getDelayedOrder(market, targetCurrency, fromAmount, makerFee, orderBook, stat0)
     }
 
     private fun statOrder(market: Market, targetCurrency: Currency, stat: TradeStat): TradeStatOrder {
