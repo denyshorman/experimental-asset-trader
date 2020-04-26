@@ -64,41 +64,31 @@ class MergeTradeAlgo(
 
             if (targetAmountDelta.compareTo(BigDecimal.ZERO) == 0) break
 
-            if (market.orderType == OrderType.Buy) {
-                val price = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.price }.max() ?: BigDecimal.ONE
-                val fee = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.feeMultiplier }.max() ?: BigDecimal.ONE
-                val quoteAmount = targetAmountDelta.divide(fee, 8, RoundingMode.DOWN)
-                val trade = BareTrade(quoteAmount, price, fee)
-                var newTrades = market.trades.append(trade)
-                val targetAmountNew = newTrades.asSequence()
-                    .map { amountCalculator.targetAmountBuy(it) }
-                    .fold(BigDecimal.ZERO, { a, b -> a + b })
-                val targetAmountNewDelta = targetAmount - targetAmountNew
-                if (targetAmountNewDelta.compareTo(BigDecimal.ZERO) != 0) {
-                    val adjTrade = tradeAdjuster.adjustTargetAmount(targetAmountNewDelta, OrderType.Buy)
-                    newTrades = newTrades.append(adjTrade)
+            val trade = when (market.orderType) {
+                OrderType.Buy -> run {
+                    val price = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.price }.max() ?: BigDecimal.ONE
+                    val fee = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.feeMultiplier }.max() ?: BigDecimal.ONE
+                    val quoteAmount = targetAmountDelta.divide(fee, 8, RoundingMode.DOWN)
+                    BareTrade(quoteAmount, price, fee)
                 }
-                val newMarket = TranIntentMarketCompleted(market.market, market.orderSpeed, market.fromCurrencyType, newTrades)
-                updatedMarkets = updatedMarkets.update(i, newMarket)
-                targetAmount = tranIntentMarketExtensions.fromAmount(newMarket)
-            } else {
-                val price = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.price }.min() ?: BigDecimal.ONE
-                val fee = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.feeMultiplier }.min() ?: BigDecimal.ONE
-                val quoteAmount = targetAmountDelta.divide(price, 8, RoundingMode.UP).divide(fee, 8, RoundingMode.UP)
-                val trade = BareTrade(quoteAmount, price, fee)
-                var newTrades = market.trades.append(trade)
-                val targetAmountNew = newTrades.asSequence()
-                    .map { amountCalculator.targetAmountSell(it) }
-                    .fold(BigDecimal.ZERO, { a, b -> a + b })
-                val targetAmountNewDelta = targetAmount - targetAmountNew
-                if (targetAmountNewDelta.compareTo(BigDecimal.ZERO) != 0) {
-                    val adjTrade = tradeAdjuster.adjustTargetAmount(targetAmountNewDelta, OrderType.Sell)
-                    newTrades = newTrades.append(adjTrade)
+                OrderType.Sell -> run {
+                    val price = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.price }.min() ?: BigDecimal.ONE
+                    val fee = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.feeMultiplier }.min() ?: BigDecimal.ONE
+                    val quoteAmount = targetAmountDelta.divide(price, 8, RoundingMode.UP).divide(fee, 8, RoundingMode.UP)
+                    BareTrade(quoteAmount, price, fee)
                 }
-                val newMarket = TranIntentMarketCompleted(market.market, market.orderSpeed, market.fromCurrencyType, newTrades)
-                updatedMarkets = updatedMarkets.update(i, newMarket)
-                targetAmount = tranIntentMarketExtensions.fromAmount(newMarket)
             }
+
+            var newTrades = market.trades.append(trade)
+            val targetAmountNew = tranIntentMarketExtensions.targetAmount(newTrades, market.orderType)
+            val targetAmountNewDelta = targetAmount - targetAmountNew
+            if (targetAmountNewDelta.compareTo(BigDecimal.ZERO) != 0) {
+                val adjTrade = tradeAdjuster.adjustTargetAmount(targetAmountNewDelta, market.orderType)
+                newTrades = newTrades.append(adjTrade)
+            }
+            val newMarket = TranIntentMarketCompleted(market.market, market.orderSpeed, market.fromCurrencyType, newTrades)
+            updatedMarkets = updatedMarkets.update(i, newMarket)
+            targetAmount = tranIntentMarketExtensions.fromAmount(newMarket)
         }
 
         // 3. Add an amount to trades of init market.
@@ -125,11 +115,11 @@ class MergeTradeAlgo(
             if (deltaAmount.compareTo(BigDecimal.ZERO) != 0 && firstTradeIdx != null) {
                 val trade = initMarket.trades[firstTradeIdx]
                 val newTradesList = if (initMarket.orderType == OrderType.Buy) {
-                    val fromAmount = amountCalculator.fromAmountBuy(trade)
+                    val fromAmount = amountCalculator.fromAmount(initMarket.orderType, trade)
                     val newFromAmount = fromAmount + deltaAmount
                     val newPrice = newFromAmount.divide(trade.quoteAmount, 8, RoundingMode.DOWN)
                     val newTrade = BareTrade(trade.quoteAmount, newPrice, trade.feeMultiplier)
-                    val calcNewFromAmount = amountCalculator.fromAmountBuy(newTrade)
+                    val calcNewFromAmount = amountCalculator.fromAmount(initMarket.orderType, newTrade)
                     val newFromAmountDelta = newFromAmount - calcNewFromAmount
                     if (newFromAmountDelta.compareTo(BigDecimal.ZERO) != 0) {
                         val adjTrade = tradeAdjuster.adjustFromAmount(newFromAmountDelta)
@@ -138,15 +128,15 @@ class MergeTradeAlgo(
                         listOf(newTrade)
                     }
                 } else {
-                    val tradeFromAmount = amountCalculator.fromAmountSell(trade)
-                    val tradeTargetAmount = amountCalculator.targetAmountSell(trade)
+                    val tradeFromAmount = amountCalculator.fromAmount(initMarket.orderType, trade)
+                    val tradeTargetAmount = amountCalculator.targetAmount(initMarket.orderType, trade)
                     val newFromAmount = tradeFromAmount + deltaAmount
                     val newPrice = tradeTargetAmount.divide(newFromAmount, 8, RoundingMode.DOWN).divide(trade.feeMultiplier, 8, RoundingMode.DOWN)
                     val newTrade = BareTrade(newFromAmount, newPrice, trade.feeMultiplier)
-                    val calcNewTargetAmount = amountCalculator.targetAmountSell(newTrade)
+                    val calcNewTargetAmount = amountCalculator.targetAmount(initMarket.orderType, newTrade)
                     val newTargetAmountDelta = tradeTargetAmount - calcNewTargetAmount
                     if (newTargetAmountDelta.compareTo(BigDecimal.ZERO) != 0) {
-                        val adjTrade = tradeAdjuster.adjustTargetAmount(newTargetAmountDelta, OrderType.Sell)
+                        val adjTrade = tradeAdjuster.adjustTargetAmount(newTargetAmountDelta, initMarket.orderType)
                         listOf(newTrade, adjTrade)
                     } else {
                         listOf(newTrade)

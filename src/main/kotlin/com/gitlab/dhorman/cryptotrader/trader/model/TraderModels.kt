@@ -177,6 +177,18 @@ class TranIntentMarketExtensions(
         return amount
     }
 
+    fun fromAmount(markets: Iterable<BareTrade>, orderType: OrderType): BigDecimal {
+        return markets.asSequence()
+            .map { amountCalculator.fromAmount(orderType, it) }
+            .fold(BigDecimal.ZERO) { x, y -> x + y }
+    }
+
+    fun targetAmount(markets: Iterable<BareTrade>, orderType: OrderType): BigDecimal {
+        return markets.asSequence()
+            .map { amountCalculator.targetAmount(orderType, it) }
+            .fold(BigDecimal.ZERO) { x, y -> x + y }
+    }
+
     suspend fun predictedTargetAmount(market: TranIntentMarketPartiallyCompleted): Amount {
         val fee = data.fee.first()
         val orderBook = data.getOrderBookFlowBy(market.market).first()

@@ -59,18 +59,6 @@ class SplitTradeAlgo(
         return tuple(update.adjust(amountType, orderType), (update + delta).adjust(amountType, orderType))
     }
 
-    private fun Iterable<BareTrade>.fromAmount(orderType: OrderType): BigDecimal {
-        return this.asSequence()
-            .map { amountCalculator.fromAmount(orderType, it) }
-            .fold(BigDecimal.ZERO) { x, y -> x + y }
-    }
-
-    private fun Iterable<BareTrade>.targetAmount(orderType: OrderType): BigDecimal {
-        return this.asSequence()
-            .map { amountCalculator.targetAmount(orderType, it) }
-            .fold(BigDecimal.ZERO) { x, y -> x + y }
-    }
-
     fun splitTrade(amountType: AmountType, orderType: OrderType, amount: Amount, trade: BareTrade): Tuple2<List<BareTrade>, List<BareTrade>> {
         if (tradeAdjuster.isAdjustmentTrade(trade)) return splitAdjustedTrade(trade, amount)
 
@@ -220,10 +208,10 @@ class SplitTradeAlgo(
                 }
             }
 
-            var updatedTradesFromAmount = updatedTrades.fromAmount(m.orderType)
-            var updatedTradesTargetAmount = updatedTrades.targetAmount(m.orderType)
-            var committedTradesFromAmount = committedTrades.fromAmount(m.orderType)
-            var committedTradesTargetAmount = committedTrades.targetAmount(m.orderType)
+            var updatedTradesFromAmount = tranIntentMarketExtensions.fromAmount(updatedTrades, m.orderType)
+            var updatedTradesTargetAmount = tranIntentMarketExtensions.targetAmount(updatedTrades, m.orderType)
+            var committedTradesFromAmount = tranIntentMarketExtensions.fromAmount(committedTrades, m.orderType)
+            var committedTradesTargetAmount = tranIntentMarketExtensions.targetAmount(committedTrades, m.orderType)
 
             for (trade in m.trades) {
                 if (!tradeAdjuster.isAdjustmentTrade(trade)) continue
