@@ -62,49 +62,51 @@ class DataStreams(
         channelFlow {
             mainLoop@ while (isActive) {
                 try {
-                    val rawApiBalances = poloniexApi.completeBalances()
-
-                    var allOpenOrders = poloniexApi.allOpenOrders()
-
-                    // Check if open order balance equal to complete onOrder balance
-                    val balanceOnOrders = allOpenOrders.groupBy({ (_, order) ->
-                        if (order.type == OrderType.Buy) {
-                            order.market.baseCurrency
-                        } else {
-                            order.market.quoteCurrency
-                        }
-                    }, { (_, order) ->
-                        if (order.type == OrderType.Buy) {
-                            amountCalculator.fromAmountBuy(order.amount, order.price, BigDecimal.ONE)
-                        } else {
-                            order.amount
-                        }
-                    }).mapValues { it.value.reduce { a, b -> a + b } }
-
-                    for ((currency, balance) in rawApiBalances.iterator().map { (c, b) -> tuple(c, b.onOrders) }) {
-                        val orderBalance = balanceOnOrders.getOrDefault(currency, BigDecimal.ZERO)
-                        val balanceDelta = orderBalance - balance
-
-                        // Compare balance deltas because rounding algorithms used locally can differ from server ones
-                        if (balanceDelta < BigDecimal.ZERO || balanceDelta > SEVEN_ZEROS_AND_ONE) {
-                            logger.warn("Balances ($balance, $orderBalance) not equal for currency $currency")
-                            continue@mainLoop
-                        }
-                    }
-
-                    var availableAndOnOrderBalances =
-                        rawApiBalances.mapValues { it.available }.map { currency, availableBalance ->
-                            tuple(
-                                currency,
-                                tuple(availableBalance, balanceOnOrders.getOrDefault(currency, BigDecimal.ZERO))
-                            )
-                        }
-
-                    send(availableAndOnOrderBalances)
-
-                    val currenciesSnapshot = currencies.first()
-
                     coroutineScope {
+                        val rawApiBalancesFuture = async { poloniexApi.completeBalances() }
+                        val allOpenOrdersFuture = async { poloniexApi.allOpenOrders() }
+
+                        val rawApiBalances = rawApiBalancesFuture.await()
+                        var allOpenOrders = allOpenOrdersFuture.await()
+
+                        // Check if open order balance equal to complete onOrder balance
+                        val balanceOnOrders = allOpenOrders.groupBy({ (_, order) ->
+                            if (order.type == OrderType.Buy) {
+                                order.market.baseCurrency
+                            } else {
+                                order.market.quoteCurrency
+                            }
+                        }, { (_, order) ->
+                            if (order.type == OrderType.Buy) {
+                                amountCalculator.fromAmountBuy(order.amount, order.price, BigDecimal.ONE)
+                            } else {
+                                order.amount
+                            }
+                        }).mapValues { it.value.reduce { a, b -> a + b } }
+
+                        for ((currency, balance) in rawApiBalances.iterator().map { (c, b) -> tuple(c, b.onOrders) }) {
+                            val orderBalance = balanceOnOrders.getOrDefault(currency, BigDecimal.ZERO)
+                            val balanceDelta = orderBalance - balance
+
+                            // Compare balance deltas because rounding algorithms used locally can differ from server ones
+                            if (balanceDelta < BigDecimal.ZERO || balanceDelta > BigDecimal(10) * SEVEN_ZEROS_AND_ONE) {
+                                logger.warn("Balances ($balance, $orderBalance) not equal for currency $currency")
+                                return@coroutineScope
+                            }
+                        }
+
+                        var availableAndOnOrderBalances = rawApiBalances.mapValues { it.available }
+                            .map { currency, availableBalance ->
+                                tuple(
+                                    currency,
+                                    tuple(availableBalance, balanceOnOrders.getOrDefault(currency, BigDecimal.ZERO))
+                                )
+                            }
+
+                        send(availableAndOnOrderBalances)
+
+                        val currenciesSnapshot = currencies.first()
+
                         launch(start = CoroutineStart.UNDISPATCHED) {
                             poloniexApi.connection.collect { connected ->
                                 if (!connected) throw DisconnectedException
