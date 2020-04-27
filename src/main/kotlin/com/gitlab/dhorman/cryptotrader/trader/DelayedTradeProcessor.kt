@@ -227,6 +227,7 @@ class DelayedTradeProcessor(
                         val timeoutMillis = timeout.toMillis()
                         var bookUpdateTime = System.currentTimeMillis()
                         var bookChangeCounter = 0
+                        var prevBook: OrderBookAbstract? = null
 
                         logger.debug { "Start market maker movement process" }
 
@@ -243,6 +244,7 @@ class DelayedTradeProcessor(
                                         val fixPriceGaps = now - bookUpdateTime >= timeoutMillis || bookChangeCounter == 0
                                         bookUpdateTime = now
                                         prevFromAmount = currFromAmount
+                                        prevBook = book
 
                                         val (orderId, price, quoteAmount) = moveOrder(
                                             book,
@@ -265,6 +267,14 @@ class DelayedTradeProcessor(
                                         orderCancelConfirmed.set(CompletableDeferred())
                                     }
                                 }
+                            } catch (e: UnableToPlacePostOnlyOrderException) {
+                                logger.debug {
+                                    val asks = prevBook?.asks?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
+                                    val bids = prevBook?.bids?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
+                                    "${e.message} ; book = (asks = $asks ; bids = $bids) ; currentOrderId = $currOrderId; previousPrice = $prevPrice; " +
+                                        "previousQuoteAmount = $prevQuoteAmount; currFromAmount = $prevFromAmount"
+                                }
+                                return@collect
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Throwable) {
@@ -518,8 +528,7 @@ class DelayedTradeProcessor(
             } catch (e: OrderCompletedOrNotExistException) {
                 throw e
             } catch (e: UnableToPlacePostOnlyOrderException) {
-                logger.debug(e.originalMsg)
-                delay(100)
+                throw e
             } catch (e: TransactionFailedException) {
                 logger.debug(e.originalMsg)
                 delay(500)
