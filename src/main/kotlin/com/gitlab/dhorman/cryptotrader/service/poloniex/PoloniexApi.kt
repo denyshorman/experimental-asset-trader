@@ -208,6 +208,29 @@ class PoloniexApi(
             .share()
     }
 
+    @Throws(InvalidMarketException::class, InvalidDepthException::class)
+    suspend fun orderBooks(market: Market? = null, depth: Int? = null): Map<Market, OrderBookSnapshot> {
+        val command = "returnOrderBook"
+
+        val params = hashMap(
+            "currencyPair" to (market?.toString() ?: "all"),
+            "depth" to (depth?.toString() ?: "30")
+        )
+
+        try {
+            return if (market == null) {
+                callPublicApi(command, jacksonTypeRef(), params)
+            } else {
+                val orderBookData = callPublicApi(command, jacksonTypeRef<OrderBookSnapshot>(), params)
+                hashMap(market to orderBookData)
+            }
+        } catch (e: Throwable) {
+            if (e.message == InvalidMarketMsg) throw InvalidMarketException
+            if (e.message == InvalidDepthMsg) throw InvalidDepthException
+            throw e
+        }
+    }
+
     fun orderBookStream(marketId: MarketId): Flow<Tuple2<PriceAggregatedBook, List<OrderBookNotification>>> = channelFlow {
         while (true) {
             try {

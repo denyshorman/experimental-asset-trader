@@ -128,4 +128,10 @@ class PoloniexApiTest {
 
         logger.info(data.toString())
     }
+
+    @Test
+    fun `Get order book API call should run successfully`() = runBlocking {
+        val orderBook = poloniexApi.orderBooks(depth = 0)
+        println(orderBook)
+    }
 }

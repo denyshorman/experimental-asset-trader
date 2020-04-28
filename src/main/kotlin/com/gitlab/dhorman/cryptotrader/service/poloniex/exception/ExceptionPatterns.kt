@@ -16,4 +16,6 @@ const val AlreadyCalledMoveOrderMsg = """You have already called cancelOrder or 
 const val PermissionDeniedMsg = """Permission denied."""
 const val InvalidChannelMsg = """Invalid channel."""
 const val MarketDisabledMsg = """Market is disabled."""
+const val InvalidMarketMsg = """Invalid currency pair."""
+const val InvalidDepthMsg = """Invalid depth."""
 val OrderCompletedOrNotExistPattern = """Order (\d+) is either completed or does not exist\.""".toRegex()

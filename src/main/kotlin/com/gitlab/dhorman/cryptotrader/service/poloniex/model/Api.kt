@@ -6,8 +6,10 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.core.oneMinusAdjPoloniex
 import com.gitlab.dhorman.cryptotrader.service.poloniex.codec.BooleanStringNumberJsonCodec
+import com.gitlab.dhorman.cryptotrader.service.poloniex.codec.OrderBookSnapshotCodec
 import io.vavr.collection.Array
 import io.vavr.collection.Map
+import io.vavr.collection.TreeMap
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDateTime
@@ -15,6 +17,14 @@ import java.time.LocalDateTime
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class Error(
     @JsonProperty("error") val msg: String?
+)
+
+@JsonDeserialize(using = OrderBookSnapshotCodec.Decoder::class)
+data class OrderBookSnapshot(
+    val asks: TreeMap<Price, Amount>,
+    val bids: TreeMap<Price, Amount>,
+    val isFrozen: Boolean,
+    val snapshot: Long
 )
 
 data class Ticker0(
