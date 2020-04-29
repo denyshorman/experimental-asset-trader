@@ -1,12 +1,9 @@
 package com.gitlab.dhorman.cryptotrader.trader.indicator.paths
 
 import com.gitlab.dhorman.cryptotrader.core.*
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import com.gitlab.dhorman.cryptotrader.trader.model.MarketStringMap
-import com.gitlab.dhorman.cryptotrader.trader.model.OrderBookData
 import io.vavr.Tuple2
 import io.vavr.collection.*
 import io.vavr.collection.List
@@ -45,7 +42,7 @@ class PathsUtil(amountCalculator: BuySellAmountCalculator) {
 
     fun map(
         pathsPermutations: Map<Tuple2<Currency, Currency>, Set<List<Tuple2<OrderSpeed, Market>>>>,
-        orderBooks: Map<MarketId, OrderBookData>,
+        orderBooks: Map<MarketId, PriceAggregatedBook>,
         stats: Map<MarketId, TradeStat>,
         marketInfoStringMap: MarketStringMap,
         initialAmount: Amount,
@@ -57,7 +54,7 @@ class PathsUtil(amountCalculator: BuySellAmountCalculator) {
 
                 for ((tpe, market) in path) {
                     val marketId = marketInfoStringMap.get(market).get()
-                    val orderBook = orderBooks[marketId].get().book
+                    val orderBook = orderBooks[marketId].get()
                     booksStats += orderBook
 
                     when (tpe) {

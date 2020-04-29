@@ -1,13 +1,8 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.gitlab.dhorman.cryptotrader.core.ExhaustivePath
-import com.gitlab.dhorman.cryptotrader.core.FeeMultiplier
-import com.gitlab.dhorman.cryptotrader.core.MarketPathGenerator
-import com.gitlab.dhorman.cryptotrader.core.TradeStat
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
+import com.gitlab.dhorman.cryptotrader.core.*
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.MarketId
-import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.ExhaustivePathOrdering
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
@@ -43,7 +38,7 @@ class IndicatorStreams(
     private val logger = KotlinLogging.logger {}
     private val pathsUtil = PathsUtil(amountCalculator)
 
-    fun getPaths(settings: PathsSettings): Flux<TreeSet<ExhaustivePath>> {
+    fun getPathsIntensive(settings: PathsSettings): Flux<TreeSet<ExhaustivePath>> {
         return Flux.combineLatest(
             data.markets.asPublisher(),
             data.orderBooks.asPublisher(),
@@ -100,9 +95,97 @@ class IndicatorStreams(
                         var sortedPaths = TreeSet.empty(ExhaustivePathOrdering)
                         val exhaustivePaths = pathsUtil.map(
                             pathsPermutations,
-                            orderBooks0,
+                            orderBooks0.mapValues { it.book },
                             stats0,
                             marketInfoStringMap,
+                            settings.initialAmount,
+                            fee
+                        )
+                        for (exhaustivePath in exhaustivePaths) {
+                            if (exhaustivePath != null) {
+                                sortedPaths = sortedPaths.add(exhaustivePath)
+                            }
+                        }
+                        sortedPaths
+                    }
+                    .skip(1)
+            }
+            .switchMap({ it }, Int.MAX_VALUE)
+            .share()
+    }
+
+    fun getPathsPolling(settings: PathsSettings): Flux<TreeSet<ExhaustivePath>> {
+        return Flux.combineLatest(
+            data.markets.asPublisher(),
+            data.orderBooksPolling.asPublisher(),
+            data.tradesStat.asPublisher(),
+            data.fee.asPublisher(),
+            identity()
+        )
+            .onBackpressureLatest()
+            .publishOn(Schedulers.elastic(), 1)
+            .map { data0 ->
+                val (marketIntMap, marketStringMap) = run {
+                    @Suppress("UNCHECKED_CAST")
+                    data0[0] as MarketData
+                }
+
+                @Suppress("UNCHECKED_CAST")
+                val marketBookMap = data0[1] as Map<Market, OrderBookSnapshot>
+
+                @Suppress("UNCHECKED_CAST")
+                val statMap = data0[2] as Map<MarketId, Flow<TradeStat>>
+
+                val fee = data0[3] as FeeMultiplier
+
+                val pathsPermutations = pathsUtil.generateSimplePaths(marketBookMap.keySet(), settings.currencies)
+
+                val uniqueMarkets = pathsUtil.uniqueMarkets(pathsPermutations)
+
+                val orderBooks = marketBookMap.toVavrStream()
+                    .filter { (market, _) -> uniqueMarkets.contains(market) && marketStringMap.containsKey(market) }
+                    .map { (market, orderBook) ->
+                        val marketId = marketStringMap.getOrNull(market)!!
+                        val orderBookData = PriceAggregatedBook(orderBook.asks, orderBook.bids)
+                        tuple(marketId, orderBookData)
+                    }
+                    .toMap { it }
+
+                val stats = statMap.toVavrStream()
+                    .filter { (marketId, _) ->
+                        marketIntMap[marketId].map { market -> uniqueMarkets.contains(market) }.getOrElse(false)
+                    }
+                    .map { (marketId, tradeStatFlow) ->
+                        tradeStatFlow.map { stat -> tuple(marketId, stat) }.take(1)
+                    }
+                    .toList()
+
+                logger.debug { "Paths generated: ${pathsPermutations.iterator().map { it._2.size() }.sum()}" }
+
+                Flux.interval(Duration.ofSeconds(settings.recalculatePeriodSec))
+                    .startWith(0)
+                    .onBackpressureDrop()
+                    .limitRate(1)
+                    .switchMap({
+                        val booksMap = Mono.just(orderBooks)
+
+                        val statsMap = Flux.fromIterable(stats.map { it.asPublisher() })
+                            .flatMap({ it }, stats.length(), 1)
+                            .collectMap({ it._1 }, { it._2 })
+                            .map { it.toVavrMap() }
+
+                        Mono.zip(booksMap, statsMap) { b, s -> tuple(b, s) }
+                    }, 1)
+                    .onBackpressureLatest()
+                    .publishOn(Schedulers.elastic(), 1)
+                    .scan(TreeSet.empty(ExhaustivePathOrdering)) { _, bookStatDelta ->
+                        val (orderBooks0, stats0) = bookStatDelta
+                        var sortedPaths = TreeSet.empty(ExhaustivePathOrdering)
+                        val exhaustivePaths = pathsUtil.map(
+                            pathsPermutations,
+                            orderBooks0,
+                            stats0,
+                            marketStringMap,
                             settings.initialAmount,
                             fee
                         )
@@ -126,29 +209,36 @@ class IndicatorStreams(
         pathFilter: (ExhaustivePath) -> Boolean,
         pathComparator: Comparator<ExhaustivePath>
     ): TreeSet<ExhaustivePath> = coroutineScope {
-        val markets = data.markets.first()._2
+        val (marketIntMap, marketStringMap) = data.markets.first()
         val fee = data.fee.first()
+        val orderBookMap = data.orderBooksPolling.first().filterValues { !it.isFrozen }
         val paths = withContext(Dispatchers.IO) {
-            MarketPathGenerator(markets.keySet())
+            MarketPathGenerator(orderBookMap.keySet())
                 .generateWithOrders(list(fromCurrency), toCurrencies)
         }
-        val uniqueMarkets = pathsUtil.uniqueMarkets(paths).map { markets[it].get() }
+        val uniqueMarkets = pathsUtil.uniqueMarkets(paths)
 
         val booksMapDeferrable = async {
-            val orderBookMap = data.orderBooks.first()
-
-            flowFromMap(orderBookMap)
-                .filter { uniqueMarkets.contains(it._1) }
-                .flatMapMerge(orderBookMap.length()) { it._2.map { book -> tuple(it._1, book) }.take(1) }
-                .collectMap()
+            orderBookMap.toVavrStream()
+                .filter { (market, _) -> uniqueMarkets.contains(market) && marketStringMap.containsKey(market) }
+                .map { (market, orderBook) ->
+                    val marketId = marketStringMap.getOrNull(market)!!
+                    val orderBookData = PriceAggregatedBook(orderBook.asks, orderBook.bids)
+                    tuple(marketId, orderBookData)
+                }
+                .toMap { it }
         }
 
         val statsMapDeferrable = async {
             val stats = data.tradesStat.first()
 
             flowFromMap(stats)
-                .filter { uniqueMarkets.contains(it._1) }
-                .flatMapMerge(stats.length()) { it._2.map { stat -> tuple(it._1, stat) }.take(1) }
+                .filter { (marketId, _) ->
+                    marketIntMap[marketId].map { market -> uniqueMarkets.contains(market) }.getOrElse(false)
+                }
+                .flatMapMerge(stats.length()) { (marketId, tradeStatFlow) ->
+                    tradeStatFlow.map { stat -> tuple(marketId, stat) }.take(1)
+                }
                 .collectMap()
         }
 
@@ -159,7 +249,7 @@ class IndicatorStreams(
                 paths,
                 booksMapDeferrable.await(),
                 statsMapDeferrable.await(),
-                markets,
+                marketStringMap,
                 fromCurrencyAmount,
                 fee
             )

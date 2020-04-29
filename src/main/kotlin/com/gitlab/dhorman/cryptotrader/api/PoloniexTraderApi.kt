@@ -75,7 +75,7 @@ class PoloniexTraderApi(
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/paths"])
     suspend fun pathsSnapshot(@RequestParam initAmount: Amount, @RequestParam currencies: List<Currency>): List<ExhaustivePath> {
-        return indicators.getPaths(PathsSettings(initAmount, currencies.toVavrList()))
+        return indicators.getPathsPolling(PathsSettings(initAmount, currencies.toVavrList()))
             .sampleFirst(Duration.ofSeconds(30))
             .onBackpressureLatest()
             .flatMapSequential({
@@ -231,7 +231,7 @@ class PoloniexTraderApi(
         @RequestParam(required = true) initAmount: Amount,
         @RequestParam(required = true) currencies: List<Currency>
     ) = run {
-        indicators.getPaths(PathsSettings(initAmount, currencies.toVavrList()))
+        indicators.getPathsPolling(PathsSettings(initAmount, currencies.toVavrList()))
             .sampleFirst(Duration.ofSeconds(30))
             .onBackpressureLatest()
             .flatMapSequential({

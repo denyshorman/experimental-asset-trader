@@ -3,6 +3,8 @@ package com.gitlab.dhorman.cryptotrader.trader
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.DisconnectedException
+import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidDepthException
+import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidMarketException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.exception.BalancesAndCurrenciesNotInSync
@@ -21,8 +23,12 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import mu.KotlinLogging
 import org.springframework.stereotype.Component
+import java.io.IOException
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.net.ConnectException
+import java.net.SocketException
+import java.net.UnknownHostException
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
@@ -467,6 +473,37 @@ class DataStreams(
         }.share(1, Duration.ofMinutes(30), scope)
     }
 
+    val orderBooksPolling: Flow<Map<Market, OrderBookSnapshot>> = run {
+        channelFlow {
+            while (isActive) {
+                try {
+                    val orderBooks = poloniexApi.orderBooks(depth = 20)
+                    send(orderBooks)
+                    delay(30000)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: UnknownHostException) {
+                    delay(2000)
+                } catch (e: IOException) {
+                    delay(2000)
+                } catch (e: ConnectException) {
+                    delay(2000)
+                } catch (e: SocketException) {
+                    delay(2000)
+                } catch (e: InvalidMarketException) {
+                    logger.warn(e.message)
+                    delay(1000)
+                } catch (e: InvalidDepthException) {
+                    logger.warn(e.message)
+                    delay(1000)
+                } catch (e: Throwable) {
+                    delay(1000)
+                    logger.error("Error occurred in orderBooksPolling stream: ${e.message}")
+                }
+            }
+        }.share(1, Duration.ofSeconds(30), scope)
+    }
+
     val fee: Flow<FeeMultiplier> = run {
         suspend fun fetchFee(): FeeMultiplier {
             val fee = poloniexApi.feeInfo()
@@ -486,7 +523,7 @@ class DataStreams(
                 }
             }
 
-            // TODO: How to get fee instantly without pooling ?
+            // TODO: How to get fee instantly without polling ?
             while (isActive) {
                 delay(10 * 60 * 1000)
 
