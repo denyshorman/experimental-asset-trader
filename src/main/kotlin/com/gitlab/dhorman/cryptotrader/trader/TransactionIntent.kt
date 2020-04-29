@@ -9,6 +9,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import com.gitlab.dhorman.cryptotrader.trader.algo.MergeTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.algo.SplitTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
+import com.gitlab.dhorman.cryptotrader.trader.dao.BlacklistedMarketsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.SettingsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
@@ -65,7 +66,8 @@ class TransactionIntent(
     private val mergeAlgo: MergeTradeAlgo,
     private val splitAlgo: SplitTradeAlgo,
     private val delayedTradeManager: DelayedTradeManager,
-    private val pathHelper: PathHelper
+    private val pathHelper: PathHelper,
+    private val blacklistedMarkets: BlacklistedMarketsDao
 ) {
     private val soundSignalEnabled = System.getenv("ENABLE_SOUND_SIGNAL") != null
     private val fromAmountInputChannel = Channel<Tuple3<Amount, Amount, CompletableDeferred<Boolean>>>()
@@ -85,7 +87,8 @@ class TransactionIntent(
         mergeAlgo,
         splitAlgo,
         delayedTradeManager,
-        pathHelper
+        pathHelper,
+        blacklistedMarkets
     )
 
     fun start(): Job = TranIntentScope.launch(CoroutineName("INTENT $id")) {
@@ -367,6 +370,7 @@ class TransactionIntent(
                     throw e
                 }
             } catch (e: MarketDisabledException) {
+                blacklistedMarkets.add(currentMarket.market, settingsDao.blacklistMarketTime)
                 throw NotProfitableTimeoutException
             } finally {
                 withContext(NonCancellable) {
@@ -685,7 +689,8 @@ class TransactionIntent(
             private val mergeAlgo: MergeTradeAlgo,
             private val splitAlgo: SplitTradeAlgo,
             private val delayedTradeManager: DelayedTradeManager,
-            private val pathHelper: PathHelper
+            private val pathHelper: PathHelper,
+            private val blacklistedMarkets: BlacklistedMarketsDao
         ) {
             fun create(id: PathId, markets: Array<TranIntentMarket>, marketIdx: Int): TransactionIntent {
                 return TransactionIntent(
@@ -705,7 +710,8 @@ class TransactionIntent(
                     mergeAlgo,
                     splitAlgo,
                     delayedTradeManager,
-                    pathHelper
+                    pathHelper,
+                    blacklistedMarkets
                 )
             }
         }

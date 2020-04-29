@@ -13,6 +13,7 @@ import com.gitlab.dhorman.cryptotrader.trader.algo.MergeTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.algo.SplitTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.core.PoloniexTradeAdjuster
+import com.gitlab.dhorman.cryptotrader.trader.dao.BlacklistedMarketsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.SettingsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
@@ -54,6 +55,7 @@ class PoloniexTrader(
     private val transactionsDao: TransactionsDao,
     private val unfilledMarketsDao: UnfilledMarketsDao,
     private val settingsDao: SettingsDao,
+    private val blacklistedMarketsDao: BlacklistedMarketsDao,
     @Qualifier("pg_tran_manager") private val tranManager: ReactiveTransactionManager
 ) {
     private val logger = KotlinLogging.logger {}
@@ -61,7 +63,7 @@ class PoloniexTrader(
     private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, data)
     private val mergeAlgo = MergeTradeAlgo(amountCalculator, tradeAdjuster, tranIntentMarketExtensions)
     private val splitAlgo = SplitTradeAlgo(amountCalculator, tradeAdjuster, tranIntentMarketExtensions)
-    private val pathHelper = PathHelper(indicators, transactionsDao, tranIntentMarketExtensions)
+    private val pathHelper = PathHelper(indicators, transactionsDao, tranIntentMarketExtensions, blacklistedMarketsDao)
 
     private lateinit var tranIntentScope: CoroutineScope
     private lateinit var delayedTradeManager: DelayedTradeManager
@@ -90,7 +92,8 @@ class PoloniexTrader(
             mergeAlgo,
             splitAlgo,
             delayedTradeManager,
-            pathHelper
+            pathHelper,
+            blacklistedMarketsDao
         )
 
         collectRoundingLeftovers()

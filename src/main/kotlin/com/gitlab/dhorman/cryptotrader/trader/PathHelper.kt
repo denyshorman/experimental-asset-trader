@@ -6,6 +6,7 @@ import com.gitlab.dhorman.cryptotrader.core.InstantOrder
 import com.gitlab.dhorman.cryptotrader.core.OrderSpeed
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
+import com.gitlab.dhorman.cryptotrader.trader.dao.BlacklistedMarketsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
@@ -17,7 +18,8 @@ import io.vavr.collection.List
 class PathHelper(
     private val indicators: IndicatorStreams,
     private val transactionsDao: TransactionsDao,
-    private val tranIntentMarketExtensions: TranIntentMarketExtensions
+    private val tranIntentMarketExtensions: TranIntentMarketExtensions,
+    private val blacklistedMarketsDao: BlacklistedMarketsDao
 ) {
     suspend fun findNewPath(
         initAmount: Amount,
@@ -38,11 +40,12 @@ class PathHelper(
         recommendedChainCount: Int? = null
     ): ExhaustivePath? {
         val activeTransactionIds = transactionsDao.getActive().map { tranIntentMarketExtensions.id(it._2) }
+        val blacklistedMarkets = blacklistedMarketsDao.getAll()
 
         val allPaths = indicators.getPaths(fromCurrency, fromAmount, endCurrencies, fun(p): Boolean {
             val targetMarket = p.chain.lastOrNull() ?: return false
-            // if (p.chain.asSequence().filter { it is InstantOrder }.count() > 0) return false
-            return initAmount < targetMarket.toAmount && !activeTransactionIds.contains(p.id)
+            val hasBlacklistedMarkets = p.chain.any { blacklistedMarkets.contains(it.market) }
+            return !hasBlacklistedMarkets && initAmount < targetMarket.toAmount && !activeTransactionIds.contains(p.id)
         }, Comparator { p0, p1 ->
             if (p0.id == p1.id) {
                 0

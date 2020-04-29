@@ -8,6 +8,7 @@ import io.vavr.kotlin.hashMap
 import io.vavr.kotlin.list
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
+import java.time.Duration
 
 @Repository
 class SettingsDao {
@@ -24,4 +25,7 @@ class SettingsDao {
 
     @Volatile
     var minTradeAmount = BigDecimal(2)
+
+    @Volatile
+    var blacklistMarketTime = Duration.ofHours(1).toSeconds().toInt()
 }
