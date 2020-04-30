@@ -6,9 +6,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.CurrencyType
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.core.PoloniexTradeAdjuster
-import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
-import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
-import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPredicted
+import com.gitlab.dhorman.cryptotrader.trader.model.*
 import com.nhaarman.mockitokotlin2.mock
 import io.vavr.collection.Array
 import io.vavr.collection.Stream
@@ -25,6 +23,7 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlin.math.abs
 import kotlin.random.Random
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -161,6 +160,43 @@ class SplitTradeAlgoTest {
         val newFromAmount = (update[currMarketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
         assertTrue(newFromAmount.compareTo(BigDecimal.ZERO) == 0)
+    }
+
+    @Test
+    fun `Split markets with trade must return correct amounts`() {
+        val markets: Array<TranIntentMarket> = Array.of(
+            TranIntentMarketCompleted(
+                market = Market("USDC", "USDT"), orderSpeed = OrderSpeed.Instant, fromCurrencyType = CurrencyType.Base, trades = Array.of(
+                    BareTrade(quoteAmount = BigDecimal("0.00070626"), price = BigDecimal("1.00100000"), feeMultiplier = BigDecimal("0.99910000")),
+                    BareTrade(quoteAmount = BigDecimal("0.09848358"), price = BigDecimal("1.00103865"), feeMultiplier = BigDecimal("0.99910000")),
+                    BareTrade(quoteAmount = BigDecimal("0.70921680"), price = BigDecimal("0.94894326"), feeMultiplier = BigDecimal("0.99910000")),
+                    BareTrade(quoteAmount = BigDecimal("1E-7"), price = BigDecimal("0"), feeMultiplier = BigDecimal("1")),
+                    BareTrade(quoteAmount = BigDecimal("4E-8"), price = BigDecimal("1"), feeMultiplier = BigDecimal("0"))
+                )
+            ),
+            TranIntentMarketPartiallyCompleted(
+                market = Market("USDT", "SC"),
+                orderSpeed = OrderSpeed.Delayed,
+                fromCurrencyType = CurrencyType.Base,
+                fromAmount = BigDecimal("0.80767907")
+            ),
+            TranIntentMarketPredicted(
+                market = Market("USDC", "SC"),
+                orderSpeed = OrderSpeed.Delayed,
+                fromCurrencyType = CurrencyType.Quote
+            )
+        )
+
+        val trade = BareTrade(BigDecimal("229.78469175"), BigDecimal("0.00217595"), BigDecimal("0.99910000"))
+
+        val (update, commit) = splitTradeAlgo.splitMarkets(markets, 1, Array.of(trade))
+
+        println(update)
+        println(commit)
+
+        assertEquals(tranIntentMarketExtensions.targetAmount(update[0] as TranIntentMarketCompleted), (update[1] as TranIntentMarketPartiallyCompleted).fromAmount)
+        assertEquals(tranIntentMarketExtensions.targetAmount(commit[0] as TranIntentMarketCompleted), tranIntentMarketExtensions.fromAmount(commit[1] as TranIntentMarketCompleted))
+        assertEquals(tranIntentMarketExtensions.targetAmount(commit[1] as TranIntentMarketCompleted), (commit[2] as TranIntentMarketPartiallyCompleted).fromAmount)
     }
 
     companion object {

@@ -187,10 +187,17 @@ class SplitTradeAlgo(
             val committedTrades = mutableListOf<BareTrade>()
 
             var targetAmount = tranIntentMarketExtensions.fromAmount(committedMarkets[i + 1] as TranIntentMarketCompleted)
+            var adjFromAmount = BigDecimal.ZERO
 
-            for (trade in m.trades) {
-                if (tradeAdjuster.isAdjustmentTrade(trade)) continue
+            val removeAdjustmentTrades = { trade: BareTrade ->
+                !tradeAdjuster.isAdjustmentTrade(trade).also { adjTrade ->
+                    if (adjTrade) {
+                        adjFromAmount += amountCalculator.fromAmount(m.orderType, trade)
+                    }
+                }
+            }
 
+            m.trades.toVavrStream().filter(removeAdjustmentTrades).forEach { trade ->
                 val amount = amountCalculator.targetAmount(m.orderType, trade)
 
                 if (amount <= targetAmount) {
@@ -201,51 +208,64 @@ class SplitTradeAlgo(
                         updatedTrades.add(trade)
                     } else {
                         val (l, r) = splitTrade(AmountType.Target, m.orderType, targetAmount, trade)
-                        updatedTrades.addAll(l)
-                        committedTrades.addAll(r)
-                        targetAmount = BigDecimal.ZERO
+                        updatedTrades.addAll(l.filter(removeAdjustmentTrades))
+                        committedTrades.addAll(r.filter(removeAdjustmentTrades))
+
+                        targetAmount = r.toVavrStream()
+                            .filter { tradeAdjuster.isAdjustmentTrade(it) }
+                            .map { amountCalculator.targetAmount(m.orderType, it) }
+                            .foldLeft(BigDecimal.ZERO) { a, b -> a + b }
                     }
                 }
             }
 
-            var updatedTradesFromAmount = tranIntentMarketExtensions.fromAmount(updatedTrades, m.orderType)
-            var updatedTradesTargetAmount = tranIntentMarketExtensions.targetAmount(updatedTrades, m.orderType)
-            var committedTradesFromAmount = tranIntentMarketExtensions.fromAmount(committedTrades, m.orderType)
-            var committedTradesTargetAmount = tranIntentMarketExtensions.targetAmount(committedTrades, m.orderType)
+            if (targetAmount.compareTo(BigDecimal.ZERO) != 0) {
+                committedTrades.add(tradeAdjuster.adjustTargetAmount(targetAmount, m.orderType))
+            }
 
-            for (trade in m.trades) {
-                if (!tradeAdjuster.isAdjustmentTrade(trade)) continue
-
-                val tradeFromAmount = amountCalculator.fromAmount(m.orderType, trade)
-                val tradeTargetAmount = amountCalculator.targetAmount(m.orderType, trade)
-
-                if (tradeFromAmount + committedTradesFromAmount >= BigDecimal.ZERO && tradeTargetAmount + committedTradesTargetAmount >= BigDecimal.ZERO) {
-                    committedTradesFromAmount += tradeFromAmount
-                    committedTradesTargetAmount += tradeTargetAmount
-                    committedTrades.add(trade)
-                } else if (tradeFromAmount + updatedTradesFromAmount >= BigDecimal.ZERO && tradeTargetAmount + updatedTradesTargetAmount >= BigDecimal.ZERO) {
-                    updatedTradesFromAmount += tradeFromAmount
-                    updatedTradesTargetAmount += tradeTargetAmount
-                    updatedTrades.add(trade)
-                } else {
-                    if (tradeFromAmount < BigDecimal.ZERO && tradeTargetAmount.compareTo(BigDecimal.ZERO) == 0) {
-                        val delta = committedTradesFromAmount + tradeFromAmount
-                        committedTradesFromAmount = BigDecimal.ZERO
-                        updatedTradesFromAmount += delta
-                        if (updatedTradesFromAmount < BigDecimal.ZERO) throw RuntimeException("amount can't be negative")
-                        updatedTrades.add(tradeAdjuster.adjustFromAmount(delta))
-                        committedTrades.add(tradeAdjuster.adjustFromAmount(tradeFromAmount - delta))
-                    } else if (tradeFromAmount.compareTo(BigDecimal.ZERO) == 0 && tradeTargetAmount < BigDecimal.ZERO) {
-                        val delta = committedTradesTargetAmount + tradeTargetAmount
-                        committedTradesTargetAmount = BigDecimal.ZERO
-                        updatedTradesTargetAmount += delta
-                        if (updatedTradesTargetAmount < BigDecimal.ZERO) throw RuntimeException("amount can't be negative")
-                        updatedTrades.add(tradeAdjuster.adjustTargetAmount(delta, m.orderType))
-                        committedTrades.add(tradeAdjuster.adjustTargetAmount(tradeTargetAmount - delta, m.orderType))
-                    } else {
-                        throw RuntimeException("Impossible case for adjustment trades. Both from and to amounts are non zero ($tradeFromAmount $tradeTargetAmount)")
-                    }
+            val updatedMarketTargetAmountDelta = run {
+                val currentUpdatedMarketTargetAmount = tranIntentMarketExtensions.targetAmount(updatedTrades, m.orderType)
+                val nextUpdatedMarketFromAmount = when (val market = updatedMarkets[i + 1]) {
+                    is TranIntentMarketCompleted -> tranIntentMarketExtensions.fromAmount(market)
+                    is TranIntentMarketPartiallyCompleted -> market.fromAmount
+                    else -> throw RuntimeException("Other market types are not supported")
                 }
+                nextUpdatedMarketFromAmount - currentUpdatedMarketTargetAmount
+            }
+
+            if (updatedMarketTargetAmountDelta.compareTo(BigDecimal.ZERO) != 0) {
+                updatedTrades.add(tradeAdjuster.adjustTargetAmount(updatedMarketTargetAmountDelta, m.orderType))
+            }
+
+            if (adjFromAmount.compareTo(BigDecimal.ZERO) != 0) {
+                val updatedTradesFromAmount = tranIntentMarketExtensions.fromAmount(updatedTrades, m.orderType)
+                val committedTradesFromAmount = tranIntentMarketExtensions.fromAmount(committedTrades, m.orderType)
+                val updatedTradesTargetAmount = tranIntentMarketExtensions.targetAmount(updatedTrades, m.orderType)
+                val committedTradesTargetAmount = tranIntentMarketExtensions.targetAmount(committedTrades, m.orderType)
+
+                val percent = updatedTradesTargetAmount.divide(updatedTradesTargetAmount + committedTradesTargetAmount, 8, RoundingMode.DOWN)
+
+                val a = (adjFromAmount * percent).setScale(8, RoundingMode.HALF_EVEN)
+                val b = adjFromAmount - a
+
+                val x = updatedTradesFromAmount + a
+                val y = committedTradesFromAmount + b
+
+                val d = when {
+                    x < BigDecimal.ZERO -> -x
+                    y < BigDecimal.ZERO -> y
+                    else -> BigDecimal.ZERO
+                }
+
+                val xx = a - d
+                val yy = b + d
+
+                if (updatedTradesFromAmount + xx < BigDecimal.ZERO || committedTradesFromAmount + yy < BigDecimal.ZERO) {
+                    throw RuntimeException("From amount can't be negative $updatedTradesFromAmount + $xx , $committedTradesFromAmount + $yy")
+                }
+
+                if (xx.compareTo(BigDecimal.ZERO) != 0) updatedTrades.add(tradeAdjuster.adjustFromAmount(xx))
+                if (yy.compareTo(BigDecimal.ZERO) != 0) committedTrades.add(tradeAdjuster.adjustFromAmount(yy))
             }
 
             val updated = TranIntentMarketCompleted(
