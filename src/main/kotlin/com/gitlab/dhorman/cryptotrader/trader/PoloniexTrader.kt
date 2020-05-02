@@ -21,22 +21,19 @@ import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
+import com.gitlab.dhorman.cryptotrader.util.defaultTran
+import com.gitlab.dhorman.cryptotrader.util.repeatableReadTran
 import io.vavr.Tuple2
 import io.vavr.collection.Array
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.reactive.awaitFirst
-import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.collect
-import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
 import org.springframework.transaction.ReactiveTransactionManager
-import org.springframework.transaction.TransactionDefinition
-import org.springframework.transaction.reactive.TransactionalOperator
 import reactor.core.publisher.Flux
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -240,10 +237,10 @@ class PoloniexTrader(
                     val newId = UUID.randomUUID()
 
                     withContext(NonCancellable) {
-                        TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                        tranManager.defaultTran {
                             transactionsDao.addActive(newId, changedMarkets, startMarketIdx)
                             transactionsDao.deleteActive(id)
-                        }).retry().awaitFirstOrNull()
+                        }
                     }
 
                     tranIntentFactory.create(newId, changedMarkets, startMarketIdx).start()
@@ -263,10 +260,8 @@ class PoloniexTrader(
         val fromCurrency = markets[marketIdx].fromCurrency
         val requestedAmount = (markets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
-        val canStartTransaction = TransactionalOperator.create(tranManager, object : TransactionDefinition {
-            override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
-        }).transactional(mono(Dispatchers.Unconfined) {
-            val (available, onOrders) = data.balances.first().getOrNull(fromCurrency) ?: return@mono false
+        val canStartTransaction = tranManager.repeatableReadTran {
+            val (available, onOrders) = data.balances.first().getOrNull(fromCurrency) ?: return@repeatableReadTran false
             val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency) ?: tuple(fromCurrency, BigDecimal.ZERO)
             val reservedAmount = onOrders - amountInUse
             val availableAmount = available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
@@ -277,7 +272,7 @@ class PoloniexTrader(
             } else {
                 false
             }
-        }).retry().awaitFirstOrNull() ?: return
+        }
 
         if (canStartTransaction) {
             tranIntentFactory.create(id, markets, marketIdx).start()
@@ -338,12 +333,10 @@ class PoloniexTrader(
         val tranId = UUID.randomUUID()
 
         withContext(NonCancellable) {
-            TransactionalOperator.create(tranManager, object : TransactionDefinition {
-                override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
-            }).transactional(mono(Dispatchers.Unconfined) {
+            tranManager.repeatableReadTran {
                 unfilledMarketsDao.remove(id)
                 transactionsDao.addActive(tranId, changedMarkets, activeMarketId)
-            }).retry().awaitFirst()
+            }
         }
 
         tranIntentFactory.create(tranId, changedMarkets, activeMarketId).start()

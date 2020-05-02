@@ -2,11 +2,10 @@ package com.gitlab.dhorman.cryptotrader.trader.dao
 
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.util.TestClock
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import org.junit.jupiter.api.MethodOrderer
-import org.junit.jupiter.api.Order
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.TestMethodOrder
+import org.junit.jupiter.api.*
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.TestConfiguration
@@ -38,6 +37,21 @@ class BlacklistedMarketsDaoTest {
         virtualClock.setInstant(instant.plusSeconds(100))
         markets = blacklistedMarkets.getAll()
         assertEquals(0, markets.size())
+    }
+
+    @Test
+    @Disabled("Requires to add NOTIFY code")
+    fun getAllWithUpdates() = runBlocking {
+        val virtualClock = clock as TestClock
+        val instant = Instant.parse("2000-01-01T00:00:00.00Z")
+        virtualClock.setInstant(instant)
+        val ttlSec = 30
+        blacklistedMarkets.add(Market("BTC", "GRIN"), ttlSec)
+        var markets = blacklistedMarkets.getAll()
+        assertEquals(1, markets.size())
+        delay(10000)
+        markets = blacklistedMarkets.getAll()
+        assertEquals(2, markets.size())
     }
 
     @TestConfiguration
@@ -82,5 +96,13 @@ class BlacklistedMarketsDbDaoTest {
                 Market("BTC", "ETH")
             )
         )
+    }
+
+    @Test
+    @Order(4)
+    @Disabled("Requires to add NOTIFY code")
+    fun testUpdates() = runBlocking {
+        val n = blacklistedMarkets.updates.first()
+        println("notification received $n")
     }
 }

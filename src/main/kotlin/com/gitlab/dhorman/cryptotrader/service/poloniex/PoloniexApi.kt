@@ -15,6 +15,8 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.util.HmacSha512Digest
 import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.gitlab.dhorman.cryptotrader.util.share
+import io.netty.handler.codec.http.websocketx.WebSocketHandshakeException
+import io.netty.handler.ssl.SslHandshakeTimeoutException
 import io.vavr.Tuple2
 import io.vavr.collection.*
 import io.vavr.collection.Array
@@ -158,6 +160,12 @@ class PoloniexApi(
                 logger.warn(e.message)
                 delay(1000)
             } catch (e: SocketException) {
+                logger.warn(e.message)
+                delay(1000)
+            } catch (e: WebSocketHandshakeException) {
+                logger.warn(e.message)
+                delay(1000)
+            } catch (e: SslHandshakeTimeoutException) {
                 logger.warn(e.message)
                 delay(1000)
             } catch (e: Throwable) {

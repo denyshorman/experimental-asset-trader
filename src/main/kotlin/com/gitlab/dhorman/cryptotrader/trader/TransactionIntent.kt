@@ -19,9 +19,7 @@ import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableTimeoutExce
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
-import com.gitlab.dhorman.cryptotrader.util.SoundUtil
-import com.gitlab.dhorman.cryptotrader.util.asFlow
-import com.gitlab.dhorman.cryptotrader.util.cancelAndJoinAll
+import com.gitlab.dhorman.cryptotrader.util.*
 import io.vavr.Tuple2
 import io.vavr.Tuple3
 import io.vavr.collection.Array
@@ -30,15 +28,10 @@ import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.reactive.awaitFirst
-import kotlinx.coroutines.reactive.awaitFirstOrNull
-import kotlinx.coroutines.reactor.mono
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
 import org.springframework.transaction.ReactiveTransactionManager
-import org.springframework.transaction.TransactionDefinition
-import org.springframework.transaction.reactive.TransactionalOperator
 import java.io.IOException
 import java.math.BigDecimal
 import java.net.ConnectException
@@ -128,9 +121,7 @@ class TransactionIntent(
         val feeFlow = data.fee
         val newMarketIdx = marketIdx + 1
         var modifiedMarkets = withContext(NonCancellable) {
-            TransactionalOperator.create(tranManager, object : TransactionDefinition {
-                override fun getIsolationLevel() = TransactionDefinition.ISOLATION_REPEATABLE_READ
-            }).transactional(mono(Dispatchers.Unconfined) {
+            tranManager.repeatableReadTran {
                 val unfilledMarkets = unfilledMarketsDao.get(settingsDao.primaryCurrencies, currentMarket.fromCurrency)
 
                 val modifiedMarkets = mergeAlgo.mergeMarkets(markets, unfilledMarkets)
@@ -143,7 +134,7 @@ class TransactionIntent(
                 }
 
                 modifiedMarkets
-            }).retry().awaitFirst()
+            }
         }
 
         try {
@@ -441,10 +432,10 @@ class TransactionIntent(
                             transactionsDao.deleteActive(id)
                             logger.debug { "Current intent has been merged into ${existingIntentCandidate.id}" }
                         } else {
-                            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+                            tranManager.defaultTran {
                                 transactionsDao.deleteActive(id)
                                 unfilledMarketsDao.add(fromCurrencyInit, fromCurrencyInitAmount, fromCurrencyCurrent, fromCurrencyCurrentAmount)
-                            }).retry().awaitFirstOrNull()
+                            }
 
                             logger.debug {
                                 "Added to unfilled markets " +
@@ -469,19 +460,19 @@ class TransactionIntent(
         if (newMarketIdx != currentMarkets.length()) {
             val newId = UUID.randomUUID()
 
-            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+            tranManager.defaultTran {
                 transactionsDao.updateActive(id, currentMarkets, marketIdx)
                 transactionsDao.addActive(newId, committedMarkets, newMarketIdx)
-            }).retry().awaitFirstOrNull()
+            }
 
             logger.debug("Starting new intent...")
 
             tranIntentFactory.create(newId, committedMarkets, newMarketIdx).start()
         } else {
-            TransactionalOperator.create(tranManager).transactional(mono(Dispatchers.Unconfined) {
+            tranManager.defaultTran {
                 transactionsDao.updateActive(id, currentMarkets, marketIdx)
                 transactionsDao.addCompleted(id, committedMarkets)
-            }).retry().awaitFirstOrNull()
+            }
 
             logger.debug("Add current intent to completed transactions list")
         }

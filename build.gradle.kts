@@ -7,17 +7,10 @@ java.sourceCompatibility = JavaVersion.VERSION_11
 
 val swaggerVersion = "3.0.0-SNAPSHOT"
 
-val developmentOnly: Configuration by configurations.creating
-configurations {
-    runtimeClasspath {
-        extendsFrom(developmentOnly)
-    }
-}
-
 plugins {
-    kotlin("jvm") version "1.3.71"
-    kotlin("plugin.spring") version "1.3.71"
-    id("org.springframework.boot") version "2.3.0.M4"
+    kotlin("jvm") version "1.3.72"
+    kotlin("plugin.spring") version "1.3.72"
+    id("org.springframework.boot") version "2.3.0.RC1"
     id("io.spring.dependency-management") version "1.0.9.RELEASE"
     id("net.nemerosa.versioning") version "2.8.2"
 }
@@ -52,18 +45,16 @@ dependencies {
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("org.springframework.boot:spring-boot-starter-webflux")
-    implementation("org.springframework.boot:spring-boot-starter-rsocket")
-    implementation("org.springframework.boot:spring-boot-starter-actuator")
+    //implementation("org.springframework.boot:spring-boot-starter-rsocket")
+    //implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("io.springfox:springfox-swagger2:$swaggerVersion")
     implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
     implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
     implementation("io.springfox:springfox-bean-validators:$swaggerVersion")
     implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
     implementation("org.springframework.plugin:spring-plugin-core:2.0.0.RELEASE") // TODO: Remove when springfox and spring will be released
-
-    runtimeOnly("io.r2dbc:r2dbc-postgresql")
+    implementation("io.r2dbc:r2dbc-postgresql")
     developmentOnly("org.springframework.boot:spring-boot-devtools")
-
     testImplementation("org.junit.jupiter:junit-jupiter:5.6.1")
     testImplementation("org.mockito:mockito-core:3.3.3")
     testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.2.0")
