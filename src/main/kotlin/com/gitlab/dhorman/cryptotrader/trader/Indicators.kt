@@ -1,14 +1,15 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.*
+import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.poloniex.MarketData
+import com.gitlab.dhorman.cryptotrader.service.poloniex.OrderBookDataMap
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.ExhaustivePathOrdering
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsSettings
 import com.gitlab.dhorman.cryptotrader.trader.indicator.paths.PathsUtil
-import com.gitlab.dhorman.cryptotrader.trader.model.MarketData
-import com.gitlab.dhorman.cryptotrader.trader.model.OrderBookDataMap
 import com.gitlab.dhorman.cryptotrader.util.collectMap
 import com.gitlab.dhorman.cryptotrader.util.flowFromMap
 import io.vavr.collection.Map
@@ -31,8 +32,8 @@ import java.util.*
 import java.util.function.Function.identity
 
 @Component
-class IndicatorStreams(
-    private val data: DataStreams,
+class Indicators(
+    private val poloniexApi: ExtendedPoloniexApi,
     amountCalculator: AdjustedPoloniexBuySellAmountCalculator
 ) {
     private val logger = KotlinLogging.logger {}
@@ -40,10 +41,10 @@ class IndicatorStreams(
 
     fun getPathsIntensive(settings: PathsSettings): Flux<TreeSet<ExhaustivePath>> {
         return Flux.combineLatest(
-            data.markets.asPublisher(),
-            data.orderBooks.asPublisher(),
-            data.tradesStat.asPublisher(),
-            data.fee.asPublisher(),
+            poloniexApi.marketStream.asPublisher(),
+            poloniexApi.orderBooksStream.asPublisher(),
+            poloniexApi.tradesStatStream.asPublisher(),
+            poloniexApi.feeStream.asPublisher(),
             identity()
         )
             .onBackpressureLatest()
@@ -116,10 +117,10 @@ class IndicatorStreams(
 
     fun getPathsPolling(settings: PathsSettings): Flux<TreeSet<ExhaustivePath>> {
         return Flux.combineLatest(
-            data.markets.asPublisher(),
-            data.orderBooksPolling.asPublisher(),
-            data.tradesStat.asPublisher(),
-            data.fee.asPublisher(),
+            poloniexApi.marketStream.asPublisher(),
+            poloniexApi.orderBooksPollingStream.asPublisher(),
+            poloniexApi.tradesStatStream.asPublisher(),
+            poloniexApi.feeStream.asPublisher(),
             identity()
         )
             .onBackpressureLatest()
@@ -209,9 +210,9 @@ class IndicatorStreams(
         pathFilter: (ExhaustivePath) -> Boolean,
         pathComparator: Comparator<ExhaustivePath>
     ): TreeSet<ExhaustivePath> = coroutineScope {
-        val (marketIntMap, marketStringMap) = data.markets.first()
-        val fee = data.fee.first()
-        val orderBookMap = data.orderBooksPolling.first().filterValues { !it.isFrozen }
+        val (marketIntMap, marketStringMap) = poloniexApi.marketStream.first()
+        val fee = poloniexApi.feeStream.first()
+        val orderBookMap = poloniexApi.orderBooksPollingStream.first().filterValues { !it.isFrozen }
         val paths = withContext(Dispatchers.IO) {
             MarketPathGenerator(orderBookMap.keySet())
                 .generateWithOrders(list(fromCurrency), toCurrencies)
@@ -230,7 +231,7 @@ class IndicatorStreams(
         }
 
         val statsMapDeferrable = async {
-            val stats = data.tradesStat.first()
+            val stats = poloniexApi.tradesStatStream.first()
 
             flowFromMap(stats)
                 .filter { (marketId, _) ->

@@ -1,8 +1,9 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.*
-import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
+import com.gitlab.dhorman.cryptotrader.service.poloniex.getOrderBookFlowBy
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.BuyOrderType
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
@@ -50,9 +51,8 @@ class TransactionIntent(
     private val intentManager: IntentManager,
     private val tranIntentMarketExtensions: TranIntentMarketExtensions,
     private val transactionsDao: TransactionsDao,
-    private val poloniexApi: PoloniexApi,
+    private val poloniexApi: ExtendedPoloniexApi,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
-    private val data: DataStreams,
     private val unfilledMarketsDao: UnfilledMarketsDao,
     private val settingsDao: SettingsDao,
     private val tranManager: ReactiveTransactionManager,
@@ -73,7 +73,6 @@ class TransactionIntent(
         transactionsDao,
         poloniexApi,
         amountCalculator,
-        data,
         unfilledMarketsDao,
         settingsDao,
         tranManager,
@@ -117,8 +116,8 @@ class TransactionIntent(
         logger.debug { "Starting path traversal" }
 
         val currentMarket = markets[marketIdx] as TranIntentMarketPartiallyCompleted
-        val orderBookFlow = data.getOrderBookFlowBy(currentMarket.market)
-        val feeFlow = data.fee
+        val orderBookFlow = poloniexApi.getOrderBookFlowBy(currentMarket.market)
+        val feeFlow = poloniexApi.feeStream
         val newMarketIdx = marketIdx + 1
         var modifiedMarkets = withContext(NonCancellable) {
             tranManager.repeatableReadTran {
@@ -671,9 +670,8 @@ class TransactionIntent(
             private val intentManager: IntentManager,
             private val tranIntentMarketExtensions: TranIntentMarketExtensions,
             private val transactionsDao: TransactionsDao,
-            private val poloniexApi: PoloniexApi,
+            private val poloniexApi: ExtendedPoloniexApi,
             private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
-            private val data: DataStreams,
             private val unfilledMarketsDao: UnfilledMarketsDao,
             private val settingsDao: SettingsDao,
             private val tranManager: ReactiveTransactionManager,
@@ -694,7 +692,6 @@ class TransactionIntent(
                     transactionsDao,
                     poloniexApi,
                     amountCalculator,
-                    data,
                     unfilledMarketsDao,
                     settingsDao,
                     tranManager,

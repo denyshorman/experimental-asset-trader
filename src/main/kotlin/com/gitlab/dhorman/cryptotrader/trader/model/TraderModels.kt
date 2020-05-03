@@ -4,11 +4,12 @@ import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
 import com.fasterxml.jackson.annotation.JsonView
 import com.gitlab.dhorman.cryptotrader.core.*
+import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.poloniex.getOrderBookFlowBy
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.CurrencyType
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
-import com.gitlab.dhorman.cryptotrader.trader.DataStreams
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedBuySellAmountCalculator
 import io.vavr.collection.Array
 import io.vavr.kotlin.component1
@@ -69,7 +70,7 @@ object Views {
 
 class TranIntentMarketExtensions(
     private val amountCalculator: AdjustedBuySellAmountCalculator,
-    private val data: DataStreams
+    private val poloniexApi: ExtendedPoloniexApi
 ) {
     fun getInstantOrderTargetAmount(
         orderType: OrderType,
@@ -190,8 +191,8 @@ class TranIntentMarketExtensions(
     }
 
     suspend fun predictedTargetAmount(market: TranIntentMarketPartiallyCompleted): Amount {
-        val fee = data.fee.first()
-        val orderBook = data.getOrderBookFlowBy(market.market).first()
+        val fee = poloniexApi.feeStream.first()
+        val orderBook = poloniexApi.getOrderBookFlowBy(market.market).first()
 
         return if (market.orderSpeed == OrderSpeed.Instant) {
             getInstantOrderTargetAmount(market.orderType, market.fromAmount, fee.taker, orderBook)
@@ -201,8 +202,8 @@ class TranIntentMarketExtensions(
     }
 
     suspend fun predictedTargetAmount(market: TranIntentMarketPredicted, markets: Array<TranIntentMarket>, idx: Int): Amount {
-        val fee = data.fee.first()
-        val orderBook = data.getOrderBookFlowBy(market.market).first()
+        val fee = poloniexApi.feeStream.first()
+        val orderBook = poloniexApi.getOrderBookFlowBy(market.market).first()
         val fromAmount = predictedFromAmount(markets, idx)
 
         return if (market.orderSpeed == OrderSpeed.Instant) {

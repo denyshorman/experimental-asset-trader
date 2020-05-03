@@ -1,11 +1,11 @@
 package com.gitlab.dhorman.cryptotrader.api
 
 import com.gitlab.dhorman.cryptotrader.core.*
+import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Ticker
-import com.gitlab.dhorman.cryptotrader.trader.DataStreams
-import com.gitlab.dhorman.cryptotrader.trader.IndicatorStreams
+import com.gitlab.dhorman.cryptotrader.trader.Indicators
 import com.gitlab.dhorman.cryptotrader.trader.PoloniexTrader
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
@@ -41,11 +41,11 @@ import java.util.*
 class PoloniexTraderApi(
     private val poloniexTrader: PoloniexTrader,
     private val transactionsDao: TransactionsDao,
-    private val data: DataStreams,
-    private val indicators: IndicatorStreams,
+    private val poloniexApi: ExtendedPoloniexApi,
+    private val indicators: Indicators,
     amountCalculator: AdjustedPoloniexBuySellAmountCalculator
 ) {
-    private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, data)
+    private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, poloniexApi)
 
     // Example: USDT USDC 40.00 USDT_BTC1BTC_USDC0
     private val execTranBodyPattern =
@@ -61,7 +61,7 @@ class PoloniexTraderApi(
     )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/tickers"])
     suspend fun tickersSnapshot(): Map<Market, Ticker> {
-        return data.tickers.first()
+        return poloniexApi.marketTickerStream.first()
     }
 
     @ApiOperation(
@@ -70,7 +70,7 @@ class PoloniexTraderApi(
     )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/balances"])
     suspend fun balancesSnapshot(): Map<Currency, Tuple2<Amount, Amount>> {
-        return data.balances.first()
+        return poloniexApi.balanceStream.first()
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/paths"])
@@ -222,7 +222,7 @@ class PoloniexTraderApi(
     //@MessageMapping("/tickers")
     @RequestMapping(method = [RequestMethod.GET], value = ["/tickers"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun tickers() = run {
-        data.tickers.sample(Duration.ofSeconds(1).toMillis())
+        poloniexApi.marketTickerStream.sample(Duration.ofSeconds(1).toMillis())
     }
 
     //@MessageMapping("/paths")

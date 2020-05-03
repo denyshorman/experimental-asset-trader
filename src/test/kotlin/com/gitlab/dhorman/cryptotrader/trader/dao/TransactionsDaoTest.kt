@@ -1,6 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.trader.dao
 
-import com.gitlab.dhorman.cryptotrader.trader.DataStreams
+import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
@@ -20,7 +20,7 @@ class TransactionsDaoTest {
     private lateinit var transactionsDao: TransactionsDao
 
     @Autowired
-    private lateinit var dataStreams: DataStreams
+    private lateinit var poloniexApi: ExtendedPoloniexApi
 
     @Autowired
     private lateinit var amountCalculator: AdjustedPoloniexBuySellAmountCalculator
@@ -29,7 +29,7 @@ class TransactionsDaoTest {
 
     @BeforeAll
     fun setup() {
-        marketExtensions = TranIntentMarketExtensions(amountCalculator, dataStreams)
+        marketExtensions = TranIntentMarketExtensions(amountCalculator, poloniexApi)
     }
 
     @Test

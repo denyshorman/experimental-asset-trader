@@ -18,14 +18,15 @@ import com.gitlab.dhorman.cryptotrader.util.share
 import io.netty.handler.codec.http.websocketx.WebSocketHandshakeException
 import io.netty.handler.ssl.SslHandshakeTimeoutException
 import io.vavr.Tuple2
-import io.vavr.collection.*
 import io.vavr.collection.Array
+import io.vavr.collection.HashMap
 import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.awaitFirstOrNull
@@ -34,9 +35,7 @@ import kotlinx.coroutines.reactive.collect
 import kotlinx.coroutines.reactor.flux
 import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
-import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.http.MediaType
-import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.BodyInserters
 import org.springframework.web.reactive.function.client.ClientResponse
 import org.springframework.web.reactive.function.client.WebClient
@@ -59,10 +58,9 @@ private const val PoloniexWebSocketApiUrl = "wss://api2.poloniex.com"
 /**
  * Documentation https://docs.poloniex.com
  */
-@Service
-class PoloniexApi(
-    @Qualifier("POLONIEX_API_KEY") private val poloniexApiKey: String,
-    @Qualifier("POLONIEX_API_SECRET") private val poloniexApiSecret: String,
+open class PoloniexApi(
+    private val poloniexApiKey: String,
+    poloniexApiSecret: String,
     private val webClient: WebClient,
     private val webSocketClient: WebSocketClient,
     private val objectMapper: ObjectMapper
@@ -72,11 +70,22 @@ class PoloniexApi(
     private val reqLimiter = RequestLimiter(allowedRequests = 6, perInterval = Duration.ofSeconds(1))
 
     private val channels = ConcurrentHashMap<Int, BroadcastChannel<PushNotification>>()
+    private val channelState = ConcurrentHashMap<Int, ConflatedBroadcastChannel<Boolean>>()
     private val connectionOutput = Channel<String>(Channel.RENDEZVOUS)
+
+    private val defaultChannelState = { ConflatedBroadcastChannel(false) }
+
+    private fun getChannelState(channel: Int): ConflatedBroadcastChannel<Boolean> {
+        return channelState.getOrPut(channel, defaultChannelState)
+    }
+
+    fun channelStateFlow(channel: Int): Flow<Boolean> {
+        return getChannelState(channel).asFlow()
+    }
 
     private val pushNotificationJsonReader = objectMapper.readerFor(PushNotification::class.java)
 
-    val connection = channelFlow {
+    open val connection: Flow<Boolean> = channelFlow {
         logger.debug("Starting Poloniex connection channel")
 
         while (isActive) {
@@ -89,7 +98,7 @@ class PoloniexApi(
                         logger.info("Connection established with $PoloniexWebSocketApiUrl")
 
                         val receive = async {
-                            session.receive().timeout(Duration.ofSeconds(3)).onBackpressureError().collect { msg ->
+                            session.receive().timeout(Duration.ofMillis(1400)).onBackpressureError().collect { msg ->
                                 val payloadBytes = ByteArray(msg.payload.readableByteCount())
                                 msg.payload.read(payloadBytes)
 
@@ -179,19 +188,16 @@ class PoloniexApi(
         logger.debug("Closing Poloniex connection channel")
     }.distinctUntilChanged().share(1)
 
-    /**
-     * Subscribe to ticker updates for all currency pairs.
-     */
-    val tickerStream: Flow<Ticker> = run {
+    open val tickerStream: Flow<Ticker> = run {
         subscribeTo(DefaultChannel.TickerData.id, jacksonTypeRef<Ticker>()).conflate().share()
     }
 
-    val dayExchangeVolumeStream: Flow<DayExchangeVolume> = run {
+    open val dayExchangeVolumeStream: Flow<DayExchangeVolume> = run {
         subscribeTo(DefaultChannel.DayExchangeVolume.id, jacksonTypeRef<DayExchangeVolume>())
             .share()
     }
 
-    val accountNotificationStream: Flow<List<AccountNotification>> = run {
+    open val accountNotificationStream: Flow<List<AccountNotification>> = run {
         subscribeTo(
             DefaultChannel.AccountNotifications.id,
             jacksonTypeRef<List<AccountNotification>>(),
@@ -217,7 +223,7 @@ class PoloniexApi(
     }
 
     @Throws(InvalidMarketException::class, InvalidDepthException::class)
-    suspend fun orderBooks(market: Market? = null, depth: Int? = null): Map<Market, OrderBookSnapshot> {
+    open suspend fun orderBooks(market: Market? = null, depth: Int? = null): Map<Market, OrderBookSnapshot> {
         val command = "returnOrderBook"
 
         val params = hashMap(
@@ -239,63 +245,7 @@ class PoloniexApi(
         }
     }
 
-    fun orderBookStream(marketId: MarketId): Flow<Tuple2<PriceAggregatedBook, List<OrderBookNotification>>> = channelFlow {
-        while (true) {
-            try {
-                coroutineScope {
-                    var book = PriceAggregatedBook()
-
-                    launch(start = CoroutineStart.UNDISPATCHED) {
-                        connection.collect { connected ->
-                            if (!connected) throw DisconnectedException
-                        }
-                    }
-
-                    subscribeTo(marketId, jacksonTypeRef<List<OrderBookNotification>>()).collect { notificationList ->
-                        for (notification in notificationList) {
-                            book = when (notification) {
-                                is OrderBookInit -> run {
-                                    val newAsks = book.asks.merge(notification.asks)
-                                    val newBids = book.bids.merge(notification.bids)
-                                    PriceAggregatedBook(newAsks, newBids)
-                                }
-                                is OrderBookUpdate -> run {
-                                    fun modifyBook(book: TreeMap<Price, Amount>): TreeMap<Price, Amount> =
-                                        if (notification.amount.compareTo(BigDecimal.ZERO) == 0) {
-                                            book.remove(notification.price)
-                                        } else {
-                                            book.put(notification.price, notification.amount)
-                                        }
-
-                                    when (notification.orderType) {
-                                        OrderType.Sell -> PriceAggregatedBook(modifyBook(book.asks), book.bids)
-                                        OrderType.Buy -> PriceAggregatedBook(book.asks, modifyBook(book.bids))
-                                    }
-                                }
-                                is OrderBookTrade -> book
-                            }
-                        }
-
-                        if (notificationList.size() > 0) {
-                            send(tuple(book, notificationList))
-                        }
-                    }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: DisconnectedException) {
-                delay(1000)
-            } catch (e: Throwable) {
-                delay(1000)
-            }
-        }
-    }
-
-    fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flow<Tuple2<PriceAggregatedBook, List<OrderBookNotification>>>> {
-        return marketIds.map { marketId -> tuple(marketId, orderBookStream(marketId)) }.toMap { it }
-    }
-
-    suspend fun dayVolume(): Map<Market, Tuple2<Amount, Amount>> {
+    open suspend fun dayVolume(): Map<Market, Tuple2<Amount, Amount>> {
         return callPublicApi("return24hVolume", jacksonTypeRef<Map<String, Any>>())
             .toVavrStream()
             .filter { it._2 is kotlin.collections.Map<*, *> }
@@ -309,7 +259,7 @@ class PoloniexApi(
             .toMap({ it._1 }, { it._2 })
     }
 
-    suspend fun candlestickChartData(market: Market, fromDate: Instant, toDate: Instant, period: ChartDataCandlestickPeriod): List<Candlestick> {
+    open suspend fun candlestickChartData(market: Market, fromDate: Instant, toDate: Instant, period: ChartDataCandlestickPeriod): List<Candlestick> {
         val params = hashMap(
             "currencyPair" to market.toString(),
             "start" to fromDate.epochSecond.toString(),
@@ -320,20 +270,12 @@ class PoloniexApi(
         return callPublicApi("returnChartData", jacksonTypeRef(), params)
     }
 
-    /**
-     *
-     * @return Returns the ticker for all markets.
-     */
-    suspend fun ticker(): Map<Market, Ticker0> {
+    open suspend fun ticker(): Map<Market, Ticker0> {
         val command = "returnTicker"
         return callPublicApi(command, jacksonTypeRef())
     }
 
-    suspend fun tradeHistoryPublic(
-        market: Market,
-        fromTs: Instant? = null,
-        toTs: Instant? = null
-    ): Array<TradeHistory> {
+    open suspend fun tradeHistoryPublic(market: Market, fromTs: Instant? = null, toTs: Instant? = null): Array<TradeHistory> {
         val command = "returnTradeHistory"
 
         val params = hashMap(
@@ -349,33 +291,24 @@ class PoloniexApi(
         return callPublicApi(command, jacksonTypeRef(), params)
     }
 
-    suspend fun currencies(): Map<Currency, CurrencyDetails> {
+    open suspend fun currencies(): Map<Currency, CurrencyDetails> {
         val command = "returnCurrencies"
         return callPublicApi(command, jacksonTypeRef())
     }
 
-    /**
-     * Returns all of your available balances
-     */
-    suspend fun availableBalances(): Map<Currency, BigDecimal> {
+    open suspend fun availableBalances(): Map<Currency, BigDecimal> {
         return callPrivateApi("returnBalances", jacksonTypeRef())
     }
 
-    /**
-     * Returns all of your balances, including available balance, balance on orders, and the estimated BTC value of your balance.
-     */
-    suspend fun completeBalances(): Map<Currency, CompleteBalance> {
+    open suspend fun completeBalances(): Map<Currency, CompleteBalance> {
         return callPrivateApi("returnCompleteBalances", jacksonTypeRef())
     }
 
-    /**
-     * Returns open orders for a given market
-     */
-    suspend fun openOrders(market: Market): List<OpenOrder> {
+    open suspend fun openOrders(market: Market): List<OpenOrder> {
         return callPrivateApi("returnOpenOrders", jacksonTypeRef(), hashMap("currencyPair" to market.toString()))
     }
 
-    suspend fun allOpenOrders(): Map<Long, OpenOrderWithMarket> {
+    open suspend fun allOpenOrders(): Map<Long, OpenOrderWithMarket> {
         val command = "returnOpenOrders"
         val params = hashMap("currencyPair" to "all")
         return callPrivateApi(command, jacksonTypeRef<Map<Market, List<OpenOrder>>>(), params)
@@ -385,7 +318,7 @@ class PoloniexApi(
             .toMap({ it.orderId }, { it })
     }
 
-    suspend fun orderStatus(orderId: Long): OrderStatus? {
+    open suspend fun orderStatus(orderId: Long): OrderStatus? {
         val command = "returnOrderStatus"
         val params = hashMap("orderNumber" to orderId.toString())
         val json = callPrivateApi(command, jacksonTypeRef<JsonNode>(), params)
@@ -409,12 +342,7 @@ class PoloniexApi(
         }
     }
 
-    suspend fun tradeHistory(
-        market: Market? = null,
-        fromTs: Instant? = null,
-        toTs: Instant? = null,
-        limit: Long? = null
-    ): Map<Market, List<TradeHistoryPrivate>> {
+    open suspend fun tradeHistory(market: Market? = null, fromTs: Instant? = null, toTs: Instant? = null, limit: Long? = null): Map<Market, List<TradeHistoryPrivate>> {
         val command = "returnTradeHistory"
         val params = hashMap(
             "currencyPair" to some(market?.toString() ?: "all"),
@@ -435,7 +363,7 @@ class PoloniexApi(
         }
     }
 
-    suspend fun orderTrades(orderNumber: Long): List<OrderTrade> {
+    open suspend fun orderTrades(orderNumber: Long): List<OrderTrade> {
         val command = "returnOrderTrades"
         val params = hashMap("orderNumber" to orderNumber.toString())
         return try {
@@ -449,7 +377,7 @@ class PoloniexApi(
         }
     }
 
-    suspend fun placeLimitOrder(market: Market, orderType: OrderType, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
+    open suspend fun placeLimitOrder(market: Market, orderType: OrderType, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
         return when (orderType) {
             OrderType.Buy -> buySell("buy", market, price, amount, tpe)
             OrderType.Sell -> buySell("sell", market, price, amount, tpe)
@@ -555,7 +483,7 @@ class PoloniexApi(
         return e
     }
 
-    suspend fun cancelOrder(orderId: Long): CancelOrder {
+    open suspend fun cancelOrder(orderId: Long): CancelOrder {
         val command = "cancelOrder"
         val params = hashMap("orderNumber" to orderId.toString())
         try {
@@ -579,7 +507,7 @@ class PoloniexApi(
     }
 
     // note: can be called 1 time per 2 minutes
-    suspend fun cancelAllOrders(market: Market?): CancelAllOrders {
+    open suspend fun cancelAllOrders(market: Market?): CancelAllOrders {
         val command = "cancelAllOrders"
         val params = market?.let { hashMap("currencyPair" to it.toString()) } ?: HashMap.empty()
         val res = callPrivateApi(command, jacksonTypeRef<CancelAllOrdersWrapper>(), params)
@@ -593,12 +521,7 @@ class PoloniexApi(
      * @param orderType "postOnly" or "immediateOrCancel" may be specified for exchange orders, but will have no effect on margin orders.
      * @return
      */
-    suspend fun moveOrder(
-        orderId: Long,
-        price: Price,
-        amount: Amount? = null,
-        orderType: BuyOrderType? = null
-    ): MoveOrderResult {
+    open suspend fun moveOrder(orderId: Long, price: Price, amount: Amount? = null, orderType: BuyOrderType? = null): MoveOrderResult {
         val command = "moveOrder"
         val params = hashMap(
             "orderNumber" to orderId.toString(),
@@ -634,22 +557,22 @@ class PoloniexApi(
     /**
      * If you are enrolled in the maker-taker fee schedule, returns your current trading fees and trailing 30-day volume in BTC. This information is updated once every 24 hours.
      */
-    suspend fun feeInfo(): FeeInfo {
+    open suspend fun feeInfo(): FeeInfo {
         val command = "returnFeeInfo"
         return callPrivateApi(command, jacksonTypeRef())
     }
 
-    suspend fun availableAccountBalances(): AvailableAccountBalance {
+    open suspend fun availableAccountBalances(): AvailableAccountBalance {
         val command = "returnAvailableAccountBalances"
         return callPrivateApi(command, jacksonTypeRef())
     }
 
-    suspend fun marginTradableBalances(): Map<Market, Map<Currency, Amount>> {
+    open suspend fun marginTradableBalances(): Map<Market, Map<Currency, Amount>> {
         val command = "returnTradableBalances"
         return callPrivateApi(command, jacksonTypeRef())
     }
 
-    private suspend fun <T : Any> callPublicApi(
+    protected suspend fun <T : Any> callPublicApi(
         command: String,
         type: TypeReference<T>,
         queryParams: Map<String, String> = HashMap.empty(),
@@ -668,7 +591,7 @@ class PoloniexApi(
         }
     }
 
-    private suspend fun <T : Any> callPrivateApi(
+    protected suspend fun <T : Any> callPrivateApi(
         methodName: String,
         type: TypeReference<T>,
         postArgs: Map<String, String> = HashMap.empty(),
@@ -778,7 +701,7 @@ class PoloniexApi(
         return null
     }
 
-    private fun <T : Any> subscribeTo(
+    protected fun <T : Any> subscribeTo(
         channel: Int,
         respClass: TypeReference<T>,
         privateApi: Boolean = false
@@ -798,7 +721,8 @@ class PoloniexApi(
                     } catch (e: Throwable) {
                         logger.error("Can't parse websocket message: ${e.message}")
                     }
-                    // TODO: Investigate websocket error responses in details
+                } else if (msg.sequenceId == 1L && (msg.data == null || msg.data == NullNode.instance)) {
+                    getChannelState(channel).offer(true)
                 }/* else if (msg.sequenceId == 0L) {
                     throw SubscribeErrorException
                 }*/
@@ -882,6 +806,7 @@ class PoloniexApi(
                 }
             } finally {
                 channels.remove(channel)
+                getChannelState(channel).offer(false)
             }
         }
 

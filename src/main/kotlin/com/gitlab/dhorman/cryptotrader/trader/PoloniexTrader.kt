@@ -4,7 +4,7 @@ import com.gitlab.dhorman.cryptotrader.core.BareTrade
 import com.gitlab.dhorman.cryptotrader.core.ExhaustivePath
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.core.OrderSpeed
-import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.CurrencyType
@@ -44,11 +44,10 @@ typealias PathId = UUID
 
 @Service
 class PoloniexTrader(
-    private val poloniexApi: PoloniexApi,
+    private val poloniexApi: ExtendedPoloniexApi,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
     private val tradeAdjuster: PoloniexTradeAdjuster,
-    private val data: DataStreams,
-    indicators: IndicatorStreams,
+    indicators: Indicators,
     private val transactionsDao: TransactionsDao,
     private val unfilledMarketsDao: UnfilledMarketsDao,
     private val settingsDao: SettingsDao,
@@ -57,7 +56,7 @@ class PoloniexTrader(
 ) {
     private val logger = KotlinLogging.logger {}
     private val intentManager = IntentManager()
-    private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, data)
+    private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, poloniexApi)
     private val mergeAlgo = MergeTradeAlgo(amountCalculator, tradeAdjuster, tranIntentMarketExtensions)
     private val splitAlgo = SplitTradeAlgo(amountCalculator, tradeAdjuster, tranIntentMarketExtensions)
     private val pathHelper = PathHelper(indicators, transactionsDao, tranIntentMarketExtensions, blacklistedMarketsDao)
@@ -71,10 +70,8 @@ class PoloniexTrader(
     fun start(scope: CoroutineScope) = scope.launch(CoroutineName("PoloniexTraderStarter")) {
         logger.info("Start trading on Poloniex")
 
-        subscribeToRequiredTopicsBeforeTrading()
-
         tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
-        delayedTradeManager = DelayedTradeManager(tranIntentScope, splitAlgo, poloniexApi, amountCalculator, data, transactionsDao)
+        delayedTradeManager = DelayedTradeManager(tranIntentScope, splitAlgo, poloniexApi, amountCalculator, transactionsDao)
         tranIntentFactory = TransactionIntent.Companion.TransactionIntentFactory(
             tranIntentScope,
             intentManager,
@@ -82,7 +79,6 @@ class PoloniexTrader(
             transactionsDao,
             poloniexApi,
             amountCalculator,
-            data,
             unfilledMarketsDao,
             settingsDao,
             tranManager,
@@ -134,7 +130,7 @@ class PoloniexTrader(
     private suspend fun collectRoundingLeftovers() {
         coroutineScope {
             val allBalancesAsync = async {
-                val allBalances = data.balances.first()
+                val allBalances = poloniexApi.balanceStream.first()
                 allBalances.removeAll(settingsDao.primaryCurrencies)
             }
             val activePathsAsync = async {
@@ -180,24 +176,6 @@ class PoloniexTrader(
         for (tranRequest in tranRequests) {
             startPathTransaction(tranRequest)
         }
-    }
-
-    private suspend fun subscribeToRequiredTopicsBeforeTrading() {
-        if (logger.isTraceEnabled) logger.trace("Subscribe to topics before trading")
-
-        coroutineScope {
-            launch(start = CoroutineStart.UNDISPATCHED) {
-                data.balances.first()
-                if (logger.isTraceEnabled) logger.trace("Subscribed to balances topic")
-            }
-
-            launch(start = CoroutineStart.UNDISPATCHED) {
-                data.openOrders.first()
-                if (logger.isTraceEnabled) logger.trace("Subscribed to openOrders topic")
-            }
-        }
-
-        if (logger.isTraceEnabled) logger.trace("Subscribed to all required topics before trading")
     }
 
     private suspend fun resumeSleepingTransactions() {
@@ -261,7 +239,7 @@ class PoloniexTrader(
         val requestedAmount = (markets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
 
         val canStartTransaction = tranManager.repeatableReadTran {
-            val (available, onOrders) = data.balances.first().getOrNull(fromCurrency) ?: return@repeatableReadTran false
+            val (available, onOrders) = poloniexApi.balanceStream.first().getOrNull(fromCurrency) ?: return@repeatableReadTran false
             val (_, amountInUse) = transactionsDao.balanceInUse(fromCurrency) ?: tuple(fromCurrency, BigDecimal.ZERO)
             val reservedAmount = onOrders - amountInUse
             val availableAmount = available + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount
@@ -349,7 +327,7 @@ class PoloniexTrader(
             .groupBy({ it._1 }, { it._2 })
             .mapValues { it.value.reduce { a, b -> a + b } }
 
-        val allBalances = data.balances.first()
+        val allBalances = poloniexApi.balanceStream.first()
 
         val minAmount = settingsDao.minTradeAmount
 

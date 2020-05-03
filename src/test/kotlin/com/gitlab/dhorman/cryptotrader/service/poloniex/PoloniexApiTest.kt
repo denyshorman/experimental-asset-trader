@@ -10,11 +10,9 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.test.context.ActiveProfiles
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDateTime
@@ -23,8 +21,6 @@ import java.time.temporal.ChronoUnit
 import kotlin.random.Random
 
 @SpringBootTest
-@ActiveProfiles(profiles = ["test"])
-@Disabled
 class PoloniexApiTest {
     private val logger = KotlinLogging.logger {}
 

@@ -1,11 +1,11 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.Market
-import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.poloniex.getOrderBookFlowBy
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import com.gitlab.dhorman.cryptotrader.trader.algo.SplitTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
-import com.gitlab.dhorman.cryptotrader.trader.core.PoloniexTradeAdjuster
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import io.vavr.Tuple2
 import io.vavr.kotlin.tuple
@@ -17,9 +17,8 @@ import mu.KotlinLogging
 class DelayedTradeManager(
     private val scope: CoroutineScope,
     private val splitAlgo: SplitTradeAlgo,
-    private val poloniexApi: PoloniexApi,
+    private val poloniexApi: ExtendedPoloniexApi,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
-    private val data: DataStreams,
     private val transactionsDao: TransactionsDao
 ) {
     private val processors = hashMapOf<Tuple2<Market, OrderType>, DelayedTradeProcessor>()
@@ -37,7 +36,7 @@ class DelayedTradeManager(
 
             logger.debug { "Creating new Delayed Trade Processor for ($market, $orderType)..." }
 
-            val orderBook = data.getOrderBookFlowBy(market)
+            val orderBook = poloniexApi.getOrderBookFlowBy(market)
             val newProcessor = DelayedTradeProcessor(
                 market,
                 orderType,
@@ -46,7 +45,6 @@ class DelayedTradeManager(
                 splitAlgo,
                 poloniexApi,
                 amountCalculator,
-                data,
                 transactionsDao
             )
             processors[key] = newProcessor

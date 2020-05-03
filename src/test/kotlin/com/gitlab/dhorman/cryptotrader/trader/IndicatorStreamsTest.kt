@@ -11,12 +11,12 @@ import java.math.BigDecimal
 class IndicatorStreamsTest {
 
     @Autowired
-    private lateinit var indicatorStreams: IndicatorStreams
+    private lateinit var indicators: Indicators
 
     @Test
     fun `Correctly returns paths`() = runBlocking {
         val initAmount = BigDecimal(100)
-        val paths = indicatorStreams.getPaths(
+        val paths = indicators.getPaths(
             "USDT",
             initAmount,
             stream("USDT", "USDC", "USDJ", "PAX"),

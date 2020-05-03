@@ -16,7 +16,7 @@ import io.vavr.collection.Array
 import io.vavr.collection.List
 
 class PathHelper(
-    private val indicators: IndicatorStreams,
+    private val indicators: Indicators,
     private val transactionsDao: TransactionsDao,
     private val tranIntentMarketExtensions: TranIntentMarketExtensions,
     private val blacklistedMarketsDao: BlacklistedMarketsDao

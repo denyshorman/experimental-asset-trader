@@ -1,12 +1,11 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.*
-import com.gitlab.dhorman.cryptotrader.service.poloniex.PoloniexApi
+import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.algo.SplitTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
-import com.gitlab.dhorman.cryptotrader.trader.core.PoloniexTradeAdjuster
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.util.returnLastIfNoValueWithinSpecifiedTime
 import io.vavr.Tuple3
@@ -34,9 +33,8 @@ class DelayedTradeProcessor(
     private val orderBook: Flow<OrderBookAbstract>,
     private val scope: CoroutineScope,
     splitAlgo: SplitTradeAlgo,
-    private val poloniexApi: PoloniexApi,
+    private val poloniexApi: ExtendedPoloniexApi,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
-    private val data: DataStreams,
     private val transactionsDao: TransactionsDao
 ) {
     private val scheduler = TradeScheduler(orderType, splitAlgo, amountCalculator)
@@ -629,7 +627,7 @@ class DelayedTradeProcessor(
             logger.debug { "Recover after power off is not required." }
             return
         }
-        val orderIsOpen = data.openOrders.first().getOrNull(orderId) != null
+        val orderIsOpen = poloniexApi.openOrdersStream.first().getOrNull(orderId) != null
         if (orderIsOpen) cancelOrder(orderId)
         processMissedTrades(orderId, tradeId)
     }
