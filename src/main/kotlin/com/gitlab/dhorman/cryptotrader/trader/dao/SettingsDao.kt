@@ -13,13 +13,14 @@ import java.time.Duration
 @Repository
 class SettingsDao {
     @Volatile
-    var primaryCurrencies: List<Currency> = list("USDT", "USDC", "USDJ", "PAX")
+    var primaryCurrencies: List<Currency> = list("USDT", "USDC", "USDJ", "DAI", "PAX")
 
     @Volatile
     var fixedAmount: Map<Currency, Amount> = hashMap(
         "USDT" to BigDecimal(104),
         "USDC" to BigDecimal(0),
         "USDJ" to BigDecimal(0),
+        "DAI" to BigDecimal(0),
         "PAX" to BigDecimal(0)
     )
 
