@@ -1,9 +1,9 @@
 package com.gitlab.dhorman.cryptotrader.trader.indicator.paths
 
 import com.gitlab.dhorman.cryptotrader.core.*
+import com.gitlab.dhorman.cryptotrader.service.poloniex.MarketStringMap
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
-import com.gitlab.dhorman.cryptotrader.trader.model.MarketStringMap
 import io.vavr.Tuple2
 import io.vavr.collection.*
 import io.vavr.collection.List
