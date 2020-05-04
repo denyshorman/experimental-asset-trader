@@ -54,7 +54,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
     implementation("org.springframework.plugin:spring-plugin-core:2.0.0.RELEASE") // TODO: Remove when springfox and spring will be released
     implementation("io.r2dbc:r2dbc-postgresql")
-    developmentOnly("org.springframework.boot:spring-boot-devtools")
+    //developmentOnly("org.springframework.boot:spring-boot-devtools")
     testImplementation("org.junit.jupiter:junit-jupiter:5.6.1")
     testImplementation("org.mockito:mockito-core:3.3.3")
     testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.2.0")
@@ -85,6 +85,7 @@ tasks {
 
     withType<BootJar> {
         archiveFileName.set("app.jar")
+        layered()
     }
 }
 

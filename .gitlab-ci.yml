@@ -11,9 +11,15 @@ build:
     - chmod +x gradlew
   script:
     - ./gradlew bootJar
+    - cd build/libs
+    - java -Djarmode=layertools -jar *.jar extract
   artifacts:
     paths:
       - build/libs/*.jar
+      - build/libs/dependencies/
+      - build/libs/snapshot-dependencies/
+      - build/libs/resources/
+      - build/libs/application/
     expire_in: 1 day
   interruptible: true
   only:
