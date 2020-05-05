@@ -84,7 +84,6 @@ tasks {
     }
 
     withType<BootJar> {
-        archiveFileName.set("app.jar")
         layered()
     }
 }
