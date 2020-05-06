@@ -40,20 +40,28 @@ private open class ShareOperator<T>(
         if (upstreamSubscriptionJob != null) return
 
         upstreamSubscriptionJob = GlobalScope.launch {
-            upstream.collect { data ->
-                subscriberChannelsMutex.withLock {
-                    if (queue != null) {
-                        queue.addLast(data)
-                        if (queue.size > replayCount) queue.removeFirst()
-                    }
+            try {
+                upstream.collect { data ->
+                    subscriberChannelsMutex.withLock {
+                        if (queue != null) {
+                            queue.addLast(data)
+                            if (queue.size > replayCount) queue.removeFirst()
+                        }
 
-                    subscriberChannels.forEach { subscriber ->
-                        try {
-                            subscriber.send(data)
-                        } catch (_: Throwable) {
+                        subscriberChannels.forEach { subscriber ->
+                            try {
+                                subscriber.send(data)
+                            } catch (e: Throwable) {
+                                logger.warn("Can't send data to subscriber $subscriber because ${e.message}")
+                            }
                         }
                     }
                 }
+            } catch (e: CancellationException) {
+                if (subscriberChannels.size > 0) {
+                    logger.warn("upstream cancelled when subscriberChannels (${subscriberChannels.size}) variable is not empty.")
+                }
+                throw e
             }
 
             logger.warn("Downstream flow completed in share operator $upstream")

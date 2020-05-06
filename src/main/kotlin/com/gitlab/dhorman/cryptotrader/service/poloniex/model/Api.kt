@@ -182,12 +182,13 @@ data class AvailableAccountBalance(
     val lending: Map<Currency, Amount>
 )
 
-data class BuySell(
+data class LimitOrderResult(
     @JsonProperty("orderNumber") val orderId: Long,
     @JsonProperty("resultingTrades") val trades: Array<BuyResultingTrade>,
     val fee: BigDecimal,
     @JsonProperty("currencyPair") val market: Market,
-    val amountUnfilled: Amount? // available when ImmediateOrCancel order type is used
+    val amountUnfilled: Amount?, // available when ImmediateOrCancel order type is used
+    val clientOrderId: Long?
 ) {
     val feeMultiplier get(): BigDecimal = fee.oneMinusAdjPoloniex
 }
@@ -214,18 +215,22 @@ enum class BuyOrderType(@get:JsonValue val id: String) {
     PostOnly("postOnly")
 }
 
+enum class CancelOrderIdType { Server, Client }
+
 data class CancelOrderWrapper(
     val success: Boolean,
     val amount: Amount,
     val message: String,
     val fee: BigDecimal,
-    @JsonProperty("currencyPair") val market: Market
+    @JsonProperty("currencyPair") val market: Market,
+    val clientOrderId: Long?
 )
 
 data class CancelOrder(
     val amount: Amount,
     val feeMultiplier: BigDecimal,
-    val market: Market
+    val market: Market,
+    val clientOrderId: Long?
 )
 
 data class CancelAllOrdersWrapper(
@@ -244,14 +249,16 @@ data class MoveOrderWrapper(
     @JsonProperty("orderNumber") val orderId: Long?,
     val resultingTrades: Map<Market, Array<BuyResultingTrade>>?,
     val fee: BigDecimal,
-    @JsonProperty("currencyPair") val market: Market
+    @JsonProperty("currencyPair") val market: Market,
+    val clientOrderId: Long?
 )
 
 data class MoveOrderResult(
     @JsonProperty("orderNumber") val orderId: Long,
     val resultingTrades: Map<Market, Array<BuyResultingTrade>>,
     val feeMultiplier: BigDecimal,
-    val market: Market
+    val market: Market,
+    val clientOrderId: Long?
 )
 
 data class FeeInfo(

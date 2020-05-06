@@ -19,7 +19,7 @@ object OrderPendingAckJsonCodec {
                 codec.treeToValue(arrayNode[3])!!,
                 codec.treeToValue(arrayNode[4])!!,
                 codec.treeToValue(arrayNode[5])!!,
-                arrayNode[6].asLong()
+                arrayNode[6].let { if (it.isNull) null else it.asLong() }
             )
         }
     }

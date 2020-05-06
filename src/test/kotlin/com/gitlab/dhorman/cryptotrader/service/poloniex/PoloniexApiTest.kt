@@ -1,12 +1,12 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniex
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.PoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.fromAmountBuy
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.quoteAmount
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.BuyOrderType
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.ChartDataCandlestickPeriod
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
@@ -29,6 +29,16 @@ class PoloniexApiTest {
 
     @Autowired
     private lateinit var amountCalculator: PoloniexBuySellAmountCalculator
+
+    @Autowired
+    private lateinit var objectMapper: ObjectMapper
+
+    @Test
+    fun `Subscribe to account notifications`() = runBlocking {
+        poloniexApi.accountNotificationStream.collect {
+            println(it)
+        }
+    }
 
     @Test
     fun `Get open orders for market USDC_ATOM`() = runBlocking {
@@ -129,5 +139,35 @@ class PoloniexApiTest {
     fun `Get order book API call should run successfully`() = runBlocking {
         val orderBook = poloniexApi.orderBooks(depth = 0)
         println(orderBook)
+    }
+
+    @Test
+    fun `Correctly parses websocket message`() {
+        val msg1 = """[1, 123456,null]"""
+        val msg2 = """[1, 123456,123456]"""
+        val msg3 = """[1, 123456,"123456"]"""
+
+        val o1 = objectMapper.readValue<OrderKilled>(msg1)
+        val o2 = objectMapper.readValue<OrderKilled>(msg2)
+        val o3 = objectMapper.readValue<OrderKilled>(msg3)
+
+        println(o1)
+        println(o2)
+        println(o3)
+    }
+
+    @Test
+    fun `Correctly parses move order result message`() {
+        val msg1 = """{"orderNumber":1,"resultingTrades":{},"feeMultiplier":"0.1","market":"USDT_BTC","clientOrderId":null}"""
+        val msg2 = """{"orderNumber":1,"resultingTrades":{},"feeMultiplier":"0.1","market":"USDT_BTC","clientOrderId":1}"""
+        val msg3 = """{"orderNumber":1,"resultingTrades":{},"feeMultiplier":"0.1","market":"USDT_BTC","clientOrderId":"1"}"""
+
+        val o1 = objectMapper.readValue<MoveOrderResult>(msg1)
+        val o2 = objectMapper.readValue<MoveOrderResult>(msg2)
+        val o3 = objectMapper.readValue<MoveOrderResult>(msg3)
+
+        println(o1)
+        println(o2)
+        println(o3)
     }
 }

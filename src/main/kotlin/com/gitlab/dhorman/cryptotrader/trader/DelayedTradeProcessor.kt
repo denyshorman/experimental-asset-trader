@@ -196,7 +196,7 @@ class DelayedTradeProcessor(
                         launch(start = CoroutineStart.UNDISPATCHED) {
                             logger.debug { "Start connection monitoring" }
 
-                            poloniexApi.connection.collect { connected ->
+                            poloniexApi.channelStateFlow(DefaultChannel.AccountNotifications.id).collect { connected ->
                                 if (!connected) throw DisconnectedException
                             }
                         }
@@ -297,11 +297,11 @@ class DelayedTradeProcessor(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: DisconnectedException) {
-                    logger.debug { "Disconnected from Poloniex" }
+                    logger.debug { "Disconnected from account notification channel" }
 
                     withContext(NonCancellable) {
-                        poloniexApi.connection.filter { it }.first()
-                        logger.debug { "Connected to Poloniex" }
+                        poloniexApi.channelStateFlow(DefaultChannel.AccountNotifications.id).filter { it }.first()
+                        logger.debug { "Connected to account notification channel" }
                     }
                 } catch (e: Throwable) {
                     logger.debug("${e.message}; fromAmount: ${scheduler.fromAmount};")
@@ -564,19 +564,25 @@ class DelayedTradeProcessor(
     private suspend fun cancelOrder(orderId: Long) {
         while (true) {
             try {
+                logger.debug { "Cancelling order $orderId" }
                 poloniexApi.cancelOrder(orderId)
+                logger.debug { "Order $orderId has been cancelled" }
                 break
             } catch (e: OrderCompletedOrNotExistException) {
                 logger.debug(e.message)
                 cancelUncaughtOrders()
                 break
             } catch (e: UnknownHostException) {
+                logger.debug { "Cancel order $orderId: ${e.message}" }
                 delay(2000)
             } catch (e: IOException) {
+                logger.debug { "Cancel order $orderId: ${e.message}" }
                 delay(2000)
             } catch (e: ConnectException) {
+                logger.debug { "Cancel order $orderId: ${e.message}" }
                 delay(2000)
             } catch (e: SocketException) {
+                logger.debug { "Cancel order $orderId: ${e.message}" }
                 delay(2000)
             } catch (e: Throwable) {
                 logger.error(e.message)

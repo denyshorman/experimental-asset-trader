@@ -230,15 +230,15 @@ class TransactionIntent(
                                     }
 
                                     logger.debug {
-                                        val path = tranIntentMarketExtensions.pathString(updatedMarkets)
-
                                         val reason = if (!profitable) {
                                             "path is not profitable (${targetAmount - initAmount})"
                                         } else {
                                             "timeout has occurred"
                                         }
 
-                                        "Cancelling path ($marketIdx) $path because $reason"
+                                        val market = updatedMarkets[marketIdx].market
+
+                                        "Cancelling path ($marketIdx $market) because $reason"
                                     }
 
 

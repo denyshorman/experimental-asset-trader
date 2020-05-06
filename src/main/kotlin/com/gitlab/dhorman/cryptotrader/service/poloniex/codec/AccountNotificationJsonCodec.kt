@@ -19,6 +19,7 @@ object AccountNotificationJsonCodec {
                 "o" -> codec.treeToValue<OrderUpdate>(arrayNode)!!
                 "t" -> codec.treeToValue<TradeNotification>(arrayNode)!!
                 "p" -> codec.treeToValue<OrderPendingAck>(arrayNode)!!
+                "k" -> codec.treeToValue<OrderKilled>(arrayNode)!!
                 else -> throw Exception("Not recognized account notification type $type")
             }
         }

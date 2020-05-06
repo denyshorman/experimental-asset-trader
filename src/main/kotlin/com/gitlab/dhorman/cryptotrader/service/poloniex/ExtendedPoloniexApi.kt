@@ -10,13 +10,11 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.util.share
 import io.vavr.Tuple2
-import io.vavr.collection.*
+import io.vavr.collection.HashMap
 import io.vavr.collection.List
 import io.vavr.collection.Map
-import io.vavr.kotlin.component1
-import io.vavr.kotlin.component2
-import io.vavr.kotlin.getOrNull
-import io.vavr.kotlin.tuple
+import io.vavr.collection.TreeMap
+import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.flow.*
@@ -62,6 +60,7 @@ class ExtendedPoloniexApi(
     private val logger = KotlinLogging.logger {}
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val streamSynchronizer = StreamSynchronizer()
+    private val marketOrderBook = ConcurrentHashMap<MarketId, Flow<OrderBookData>>()
 
     init {
         Runtime.getRuntime().addShutdownHook(Thread {
@@ -508,15 +507,16 @@ class ExtendedPoloniexApi(
 
     val orderBooksStream: Flow<OrderBookDataMap> = run {
         marketStream.map { marketInfo ->
-            val marketIds = marketInfo._1.keySet()
-
-            orderBooksStream(marketIds).map { marketId, bookStream ->
-                val newBookStream = bookStream.map { (book, update) ->
-                    OrderBookData(marketInfo._1.get(marketId).get(), marketId, book, update)
-                }.share(1, Duration.ofMinutes(2), scope)
-
-                Tuple2(marketId, newBookStream)
-            }
+            marketInfo._1.keySet().toVavrStream()
+                .map { marketId ->
+                    val newBookStream = marketOrderBook.getOrPut(marketId) {
+                        orderBookStream(marketId)
+                            .map { (book, update) -> OrderBookData(marketInfo._1.get(marketId).get(), marketId, book, update) }
+                            .share(1, Duration.ofMinutes(2), scope)
+                    }
+                    tuple(marketId, newBookStream)
+                }
+                .toMap { it }
         }.share(1, Duration.ofMinutes(30), scope)
     }
 
@@ -632,24 +632,21 @@ class ExtendedPoloniexApi(
             } catch (e: DisconnectedException) {
                 delay(1000)
             } catch (e: Throwable) {
+                logger.debug("Error occurred in orderBookStream of market $marketId: ${e.message}")
                 delay(1000)
             }
         }
     }
 
-    private fun orderBooksStream(marketIds: Traversable<MarketId>): Map<MarketId, Flow<Tuple2<PriceAggregatedBook, List<OrderBookNotification>>>> {
-        return marketIds.map { marketId -> tuple(marketId, orderBookStream(marketId)) }.toMap { it }
-    }
-
-    override suspend fun placeLimitOrder(market: Market, orderType: OrderType, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
+    override suspend fun placeLimitOrder(market: Market, orderType: OrderType, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?, clientOrderId: Long?): LimitOrderResult {
         return streamSynchronizer.withLockFunc {
-            super.placeLimitOrder(market, orderType, price, amount, tpe)
+            super.placeLimitOrder(market, orderType, price, amount, tpe, clientOrderId)
         }
     }
 
-    override suspend fun cancelOrder(orderId: Long): CancelOrder {
+    override suspend fun cancelOrder(orderId: Long, orderIdType: CancelOrderIdType): CancelOrder {
         return streamSynchronizer.withLockFunc {
-            super.cancelOrder(orderId)
+            super.cancelOrder(orderId, orderIdType)
         }
     }
 
@@ -659,9 +656,9 @@ class ExtendedPoloniexApi(
         }
     }
 
-    override suspend fun moveOrder(orderId: Long, price: Price, amount: Amount?, orderType: BuyOrderType?): MoveOrderResult {
+    override suspend fun moveOrder(orderId: Long, price: Price, amount: Amount?, orderType: BuyOrderType?, clientOrderId: Long?): MoveOrderResult {
         return streamSynchronizer.withLockFunc {
-            super.moveOrder(orderId, price, amount, orderType)
+            super.moveOrder(orderId, price, amount, orderType, clientOrderId)
         }
     }
 

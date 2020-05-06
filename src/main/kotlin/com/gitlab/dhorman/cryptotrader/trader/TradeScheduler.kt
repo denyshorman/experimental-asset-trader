@@ -118,7 +118,10 @@ class TradeScheduler(
 
     suspend fun addTrades(tradeList: kotlin.collections.List<BareTrade>) {
         mutex.withLock {
-            logger.debug { "Trying to add trades $tradeList to the trade scheduler..." }
+            logger.debug {
+                val clients = ids.joinToString { "($it, ${idFromAmount[it]})" }
+                "Trying to split trades $tradeList between clients $clients with commonFromAmount ${idFromAmountCommon.get()}..."
+            }
 
             val receivedTrades = LinkedList(tradeList)
             val clientTrades = mutableMapOf<PathId, MutableList<BareTrade>>()

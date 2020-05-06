@@ -94,8 +94,8 @@ open class PoloniexApi(
             try {
                 val session = webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
                     mono(Dispatchers.Unconfined) {
-                        send(true)
                         logger.info("Connection established with $PoloniexWebSocketApiUrl")
+                        send(true)
 
                         val receive = async {
                             session.receive().timeout(Duration.ofMillis(1400)).onBackpressureError().collect { msg ->
@@ -155,6 +155,8 @@ open class PoloniexApi(
                 } finally {
                     send(false)
                 }
+
+                logger.debug("Connection stopped without error")
             } catch (e: CancellationException) {
                 logger.debug("Connection closed because internal job has been cancelled")
             } catch (e: TimeoutException) {
@@ -377,10 +379,17 @@ open class PoloniexApi(
         }
     }
 
-    open suspend fun placeLimitOrder(market: Market, orderType: OrderType, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?): BuySell {
+    open suspend fun placeLimitOrder(
+        market: Market,
+        orderType: OrderType,
+        price: BigDecimal,
+        amount: BigDecimal,
+        tpe: BuyOrderType?,
+        clientOrderId: Long? = null
+    ): LimitOrderResult {
         return when (orderType) {
-            OrderType.Buy -> buySell("buy", market, price, amount, tpe)
-            OrderType.Sell -> buySell("sell", market, price, amount, tpe)
+            OrderType.Buy -> placeLimitOrder("buy", market, price, amount, tpe, clientOrderId)
+            OrderType.Sell -> placeLimitOrder("sell", market, price, amount, tpe, clientOrderId)
         }
     }
 
@@ -389,19 +398,25 @@ open class PoloniexApi(
      *
      * Example: If the current market price is 250 and I want to buy lower than that at 249, then I would place a limit buy order at 249. If the market reaches 249 and a seller’s ask matches with my bid, my limit order will be executed at 249.
      */
-    private suspend fun buySell(
+    private suspend fun placeLimitOrder(
         command: String,
         market: Market,
         price: Price,
         amount: Amount,
-        tpe: BuyOrderType? = null
-    ): BuySell {
+        tpe: BuyOrderType? = null,
+        clientOrderId: Long? = null
+    ): LimitOrderResult {
         val params = hashMap(
             "currencyPair" to market.toString(),
             "rate" to price.toString(),
             "amount" to amount.toString()
         )
-        val additionalParams = tpe?.let { hashMap(it.id to "1") } ?: HashMap.empty()
+        val additionalParams = run {
+            var p = HashMap.empty<String, String>()
+            if (tpe != null) p = p.put(tpe.id, "1")
+            if (clientOrderId != null) p = p.put("clientOrderId", clientOrderId.toString())
+            p
+        }
 
         try {
             return callPrivateApi(command, jacksonTypeRef(), params.merge(additionalParams))
@@ -483,13 +498,17 @@ open class PoloniexApi(
         return e
     }
 
-    open suspend fun cancelOrder(orderId: Long): CancelOrder {
+    open suspend fun cancelOrder(orderId: Long, orderIdType: CancelOrderIdType = CancelOrderIdType.Server): CancelOrder {
         val command = "cancelOrder"
-        val params = hashMap("orderNumber" to orderId.toString())
+        val orderIdTypeStr = when (orderIdType) {
+            CancelOrderIdType.Server -> "orderNumber"
+            CancelOrderIdType.Client -> "clientOrderId"
+        }
+        val params = hashMap(orderIdTypeStr to orderId.toString())
         try {
             val res = callPrivateApi(command, jacksonTypeRef<CancelOrderWrapper>(), params)
             if (!res.success) throw Exception(res.message)
-            return CancelOrder(res.amount, res.fee.oneMinusAdjPoloniex, res.market)
+            return CancelOrder(res.amount, res.fee.oneMinusAdjPoloniex, res.market, res.clientOrderId)
         } catch (e: Throwable) {
             if (e.message == null) throw e
 
@@ -521,7 +540,13 @@ open class PoloniexApi(
      * @param orderType "postOnly" or "immediateOrCancel" may be specified for exchange orders, but will have no effect on margin orders.
      * @return
      */
-    open suspend fun moveOrder(orderId: Long, price: Price, amount: Amount? = null, orderType: BuyOrderType? = null): MoveOrderResult {
+    open suspend fun moveOrder(
+        orderId: Long,
+        price: Price,
+        amount: Amount? = null,
+        orderType: BuyOrderType? = null,
+        clientOrderId: Long? = null
+    ): MoveOrderResult {
         val command = "moveOrder"
         val params = hashMap(
             "orderNumber" to orderId.toString(),
@@ -529,6 +554,7 @@ open class PoloniexApi(
         )
         val optParams = hashMap(
             some("amount") to amount.option(),
+            some("clientOrderId") to clientOrderId.option(),
             orderType.option().map { it.id } to some("1")
         )
             .iterator()
@@ -544,7 +570,7 @@ open class PoloniexApi(
             ).run {
                 val r = this
                 if (r.success) {
-                    MoveOrderResult(r.orderId!!, r.resultingTrades!!, r.fee.oneMinusAdjPoloniex, r.market)
+                    MoveOrderResult(r.orderId!!, r.resultingTrades!!, r.fee.oneMinusAdjPoloniex, r.market, r.clientOrderId)
                 } else {
                     throw Exception(r.errorMsg)
                 }
@@ -723,9 +749,9 @@ open class PoloniexApi(
                     }
                 } else if (msg.sequenceId == 1L && (msg.data == null || msg.data == NullNode.instance)) {
                     getChannelState(channel).offer(true)
-                }/* else if (msg.sequenceId == 0L) {
+                } else if (msg.sequenceId == 0L && (msg.data == null || msg.data == NullNode.instance)) {
                     throw SubscribeErrorException
-                }*/
+                }
             }
         }
 
@@ -766,7 +792,7 @@ open class PoloniexApi(
 
         suspend fun unsubscribeFromChannel() {
             if (!shouldUnsubscribe.get()) {
-                if (logger.isDebugEnabled) logger.debug("Unsubscription from channel $channel is not required. Connection has been already closed.")
+                if (logger.isDebugEnabled) logger.debug("Connection has been already closed for channel $channel.")
                 return
             }
 
@@ -793,7 +819,11 @@ open class PoloniexApi(
                     subscribeToChannel()
 
                     try {
-                        startMessagesConsumption()
+                        try {
+                            startMessagesConsumption()
+                        } finally {
+                            getChannelState(channel).offer(false)
+                        }
                     } catch (e: SubscribeErrorException) {
                         logger.debug("Can't subscribe to channel $channel. Retrying...")
                         delay(100)
@@ -806,7 +836,6 @@ open class PoloniexApi(
                 }
             } finally {
                 channels.remove(channel)
-                getChannelState(channel).offer(false)
             }
         }
 

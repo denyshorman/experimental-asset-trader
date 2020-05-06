@@ -62,14 +62,18 @@ data class LimitOrderCreated(
     val orderType: OrderType,
     val price: BigDecimal,
     val amount: BigDecimal,
-    val date: LocalDateTime
+    val date: LocalDateTime,
+    val originalAmountOrdered: BigDecimal,
+    val clientOrderId: Long?
 ) : AccountNotification()
 
 @JsonDeserialize(using = OrderUpdateJsonCodec.Decoder::class)
 data class OrderUpdate(
     val orderId: Long,
     val newAmount: Amount,
-    val orderType: OrderUpdateType
+    val orderType: OrderUpdateType,
+    val clientOrderId: Long?,
+    val originalAmountOrdered: BigDecimal
 ) : AccountNotification()
 
 @JsonDeserialize(using = TradeNotificationJsonCodec.Decoder::class)
@@ -81,7 +85,8 @@ data class TradeNotification(
     val fundingType: FundingType,
     val orderId: Long,
     val totalFee: BigDecimal,
-    val date: LocalDateTime
+    val date: LocalDateTime,
+    val clientOrderId: Long?
 ) : AccountNotification()
 
 @JsonDeserialize(using = OrderPendingAckJsonCodec.Decoder::class)
@@ -90,10 +95,15 @@ data class OrderPendingAck(
     val marketId: Int,
     val price: Price,
     val amount: Amount,
-    val orderType: OrderUpdateType,
-    val clientOrderId: Long
+    val orderType: OrderType,
+    val clientOrderId: Long?
 ) : AccountNotification()
 
+@JsonDeserialize(using = OrderKilledJsonCodec.Decoder::class)
+data class OrderKilled(
+    val orderId: Long,
+    val clientOrderId: Long?
+) : AccountNotification()
 
 @JsonDeserialize(using = OrderBookNotificationJsonCodec.Decoder::class)
 sealed class OrderBookNotification
