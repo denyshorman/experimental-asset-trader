@@ -8,3 +8,8 @@ class NotProfitableDeltaException(val fromAmount: Amount, val targetAmount: Amou
     NotProfitableException("Not profitable: $targetAmount - $fromAmount = ${targetAmount - fromAmount}")
 
 object NotProfitableTimeoutException : NotProfitableException("Not profitable due to long waiting time")
+
+object MoveNotRequiredException : Throwable("", null, true, false)
+object CantMoveOrderSafelyException : Throwable("", null, true, false)
+object RepeatPlaceMoveOrderLoopAgain : Throwable("", null, true, false)
+object CompletePlaceMoveOrderLoop : Throwable("", null, true, false)

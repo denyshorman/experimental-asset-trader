@@ -359,6 +359,9 @@ class TransactionIntent(
                 } else {
                     throw e
                 }
+            } catch (e: OrderMatchingDisabledException) {
+                blacklistedMarkets.add(currentMarket.market, settingsDao.blacklistMarketTime)
+                throw NotProfitableTimeoutException
             } catch (e: MarketDisabledException) {
                 blacklistedMarkets.add(currentMarket.market, settingsDao.blacklistMarketTime)
                 throw NotProfitableTimeoutException
@@ -384,7 +387,7 @@ class TransactionIntent(
                 while (true) {
                     logger.debug { "Trying to find a new path..." }
 
-                    bestPath = pathHelper.findNewPath(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.primaryCurrencies, modifiedMarkets.length() - marketIdx)
+                    bestPath = pathHelper.findNewPath(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.primaryCurrencies)
 
                     if (bestPath != null) {
                         logger.debug { "A new profitable path found ${tranIntentMarketExtensions.pathString(bestPath)}" }
@@ -531,51 +534,40 @@ class TransactionIntent(
 
             val transaction = try {
                 logger.debug { "Trying to $orderType on market $market with price $lastTradePrice and amount $expectQuoteAmount" }
+                // TODO: Handle case when request has been sent but response has not been received due to connection issues.
                 poloniexApi.placeLimitOrder(market, orderType, lastTradePrice, expectQuoteAmount, BuyOrderType.FillOrKill)
-            } catch (e: UnableToFillOrderException) {
-                logger.debug(e.originalMsg)
-                delay(100)
-                continue
-            } catch (e: TransactionFailedException) {
-                logger.debug(e.originalMsg)
-                delay(500)
-                continue
-            } catch (e: NotEnoughCryptoException) {
-                logger.error(e.originalMsg)
-                throw e
-            } catch (e: AmountMustBeAtLeastException) {
-                logger.debug(e.originalMsg)
-                throw e
-            } catch (e: TotalMustBeAtLeastException) {
-                logger.debug(e.originalMsg)
-                throw e
-            } catch (e: RateMustBeLessThanException) {
-                logger.debug(e.originalMsg)
-                throw e
-            } catch (e: MarketDisabledException) {
-                logger.debug(e.originalMsg)
-                throw e
-            } catch (e: MaxOrdersExceededException) {
-                logger.warn(e.originalMsg)
-                delay(1500)
-                continue
-            } catch (e: UnknownHostException) {
-                delay(2000)
-                continue
-            } catch (e: IOException) {
-                delay(2000)
-                continue
-            } catch (e: ConnectException) {
-                delay(2000)
-                continue
-            } catch (e: SocketException) {
-                delay(2000)
-                continue
-            } catch (e: CancellationException) {
-                throw e
             } catch (e: Throwable) {
-                delay(2000)
-                if (logger.isDebugEnabled) logger.error(e.message)
+                when (e) {
+                    is CancellationException -> throw e
+                    is UnableToFillOrderException -> {
+                        logger.debug(e.originalMsg)
+                        delay(100)
+                    }
+                    is TransactionFailedException -> {
+                        logger.debug(e.originalMsg)
+                        delay(500)
+                    }
+                    is MaxOrdersExceededException -> {
+                        logger.warn(e.originalMsg)
+                        delay(1500)
+                    }
+                    is UnknownHostException, is IOException, is ConnectException, is SocketException -> {
+                        delay(2000)
+                    }
+                    is NotEnoughCryptoException,
+                    is AmountMustBeAtLeastException,
+                    is TotalMustBeAtLeastException,
+                    is RateMustBeLessThanException,
+                    is OrderMatchingDisabledException,
+                    is MarketDisabledException -> {
+                        logger.debug(e.message)
+                        throw e
+                    }
+                    else -> {
+                        logger.error(e.message)
+                        throw e
+                    }
+                }
                 continue
             }
 

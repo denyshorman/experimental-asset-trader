@@ -116,7 +116,7 @@ class TradeScheduler(
         }
     }
 
-    suspend fun addTrades(tradeList: kotlin.collections.List<BareTrade>) {
+    suspend fun addTrades(tradeList: Collection<BareTrade>) {
         mutex.withLock {
             logger.debug {
                 val clients = ids.joinToString { "($it, ${idFromAmount[it]})" }

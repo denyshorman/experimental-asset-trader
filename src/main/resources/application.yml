@@ -1,14 +1,6 @@
 server:
   address: 0.0.0.0
   port: ${HTTP_API_PORT:8080}
-  http2:
-    enabled: true
-#  ssl:
-#    enabled: true
-#    key-store: ${SSL_API_KEYSTORE}
-#    key-store-type: PKCS12
-#    key-store-password: ${SSL_API_KEYSTORE_PASS}
-#    key-password: ${SSL_API_KEYSTORE_PASS}
   error:
     whitelabel:
       enabled: false
@@ -23,13 +15,6 @@ spring:
   output:
     ansi:
       enabled: always
-  devtools:
-    livereload:
-      enabled: true
-#  rsocket:
-#    server:
-#      mapping-path: /api/ws
-#      transport: websocket
 logging:
   pattern:
     console: "%clr(%date{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(%5level) %clr(--){faint} %clr([%thread]){faint} %clr(%.40logger{39}){cyan} %clr(:){faint} %msg%n%wEx"

@@ -8,7 +8,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import java.math.BigDecimal
 
 @SpringBootTest
-class IndicatorStreamsTest {
+class IndicatorTest {
 
     @Autowired
     private lateinit var indicators: Indicators

@@ -16,8 +16,9 @@ import io.vavr.collection.Map
 import io.vavr.collection.TreeMap
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
@@ -29,12 +30,9 @@ import java.math.RoundingMode
 import java.net.ConnectException
 import java.net.SocketException
 import java.net.UnknownHostException
-import java.time.Duration
-import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneId
+import java.time.*
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 typealias MarketIntMap = Map<MarketId, Market>
 typealias MarketStringMap = Map<Market, MarketId>
@@ -55,12 +53,17 @@ class ExtendedPoloniexApi(
     webClient: WebClient,
     webSocketClient: WebSocketClient,
     objectMapper: ObjectMapper,
-    private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator
+    private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
+    private val clock: Clock
 ) : PoloniexApi(poloniexApiKey, poloniexApiSecret, webClient, webSocketClient, objectMapper) {
     private val logger = KotlinLogging.logger {}
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val streamSynchronizer = StreamSynchronizer()
     private val marketOrderBook = ConcurrentHashMap<MarketId, Flow<OrderBookData>>()
+
+    private val orderIdGenerator: AtomicLong by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        AtomicLong(Instant.now(clock).toEpochMilli())
+    }
 
     init {
         Runtime.getRuntime().addShutdownHook(Thread {
@@ -585,6 +588,10 @@ class ExtendedPoloniexApi(
         }.share(1, Duration.ofDays(1024), scope)
     }
 
+    fun generateOrderId(): Long {
+        return orderIdGenerator.incrementAndGet()
+    }
+
     private fun orderBookStream(marketId: MarketId): Flow<Tuple2<PriceAggregatedBook, List<OrderBookNotification>>> = channelFlow {
         while (true) {
             try {
@@ -681,47 +688,58 @@ class ExtendedPoloniexApi(
             class OrderBookNotFound(marketId: MarketId) : Throwable("Order book for $marketId not found", null, true, false)
         }
 
+        class StreamSynchronizerCounter(defaultValue: Int) {
+            private val _counter = MutableStateFlow(defaultValue)
+            private val mutex = Mutex()
+            val counter: StateFlow<Int> get() = _counter
+
+            suspend fun inc() {
+                withContext(NonCancellable) {
+                    mutex.withLock {
+                        _counter.value++
+                    }
+                }
+            }
+
+            suspend fun dec() {
+                withContext(NonCancellable) {
+                    mutex.withLock {
+                        _counter.value--
+                    }
+                }
+            }
+        }
+
         class StreamSynchronizer {
             private val streamsLockMap = ConcurrentHashMap<String, Unit>()
 
-            private val streamsFlow = ConflatedBroadcastChannel(Unit)
-            private val functionsFlow = ConflatedBroadcastChannel(Unit)
-
-            private var functionCalls = AtomicInteger(0)
-            private var streamCalls = AtomicInteger(0)
+            private val streamsFlow = StreamSynchronizerCounter(0)
+            private val functionsFlow = StreamSynchronizerCounter(0)
 
             suspend fun lockFunc() {
                 while (true) {
                     try {
-                        streamsFlow.asFlow().filter { streamCalls.get() == 0 }.first()
+                        streamsFlow.counter.filter { it == 0 }.first()
                     } finally {
-                        functionCalls.incrementAndGet()
+                        functionsFlow.inc()
                     }
-                    functionsFlow.send(Unit)
-                    if (streamCalls.get() == 0) break else unlockFunc()
+                    if (streamsFlow.counter.value == 0) break else unlockFunc()
                 }
             }
 
             suspend fun unlockFunc() {
-                functionCalls.decrementAndGet()
-                functionsFlow.send(Unit)
+                functionsFlow.dec()
             }
 
             suspend fun lockStream(key: String) {
                 val alreadyLocked = streamsLockMap.putIfAbsent(key, Unit)
-                if (alreadyLocked == null) {
-                    streamCalls.incrementAndGet()
-                    streamsFlow.send(Unit)
-                }
-                functionsFlow.asFlow().filter { functionCalls.get() == 0 }.first()
+                if (alreadyLocked == null) streamsFlow.inc()
+                functionsFlow.counter.filter { it == 0 }.first()
             }
 
             suspend fun unlockStream(key: String) {
                 val removedValue = streamsLockMap.remove(key)
-                if (removedValue != null) {
-                    streamCalls.decrementAndGet()
-                    streamsFlow.send(Unit)
-                }
+                if (removedValue != null) streamsFlow.dec()
             }
 
             suspend inline fun <T> withLockFunc(action: () -> T): T {

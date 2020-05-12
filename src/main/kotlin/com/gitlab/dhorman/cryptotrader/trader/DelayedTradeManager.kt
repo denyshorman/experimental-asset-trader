@@ -13,13 +13,15 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
+import java.time.Clock
 
 class DelayedTradeManager(
     private val scope: CoroutineScope,
     private val splitAlgo: SplitTradeAlgo,
     private val poloniexApi: ExtendedPoloniexApi,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
-    private val transactionsDao: TransactionsDao
+    private val transactionsDao: TransactionsDao,
+    private val clock: Clock
 ) {
     private val processors = hashMapOf<Tuple2<Market, OrderType>, DelayedTradeProcessor>()
     private val mutex = Mutex()
@@ -45,7 +47,8 @@ class DelayedTradeManager(
                 splitAlgo,
                 poloniexApi,
                 amountCalculator,
-                transactionsDao
+                transactionsDao,
+                clock
             )
             processors[key] = newProcessor
 

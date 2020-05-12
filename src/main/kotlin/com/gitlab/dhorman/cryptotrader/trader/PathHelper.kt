@@ -25,10 +25,9 @@ class PathHelper(
         initAmount: Amount,
         fromCurrency: Currency,
         fromAmount: Amount,
-        endCurrencies: List<Currency>,
-        recommendedChainCount: Int? = null
+        endCurrencies: List<Currency>
     ): Array<TranIntentMarket>? {
-        val bestPath = selectBestPath(initAmount, fromCurrency, fromAmount, endCurrencies/*, recommendedChainCount*/) ?: return null
+        val bestPath = selectBestPath(initAmount, fromCurrency, fromAmount, endCurrencies) ?: return null
         return prepareMarketsForIntent(bestPath)
     }
 
@@ -36,8 +35,7 @@ class PathHelper(
         initAmount: Amount,
         fromCurrency: Currency,
         fromAmount: Amount,
-        endCurrencies: List<Currency>,
-        recommendedChainCount: Int? = null
+        endCurrencies: List<Currency>
     ): ExhaustivePath? {
         val activeTransactionIds = transactionsDao.getActive().map { tranIntentMarketExtensions.id(it._2) }
         val blacklistedMarkets = blacklistedMarketsDao.getAll()
@@ -50,28 +48,7 @@ class PathHelper(
             if (p0.id == p1.id) {
                 0
             } else {
-                if (recommendedChainCount == null) {
-                    p1.profitability.compareTo(p0.profitability)
-                } else {
-                    val c0 = p0.chain.length()
-                    val c1 = p1.chain.length()
-
-                    if (c0 <= recommendedChainCount && c1 <= recommendedChainCount) {
-                        p1.profitability.compareTo(p0.profitability)
-                    } else if (c0 <= recommendedChainCount) {
-                        -1
-                    } else if (c1 <= recommendedChainCount) {
-                        1
-                    } else {
-                        val c = c0.compareTo(c1)
-
-                        if (c == 0) {
-                            p1.profitability.compareTo(p0.profitability)
-                        } else {
-                            c
-                        }
-                    }
-                }
+                p1.profitability.compareTo(p0.profitability)
             }
         })
 

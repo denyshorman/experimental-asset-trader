@@ -52,7 +52,7 @@ private open class ShareOperator<T>(
                             try {
                                 subscriber.send(data)
                             } catch (e: Throwable) {
-                                logger.warn("Can't send data to subscriber $subscriber because ${e.message}")
+                                logger.debug { "Can't send data to subscriber $subscriber because ${e.message}" }
                             }
                         }
                     }

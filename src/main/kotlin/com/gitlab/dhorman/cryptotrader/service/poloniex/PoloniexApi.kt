@@ -26,7 +26,6 @@ import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.awaitFirstOrNull
@@ -70,17 +69,17 @@ open class PoloniexApi(
     private val reqLimiter = RequestLimiter(allowedRequests = 6, perInterval = Duration.ofSeconds(1))
 
     private val channels = ConcurrentHashMap<Int, BroadcastChannel<PushNotification>>()
-    private val channelState = ConcurrentHashMap<Int, ConflatedBroadcastChannel<Boolean>>()
+    private val channelState = ConcurrentHashMap<Int, MutableStateFlow<Boolean>>()
     private val connectionOutput = Channel<String>(Channel.RENDEZVOUS)
 
-    private val defaultChannelState = { ConflatedBroadcastChannel(false) }
+    private val defaultChannelState = { MutableStateFlow(false) }
 
-    private fun getChannelState(channel: Int): ConflatedBroadcastChannel<Boolean> {
+    private fun getChannelState(channel: Int): MutableStateFlow<Boolean> {
         return channelState.getOrPut(channel, defaultChannelState)
     }
 
-    fun channelStateFlow(channel: Int): Flow<Boolean> {
-        return getChannelState(channel).asFlow()
+    fun channelStateFlow(channel: Int): StateFlow<Boolean> {
+        return getChannelState(channel)
     }
 
     private val pushNotificationJsonReader = objectMapper.readerFor(PushNotification::class.java)
@@ -99,7 +98,7 @@ open class PoloniexApi(
 
                         coroutineScope {
                             launch(start = CoroutineStart.UNDISPATCHED) {
-                                session.receive().timeout(Duration.ofMillis(1400)).onBackpressureError().collect { msg ->
+                                session.receive().collect { msg ->
                                     val payloadBytes = ByteArray(msg.payload.readableByteCount())
                                     msg.payload.read(payloadBytes)
 
@@ -469,7 +468,7 @@ open class PoloniexApi(
             return NotEnoughCryptoException(currency, msg)
         }
 
-        match = OrderCompletedOrNotExistPattern.matchEntire(msg)
+        match = OrderCompletedOrNotExistPattern.matchEntire(msg) ?: OrderWithClientIdCompletedOrNotExistPattern.matchEntire(msg)
 
         if (match != null) {
             val (orderIdStr) = match.destructured
@@ -500,6 +499,14 @@ open class PoloniexApi(
             return MarketDisabledException
         }
 
+        if (OrderMatchingDisabledMsg == msg) {
+            return OrderMatchingDisabledException
+        }
+
+        if (AlreadyCalledCancelOrMoveOrderMsg == msg) {
+            return AlreadyCalledCancelOrMoveOrderException
+        }
+
         return e
     }
 
@@ -519,11 +526,15 @@ open class PoloniexApi(
 
             val msg = e.message!!
 
-            val match: MatchResult? = OrderCompletedOrNotExistPattern.matchEntire(msg)
+            val match = OrderCompletedOrNotExistPattern.matchEntire(msg) ?: OrderWithClientIdCompletedOrNotExistPattern.matchEntire(msg)
 
             if (match != null) {
                 val (orderIdStr) = match.destructured
                 throw OrderCompletedOrNotExistException(orderIdStr.toLong(), msg)
+            }
+
+            if (AlreadyCalledCancelOrMoveOrderMsg == msg) {
+                throw AlreadyCalledCancelOrMoveOrderException
             }
 
             throw e
@@ -554,25 +565,19 @@ open class PoloniexApi(
     ): MoveOrderResult {
         val command = "moveOrder"
         val params = hashMap(
-            "orderNumber" to orderId.toString(),
-            "rate" to price.toString()
-        )
-        val optParams = hashMap(
+            some("orderNumber") to some(orderId.toString()),
+            some("rate") to some(price.toString()),
             some("amount") to amount.option(),
             some("clientOrderId") to clientOrderId.option(),
             orderType.option().map { it.id } to some("1")
         )
-            .iterator()
+            .toVavrStream()
             .filter { v -> v._1.isDefined && v._2.isDefined }
             .map { v -> tuple(v._1.get().toString(), v._2.get().toString()) }
             .toMap { it }
 
         try {
-            return callPrivateApi(
-                command,
-                jacksonTypeRef<MoveOrderWrapper>(),
-                params.merge(optParams)
-            ).run {
+            return callPrivateApi(command, jacksonTypeRef<MoveOrderWrapper>(), params).run {
                 val r = this
                 if (r.success) {
                     MoveOrderResult(r.orderId!!, r.resultingTrades!!, r.fee.oneMinusAdjPoloniex, r.market, r.clientOrderId)
@@ -753,7 +758,7 @@ open class PoloniexApi(
                         logger.error("Can't parse websocket message: ${e.message}")
                     }
                 } else if (msg.sequenceId == 1L && (msg.data == null || msg.data == NullNode.instance)) {
-                    getChannelState(channel).offer(true)
+                    getChannelState(channel).value = true
                 } else if (msg.sequenceId == 0L && (msg.data == null || msg.data == NullNode.instance)) {
                     throw SubscribeErrorException
                 }
@@ -827,7 +832,7 @@ open class PoloniexApi(
                         try {
                             startMessagesConsumption()
                         } finally {
-                            getChannelState(channel).offer(false)
+                            getChannelState(channel).value = false
                         }
                     } catch (e: SubscribeErrorException) {
                         logger.debug("Can't subscribe to channel $channel. Retrying...")

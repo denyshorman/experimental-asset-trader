@@ -1,6 +1,8 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.springframework.boot.gradle.tasks.bundling.BootJar
 
+versioning.noWarningOnDirty = true
+
 group = "com.gitlab.dhorman"
 version = versioning.info.build
 java.sourceCompatibility = JavaVersion.VERSION_11
@@ -28,10 +30,10 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("org.jetbrains.kotlin:kotlin-test-junit5")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.3.6")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive:1.3.6")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.3.6")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2:1.3.6")
     implementation("io.projectreactor.addons:reactor-adapter")
     implementation("io.projectreactor.addons:reactor-extra")
     implementation("io.projectreactor.kotlin:reactor-kotlin-extensions")

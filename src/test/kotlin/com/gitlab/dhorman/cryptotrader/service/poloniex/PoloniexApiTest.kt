@@ -7,7 +7,9 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.core.PoloniexBuySellAmou
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.fromAmountBuy
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.quoteAmount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.jupiter.api.Test
@@ -38,6 +40,71 @@ class PoloniexApiTest {
         poloniexApi.accountNotificationStream.collect {
             println(it)
         }
+    }
+
+    @Test
+    fun `Cancel all orders`() {
+        runBlocking {
+            poloniexApi.cancelAllOrders(Market("USDT", "PAX"))
+        }
+    }
+
+    @Test
+    fun `Cancel not exiting order with client order id`() = runBlocking {
+        try {
+            val res = poloniexApi.cancelOrder(1, CancelOrderIdType.Client)
+            println(res)
+        } catch (e: Throwable) {
+            println(e.message)
+        }
+    }
+
+    @Test
+    fun `Place order then move order and then cancel order`() = runBlocking(Dispatchers.Default) {
+        launch {
+            poloniexApi.accountNotificationStream.collect {
+                println(it)
+            }
+        }
+
+        launch {
+            val market = Market("USDT", "ETH")
+            val price = BigDecimal("100")
+            val amount = BigDecimal("1")
+            val clientOrderId = 0L
+            val res = poloniexApi.placeLimitOrder(market, OrderType.Buy, price, amount, BuyOrderType.PostOnly, clientOrderId)
+            println(res)
+            val res2 = poloniexApi.moveOrder(res.orderId, price + BigDecimal("0.00000001"), null, BuyOrderType.PostOnly, 1L)
+            println(res2)
+            val res3 = poloniexApi.cancelOrder(res2.clientOrderId!!, CancelOrderIdType.Client)
+            println(res3)
+        }
+
+        Unit
+    }
+
+    @Test
+    fun `Place order then get open orders and then cancel order`() = runBlocking(Dispatchers.Default) {
+        launch {
+            poloniexApi.accountNotificationStream.collect {
+                println("notifications: $it")
+            }
+        }
+
+        launch {
+            val market = Market("USDT", "ETH")
+            val price = BigDecimal("100")
+            val amount = BigDecimal("1")
+            val clientOrderId = Instant.now().toEpochMilli()
+            val res = poloniexApi.placeLimitOrder(market, OrderType.Buy, price, amount, BuyOrderType.PostOnly, clientOrderId)
+            println("limit order result: $res")
+            val res2 = poloniexApi.openOrders(market)
+            println("open orders: $res2")
+            val res3 = poloniexApi.cancelOrder(clientOrderId, CancelOrderIdType.Client)
+            println("cancel order $res3")
+        }
+
+        Unit
     }
 
     @Test

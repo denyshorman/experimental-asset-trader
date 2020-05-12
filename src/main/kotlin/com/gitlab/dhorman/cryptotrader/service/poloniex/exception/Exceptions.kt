@@ -43,3 +43,5 @@ object AmountIsZeroException : AmountMustBeAtLeastException(BigDecimal.ZERO, "Qu
 object MarketDisabledException : PoloniexException(MarketDisabledMsg)
 object InvalidMarketException : PoloniexException(InvalidMarketMsg)
 object InvalidDepthException : PoloniexException(InvalidDepthMsg)
+object OrderMatchingDisabledException : PoloniexException(OrderMatchingDisabledMsg)
+object AlreadyCalledCancelOrMoveOrderException : PoloniexException(AlreadyCalledCancelOrMoveOrderMsg)

@@ -119,13 +119,13 @@ class TransactionsDao(
     }
 
     suspend fun balanceInUse(currency: Currency): Tuple2<Currency, BigDecimal>? {
-        return databaseClient.execute("SELECT from_currency, from_amount FROM poloniex_active_transactions WHERE from_currency = $1")
+        return databaseClient.execute("SELECT from_currency, SUM(from_amount) amount FROM poloniex_active_transactions WHERE from_currency = $1 GROUP BY from_currency")
             .bind(0, currency)
             .fetch().one()
             .map {
                 tuple(
                     it["from_currency"] as Currency,
-                    it["from_amount"] as BigDecimal
+                    it["amount"] as BigDecimal
                 )
             }
             .awaitFirstOrNull()

@@ -37,6 +37,7 @@ import org.springframework.transaction.ReactiveTransactionManager
 import reactor.core.publisher.Flux
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.Clock
 import java.time.Duration
 import java.util.*
 
@@ -52,7 +53,8 @@ class PoloniexTrader(
     private val unfilledMarketsDao: UnfilledMarketsDao,
     private val settingsDao: SettingsDao,
     private val blacklistedMarketsDao: BlacklistedMarketsDao,
-    @Qualifier("pg_tran_manager") private val tranManager: ReactiveTransactionManager
+    @Qualifier("pg_tran_manager") private val tranManager: ReactiveTransactionManager,
+    private val clock: Clock
 ) {
     private val logger = KotlinLogging.logger {}
     private val intentManager = IntentManager()
@@ -71,7 +73,7 @@ class PoloniexTrader(
         logger.info("Start trading on Poloniex")
 
         tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
-        delayedTradeManager = DelayedTradeManager(tranIntentScope, splitAlgo, poloniexApi, amountCalculator, transactionsDao)
+        delayedTradeManager = DelayedTradeManager(tranIntentScope, splitAlgo, poloniexApi, amountCalculator, transactionsDao, clock)
         tranIntentFactory = TransactionIntent.Companion.TransactionIntentFactory(
             tranIntentScope,
             intentManager,
