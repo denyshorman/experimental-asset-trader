@@ -179,12 +179,11 @@ class TransactionIntent(
 
                         if (logger.isDebugEnabled && soundSignalEnabled) SoundUtil.beep()
 
+                        logger.debug { "Splitting markets (markets = $modifiedMarkets, idx = $marketIdx, trades = $trades)" }
+
                         val (unfilledTradeMarkets, committedMarkets) = splitAlgo.splitMarkets(modifiedMarkets, marketIdx, trades)
 
-                        logger.debug {
-                            "Splitting markets (markets = $modifiedMarkets, idx = $marketIdx, trades = $trades) => " +
-                                "[updatedMarkets = $unfilledTradeMarkets], [committedMarkets = $committedMarkets]"
-                        }
+                        logger.debug { "Split result [updatedMarkets = $unfilledTradeMarkets], [committedMarkets = $committedMarkets]" }
 
                         modifiedMarkets = unfilledTradeMarkets
 
@@ -310,15 +309,15 @@ class TransactionIntent(
 
                                     generalMutex.withLock {
                                         val oldMarkets = modifiedMarkets
+
+                                        logger.debug { "Splitting markets (markets = $oldMarkets, idx = $marketIdx, trades = $trades)" }
+
                                         val marketSplit = splitAlgo.splitMarkets(oldMarkets, marketIdx, trades)
 
                                         modifiedMarkets = marketSplit._1
                                         val committedMarkets = marketSplit._2
 
-                                        logger.debug {
-                                            "Splitting markets (markets = $oldMarkets, idx = $marketIdx, trades = $trades) => " +
-                                                "[updatedMarkets = $modifiedMarkets], [committedMarkets = $committedMarkets]"
-                                        }
+                                        logger.debug { "Split result [updatedMarkets = $modifiedMarkets], [committedMarkets = $committedMarkets]" }
 
                                         updateCurrentAndHandleNewMarkets(newMarketIdx, modifiedMarkets, committedMarkets)
                                     }
@@ -409,6 +408,8 @@ class TransactionIntent(
             }
         } catch (e: Throwable) {
             withContext(NonCancellable) {
+                logger.debug { "Intent completed with error: ${e.message}" }
+
                 val initMarket = modifiedMarkets[0]
                 val currMarket = modifiedMarkets[marketIdx]
                 val fromAmount = tranIntentMarketExtensions.fromAmount(currMarket, modifiedMarkets, marketIdx)
