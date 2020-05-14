@@ -254,7 +254,7 @@ class DelayedTradeProcessor(
                                             logger.debug { "Moved order (q = ${lastOrder?.quoteAmount}, p = ${lastOrder?.price})" }
                                         }
                                     } catch (e: CantMoveOrderSafelyException) {
-                                        withContext(NonCancellable) {
+                                        withContext<Unit>(NonCancellable) {
                                             cancelOrder(lastOrder!!.orderId!!, CancelOrderIdType.Server)
                                             try {
                                                 withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
