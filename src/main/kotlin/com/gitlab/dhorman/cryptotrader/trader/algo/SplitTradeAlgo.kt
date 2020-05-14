@@ -204,7 +204,7 @@ class SplitTradeAlgo(
                     committedTrades.add(trade)
                     targetAmount -= amount
                 } else {
-                    if (targetAmount.compareTo(BigDecimal.ZERO) == 0) {
+                    if (targetAmount <= BigDecimal.ZERO) {
                         updatedTrades.add(trade)
                     } else {
                         val (l, r) = splitTrade(AmountType.Target, m.orderType, targetAmount, trade)
