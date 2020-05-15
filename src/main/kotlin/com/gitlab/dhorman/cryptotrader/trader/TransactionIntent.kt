@@ -21,6 +21,8 @@ import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.util.*
+import io.netty.handler.timeout.ReadTimeoutException
+import io.netty.handler.timeout.WriteTimeoutException
 import io.vavr.Tuple2
 import io.vavr.Tuple3
 import io.vavr.collection.Array
@@ -552,7 +554,12 @@ class TransactionIntent(
                         logger.warn(e.originalMsg)
                         delay(1500)
                     }
-                    is UnknownHostException, is IOException, is ConnectException, is SocketException -> {
+                    is UnknownHostException,
+                    is IOException,
+                    is ReadTimeoutException,
+                    is WriteTimeoutException,
+                    is ConnectException,
+                    is SocketException -> {
                         delay(2000)
                     }
                     is NotEnoughCryptoException,

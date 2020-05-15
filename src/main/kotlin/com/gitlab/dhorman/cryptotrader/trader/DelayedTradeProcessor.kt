@@ -12,6 +12,8 @@ import com.gitlab.dhorman.cryptotrader.trader.exception.CompletePlaceMoveOrderLo
 import com.gitlab.dhorman.cryptotrader.trader.exception.MoveNotRequiredException
 import com.gitlab.dhorman.cryptotrader.trader.exception.RepeatPlaceMoveOrderLoopAgain
 import com.gitlab.dhorman.cryptotrader.util.returnLastIfNoValueWithinSpecifiedTime
+import io.netty.handler.timeout.ReadTimeoutException
+import io.netty.handler.timeout.WriteTimeoutException
 import io.vavr.Tuple2
 import io.vavr.collection.List
 import io.vavr.kotlin.component1
@@ -595,6 +597,8 @@ class DelayedTradeProcessor(
 
                     is UnknownHostException,
                     is IOException,
+                    is ReadTimeoutException,
+                    is WriteTimeoutException,
                     is ConnectException,
                     is SocketException -> throw DisconnectedException
 
@@ -642,6 +646,8 @@ class DelayedTradeProcessor(
                 when (e) {
                     is UnknownHostException,
                     is IOException,
+                    is ReadTimeoutException,
+                    is WriteTimeoutException,
                     is ConnectException,
                     is SocketException -> throw DisconnectedException
 
@@ -671,6 +677,8 @@ class DelayedTradeProcessor(
                     }
                     is UnknownHostException,
                     is IOException,
+                    is ReadTimeoutException,
+                    is WriteTimeoutException,
                     is ConnectException,
                     is SocketException -> run {
                         logger.debug { "Cancel order $orderId: ${e.message}" }

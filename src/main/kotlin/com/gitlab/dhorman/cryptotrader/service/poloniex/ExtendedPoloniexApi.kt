@@ -9,6 +9,8 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidMarketE
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.util.share
+import io.netty.handler.timeout.ReadTimeoutException
+import io.netty.handler.timeout.WriteTimeoutException
 import io.vavr.Tuple2
 import io.vavr.collection.HashMap
 import io.vavr.collection.List
@@ -533,6 +535,10 @@ class ExtendedPoloniexApi(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: UnknownHostException) {
+                    delay(2000)
+                } catch (e: ReadTimeoutException) {
+                    delay(2000)
+                } catch (e: WriteTimeoutException) {
                     delay(2000)
                 } catch (e: IOException) {
                     delay(2000)
