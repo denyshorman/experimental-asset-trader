@@ -38,7 +38,7 @@ class PoloniexApiTest {
     @Test
     fun `Subscribe to account notifications`() = runBlocking {
         poloniexApi.accountNotificationStream.collect {
-            println(it)
+            logger.info(it.toString())
         }
     }
 

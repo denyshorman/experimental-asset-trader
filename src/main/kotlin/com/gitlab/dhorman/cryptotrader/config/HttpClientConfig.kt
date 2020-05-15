@@ -1,8 +1,11 @@
 package com.gitlab.dhorman.cryptotrader.config
 
+import io.netty.channel.ChannelOption
 import io.netty.handler.codec.http.HttpHeaderNames
 import io.netty.handler.ssl.SslContextBuilder
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory
+import io.netty.handler.timeout.ReadTimeoutHandler
+import io.netty.handler.timeout.WriteTimeoutHandler
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.client.reactive.ReactorClientHttpConnector
@@ -11,10 +14,15 @@ import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClien
 import org.springframework.web.reactive.socket.client.WebSocketClient
 import reactor.netty.http.client.HttpClient
 import reactor.netty.tcp.ProxyProvider
+import java.util.concurrent.TimeUnit
 
 @Configuration
 class HttpClientConfig {
-    private fun defaultHttpClient(): HttpClient {
+    private fun defaultHttpClient(
+        connectTimeoutMs: Long = 5000,
+        readTimeoutMs: Long = 5000,
+        writeTimeoutMs: Long = 5000
+    ): HttpClient {
         val sslContextBuilder = SslContextBuilder.forClient()
 
         if (System.getenv("HTTP_CERT_TRUST_ALL") != null) {
@@ -41,11 +49,14 @@ class HttpClientConfig {
             .headers { it[HttpHeaderNames.USER_AGENT] = "trading-robot" }
             .secure { it.sslContext(sslContextBuilder.build()) }
             .tcpConfiguration { tcpClient ->
-                if (System.getenv("HTTP_PROXY_ENABLED") != null) {
-                    tcpClient.proxy(proxyOptions)
-                } else {
-                    tcpClient
+                var client = tcpClient
+                client = client.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs.toInt())
+                if (System.getenv("HTTP_PROXY_ENABLED") != null) client = client.proxy(proxyOptions)
+                client = client.doOnConnected { conn ->
+                    conn.addHandlerLast(ReadTimeoutHandler(readTimeoutMs, TimeUnit.MILLISECONDS))
+                    conn.addHandlerLast(WriteTimeoutHandler(writeTimeoutMs, TimeUnit.MILLISECONDS))
                 }
+                client
             }
     }
 
@@ -56,7 +67,7 @@ class HttpClientConfig {
 
     @Bean
     fun websocketClient(): WebSocketClient {
-        val webSocketClient = ReactorNettyWebSocketClient(defaultHttpClient())
+        val webSocketClient = ReactorNettyWebSocketClient(defaultHttpClient(readTimeoutMs = 4000))
         webSocketClient.maxFramePayloadLength = 65536 * 4
         return webSocketClient
     }

@@ -192,8 +192,15 @@ class DelayedTradeProcessor(
                         tradeStatusList!!.forEach { it.processed = true } // TODO: Does not work well for blackout
                     }
 
-                    orderCancelledList?.forEach { it.status.value = Order.Status.Cancelled }
-                    orderCreatedList?.forEach { it.status.value = Order.Status.Created }
+                    orderCancelledList?.forEach {
+                        logger.debug { "Changing status to Cancelled for ${it.clientOrderId}" }
+                        it.status.value = Order.Status.Cancelled
+                    }
+
+                    orderCreatedList?.forEach {
+                        logger.debug { "Changing status to Created for ${it.clientOrderId}" }
+                        it.status.value = Order.Status.Created
+                    }
                 }
             }
         }
@@ -226,7 +233,7 @@ class DelayedTradeProcessor(
                                         lastOrder!!.awaitStatus(Order.Status.Created)
                                     }
                                 } catch (e: TimeoutCancellationException) {
-                                    logger.error("OrderPlaced notification has not been received within specified timeout")
+                                    logger.error("Created event has not been received within specified timeout for ${lastOrder?.clientOrderId}")
                                     throw DisconnectedException
                                 }
 
@@ -262,7 +269,7 @@ class DelayedTradeProcessor(
                                                 }
                                                 throw RepeatPlaceMoveOrderLoopAgain
                                             } catch (e: TimeoutCancellationException) {
-                                                logger.error("Cancel event has not been received within specified timeout in order to place order again")
+                                                logger.error("Cancelled event has not been received within specified timeout for order ${lastOrder?.clientOrderId}")
                                                 throw DisconnectedException
                                             }
                                         }
@@ -280,9 +287,11 @@ class DelayedTradeProcessor(
                                         return@moveOrderLoopBegin
                                     } catch (e: UnableToPlacePostOnlyOrderException) {
                                         logger.debug {
-                                            val asks = prevBook?.asks?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
-                                            val bids = prevBook?.bids?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
-                                            "${e.message} ; book = (asks = $asks ; bids = $bids) ; currFromAmount = ${scheduler.fromAmount} ; $lastOrder"
+                                            val orderBookStr = when (orderType) {
+                                                OrderType.Buy -> prevBook?.bids?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
+                                                OrderType.Sell -> prevBook?.asks?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
+                                            }
+                                            "${e.message} ; book = $orderBookStr | currFromAmount = ${scheduler.fromAmount} | $lastOrder"
                                         }
                                         return@moveOrderLoopBegin
                                     } catch (e: CancellationException) {
@@ -302,7 +311,7 @@ class DelayedTradeProcessor(
                                                     }
                                                     throw RepeatPlaceMoveOrderLoopAgain
                                                 } catch (e: TimeoutCancellationException) {
-                                                    logger.error("Was waiting for order status cancel event but it has not received within specified timeout")
+                                                    logger.error("Cancelled event has not been received within specified timeout for ${lastOrder?.prevOrder?.clientOrderId}")
                                                     throw DisconnectedException
                                                 }
                                             }
@@ -313,10 +322,18 @@ class DelayedTradeProcessor(
                                     try {
                                         withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
                                             lastOrder!!.prevOrder!!.awaitStatus(Order.Status.Cancelled)
+                                        }
+                                    } catch (e: TimeoutCancellationException) {
+                                        logger.error("Cancelled event has not been received within specified timeout for ${lastOrder?.prevOrder?.clientOrderId}")
+                                        throw DisconnectedException
+                                    }
+
+                                    try {
+                                        withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
                                             lastOrder!!.awaitStatus(Order.Status.Created)
                                         }
                                     } catch (e: TimeoutCancellationException) {
-                                        logger.error("OrderPlaced and OrderCancelled notifications have not been received within specified timeout")
+                                        logger.error("Created event has not been received within specified timeout for ${lastOrder?.clientOrderId}")
                                         throw DisconnectedException
                                     }
                                 }
@@ -671,7 +688,7 @@ class DelayedTradeProcessor(
     companion object {
         private val logger = KotlinLogging.logger {}
 
-        private const val OrderPlaceCancelConfirmationTimeoutMs = 60000L
+        private const val OrderPlaceCancelConfirmationTimeoutMs = 10000L
 
         private fun TradeNotification.toBareTrade(): BareTrade {
             return BareTrade(this.amount, this.price, this.feeMultiplier)
@@ -697,7 +714,7 @@ class DelayedTradeProcessor(
                     "price=$price, " +
                     "status=${status.value}, " +
                     "createTime=$createTime, " +
-                    "trades=$trades, " +
+                    "trades=${trades.values}, " +
                     "prevOrder=$prevOrder" +
                     ")"
             }
@@ -708,6 +725,18 @@ class DelayedTradeProcessor(
                 val id: Long,
                 @Volatile var processed: Boolean = false
             ) {
+                override fun equals(other: Any?): Boolean {
+                    if (this === other) return true
+                    if (javaClass != other?.javaClass) return false
+                    other as Trade
+                    if (id != other.id) return false
+                    return true
+                }
+
+                override fun hashCode(): Int {
+                    return id.hashCode()
+                }
+
                 override fun toString(): String {
                     return "Trade(id=$id, processed=$processed)"
                 }

@@ -12,7 +12,7 @@ val swaggerVersion = "3.0.0-SNAPSHOT"
 plugins {
     kotlin("jvm") version "1.3.72"
     kotlin("plugin.spring") version "1.3.72"
-    id("org.springframework.boot") version "2.3.0.RC1"
+    id("org.springframework.boot") version "2.3.0.RELEASE"
     id("io.spring.dependency-management") version "1.0.9.RELEASE"
     id("net.nemerosa.versioning") version "2.8.2"
 }
@@ -30,10 +30,10 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("org.jetbrains.kotlin:kotlin-test-junit5")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.3.6")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive:1.3.6")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.3.6")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2:1.3.6")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2")
     implementation("io.projectreactor.addons:reactor-adapter")
     implementation("io.projectreactor.addons:reactor-extra")
     implementation("io.projectreactor.kotlin:reactor-kotlin-extensions")

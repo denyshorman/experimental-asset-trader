@@ -17,6 +17,8 @@ import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
 import com.gitlab.dhorman.cryptotrader.util.share
 import io.netty.handler.codec.http.websocketx.WebSocketHandshakeException
 import io.netty.handler.ssl.SslHandshakeTimeoutException
+import io.netty.handler.timeout.ReadTimeoutException
+import io.netty.handler.timeout.WriteTimeoutException
 import io.vavr.Tuple2
 import io.vavr.collection.Array
 import io.vavr.collection.HashMap
@@ -28,9 +30,9 @@ import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
-import kotlinx.coroutines.reactive.collect
 import kotlinx.coroutines.reactor.flux
 import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
@@ -48,7 +50,6 @@ import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val PoloniexPrivatePublicHttpApiUrl = "https://poloniex.com"
@@ -94,11 +95,10 @@ open class PoloniexApi(
                 val session = webSocketClient.execute(URI.create(PoloniexWebSocketApiUrl)) { session ->
                     mono(Dispatchers.Unconfined) {
                         logger.info("Connection established with $PoloniexWebSocketApiUrl")
-                        send(true)
 
                         coroutineScope {
                             launch(start = CoroutineStart.UNDISPATCHED) {
-                                session.receive().collect { msg ->
+                                session.receive().asFlow().onStart { send(true) }.collect { msg ->
                                     val payloadBytes = ByteArray(msg.payload.readableByteCount())
                                     msg.payload.read(payloadBytes)
 
@@ -163,9 +163,12 @@ open class PoloniexApi(
             } catch (e: DisconnectedException) {
                 logger.debug(e.message)
                 delay(1000)
-            } catch (e: TimeoutException) {
-                logger.debug("Haven't received any value from $PoloniexWebSocketApiUrl within specified interval")
-                delay(1000)
+            } catch (e: ReadTimeoutException) {
+                logger.warn("No data was read within a certain period of time from $PoloniexWebSocketApiUrl")
+                delay(500)
+            } catch (e: WriteTimeoutException) {
+                logger.warn("Write operation cannot finish in a certain period of time")
+                delay(500)
             } catch (e: InvalidChannelException) {
                 logger.error(e.message)
                 delay(1000)
