@@ -5,6 +5,7 @@ import java.math.RoundingMode
 
 val SEVEN_ZEROS_AND_ONE = BigDecimal("0.00000001")
 val HALF = BigDecimal("0.5")
+val BIG_DECIMAL_TWO = BigDecimal("2")
 
 val BigDecimal.cut8 get() = this.setScale(8, RoundingMode.DOWN)
 val BigDecimal.cut8add1 get() = this.setScale(8, RoundingMode.DOWN) + SEVEN_ZEROS_AND_ONE

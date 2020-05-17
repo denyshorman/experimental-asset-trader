@@ -273,7 +273,7 @@ open class PoloniexApi(
             "currencyPair" to market.toString(),
             "start" to fromDate.epochSecond.toString(),
             "end" to toDate.epochSecond.toString(),
-            "period" to period.id.toString()
+            "period" to period.sec.toString()
         )
 
         return callPublicApi("returnChartData", jacksonTypeRef(), params)

@@ -37,6 +37,35 @@ fun BuySellAmountCalculator.baseAmountSell(quoteAmount: BigDecimal, price: BigDe
     return targetAmountSell(quoteAmount, price, feeMultiplier)
 }
 
+fun BuySellAmountCalculator.baseAmountBuy(trade: BareTrade): BigDecimal {
+    return fromAmountBuy(trade.quoteAmount, trade.price, trade.feeMultiplier)
+}
+
+fun BuySellAmountCalculator.quoteAmountBuy(trade: BareTrade): BigDecimal {
+    return targetAmountBuy(trade.quoteAmount, trade.price, trade.feeMultiplier)
+}
+
+fun BuySellAmountCalculator.quoteAmountSell(trade: BareTrade): BigDecimal {
+    return fromAmountSell(trade.quoteAmount, trade.price, trade.feeMultiplier)
+}
+
+fun BuySellAmountCalculator.baseAmountSell(trade: BareTrade): BigDecimal {
+    return targetAmountSell(trade.quoteAmount, trade.price, trade.feeMultiplier)
+}
+
+fun BuySellAmountCalculator.baseAmount(orderType: OrderType, trade: BareTrade): BigDecimal {
+    return when (orderType) {
+        OrderType.Buy -> baseAmountBuy(trade)
+        OrderType.Sell -> baseAmountSell(trade)
+    }
+}
+
+fun BuySellAmountCalculator.quoteAmount(orderType: OrderType, trade: BareTrade): BigDecimal {
+    return when (orderType) {
+        OrderType.Buy -> quoteAmountBuy(trade)
+        OrderType.Sell -> quoteAmountSell(trade)
+    }
+}
 
 fun BuySellAmountCalculator.fromAmountBuy(trade: BareTrade): BigDecimal {
     return fromAmountBuy(trade.quoteAmount, trade.price, trade.feeMultiplier)

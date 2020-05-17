@@ -203,6 +203,17 @@ class PoloniexApiTest {
     }
 
     @Test
+    fun `Fetch candlestick chart data for USDT_BTC for now - 6 hours period with 5 min interval`() = runBlocking {
+        val market = Market("USDT", "BTC")
+        val period = ChartDataCandlestickPeriod.PERIOD_5_MIN
+        val toTs = Instant.now().round(period)
+        val fromTs = toTs.minus(1, ChronoUnit.HOURS)
+        val data = poloniexApi.candlestickChartData(market, fromTs, toTs, period)
+
+        logger.info(data.toString())
+    }
+
+    @Test
     fun `Get order book API call should run successfully`() = runBlocking {
         val orderBook = poloniexApi.orderBooks(depth = 0)
         println(orderBook)

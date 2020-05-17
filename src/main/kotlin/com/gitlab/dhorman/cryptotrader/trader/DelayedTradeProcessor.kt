@@ -194,15 +194,8 @@ class DelayedTradeProcessor(
                         tradeStatusList!!.forEach { it.processed = true } // TODO: Does not work well for blackout
                     }
 
-                    orderCancelledList?.forEach {
-                        logger.debug { "Changing status to Cancelled for ${it.clientOrderId}" }
-                        it.status.value = Order.Status.Cancelled
-                    }
-
-                    orderCreatedList?.forEach {
-                        logger.debug { "Changing status to Created for ${it.clientOrderId}" }
-                        it.status.value = Order.Status.Created
-                    }
+                    orderCancelledList?.forEach { it.status.value = Order.Status.Cancelled }
+                    orderCreatedList?.forEach { it.status.value = Order.Status.Created }
                 }
             }
         }
@@ -352,7 +345,7 @@ class DelayedTradeProcessor(
                     logger.debug { "Connected to account notification channel" }
                 } catch (e: Throwable) {
                     lastError = e
-                    logger.debug("Error occurred during place-move order loop ${lastError?.message}")
+                    logger.debug("Error occurred during place-move order loop: ${lastError?.message}")
                 } finally {
                     withContext(NonCancellable) {
                         try {
@@ -363,35 +356,45 @@ class DelayedTradeProcessor(
 
                             val orders = lastOrder!!.asSequence().take(2).toList()
 
-                            val orderCancelStatusesDeferred = orders.asSequence()
-                                .filter { it.status.value != Order.Status.Cancelled }
-                                .map { order ->
-                                    async {
-                                        val cancelStatus = cancelOrder(order.clientOrderId, CancelOrderIdType.Client)
+                            while (true) {
+                                try {
+                                    coroutineScope {
+                                        val orderCancelStatusesDeferred = orders.asSequence()
+                                            .filter { it.status.value != Order.Status.Cancelled }
+                                            .map { order ->
+                                                async {
+                                                    val cancelStatus = cancelOrder(order.clientOrderId, CancelOrderIdType.Client)
 
-                                        when (cancelStatus) {
-                                            OrderCancelStatus.Cancelled -> {
-                                                try {
-                                                    withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
-                                                        logger.debug { "Waiting for order ${order.clientOrderId} cancel confirmation..." }
-                                                        order.awaitStatus(Order.Status.Cancelled)
-                                                        logger.debug { "Order cancel confirmation event has been received for order ${order.clientOrderId}." }
+                                                    when (cancelStatus) {
+                                                        OrderCancelStatus.Cancelled -> {
+                                                            try {
+                                                                withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
+                                                                    logger.debug { "Waiting for order ${order.clientOrderId} cancel confirmation..." }
+                                                                    order.awaitStatus(Order.Status.Cancelled)
+                                                                    logger.debug { "Order cancel confirmation event has been received for order ${order.clientOrderId}." }
+                                                                }
+                                                            } catch (e: TimeoutCancellationException) {
+                                                                logger.warn { "Cancel event has not been received within specified timeout for order ${order.clientOrderId}" }
+                                                            }
+                                                        }
+                                                        OrderCancelStatus.OrderNotExist -> {
+                                                            logger.debug { "Can't cancel order ${order.clientOrderId} because it does not exist" }
+                                                        }
                                                     }
-                                                } catch (e: TimeoutCancellationException) {
-                                                    logger.warn { "Cancel event has not been received within specified timeout for order ${order.clientOrderId}" }
+
+                                                    cancelStatus
                                                 }
                                             }
-                                            OrderCancelStatus.OrderNotExist -> {
-                                                logger.debug { "Can't cancel order ${order.clientOrderId} because it does not exist" }
-                                            }
-                                        }
+                                            .toList()
 
-                                        cancelStatus
+                                        orderCancelStatusesDeferred.forEach { it.await() }
                                     }
+                                    break
+                                } catch (e: AlreadyCalledCancelOrMoveOrderException) {
+                                    logger.warn { "Can't cancel orders because one of orders is already waiting for cancel" }
+                                    delay(500)
                                 }
-                                .toList()
-
-                            orderCancelStatusesDeferred.forEach { it.await() }
+                            }
 
                             val missedTradesDeferred = orders.map { order ->
                                 async {
@@ -670,10 +673,6 @@ class DelayedTradeProcessor(
                     is OrderCompletedOrNotExistException -> run {
                         logger.debug(e.message)
                         return OrderCancelStatus.OrderNotExist
-                    }
-                    is AlreadyCalledCancelOrMoveOrderException -> run {
-                        logger.warn { "Can't cancel order: ${e.message}" }
-                        delay(1000)
                     }
                     is UnknownHostException,
                     is IOException,

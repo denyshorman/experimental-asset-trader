@@ -96,6 +96,11 @@ enum class ChartDataCandlestickPeriod(@get:JsonValue val id: Int) {
     PERIOD_4_HOURS(14400),
     PERIOD_DAY(86400);
 
+    val millis = id * 1000L
+    val sec = id
+    val min = sec / 60
+    val hour = min / 60
+
     companion object {
         @JsonCreator
         @JvmStatic

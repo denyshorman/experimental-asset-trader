@@ -12,10 +12,9 @@ import com.gitlab.dhorman.cryptotrader.util.share
 import io.netty.handler.timeout.ReadTimeoutException
 import io.netty.handler.timeout.WriteTimeoutException
 import io.vavr.Tuple2
-import io.vavr.collection.HashMap
+import io.vavr.collection.*
 import io.vavr.collection.List
 import io.vavr.collection.Map
-import io.vavr.collection.TreeMap
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -33,8 +32,10 @@ import java.net.ConnectException
 import java.net.SocketException
 import java.net.UnknownHostException
 import java.time.*
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.random.Random
 
 typealias MarketIntMap = Map<MarketId, Market>
 typealias MarketStringMap = Map<Market, MarketId>
@@ -47,6 +48,13 @@ data class OrderBookData(
     val notification: List<OrderBookNotification>
 )
 typealias OrderBookDataMap = Map<MarketId, Flow<OrderBookData>>
+
+data class TradeVolumeStat(
+    val baseBuyVolume: BigDecimal,
+    val baseSellVolume: BigDecimal,
+    val quoteBuyVolume: BigDecimal,
+    val quoteSellVolume: BigDecimal
+)
 
 @Service
 class ExtendedPoloniexApi(
@@ -62,6 +70,7 @@ class ExtendedPoloniexApi(
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val streamSynchronizer = StreamSynchronizer()
     private val marketOrderBook = ConcurrentHashMap<MarketId, Flow<OrderBookData>>()
+    private val marketTradeVolumeStat = ConcurrentHashMap<Market, Flow<Queue<TradeVolumeStat>>>()
 
     private val orderIdGenerator: AtomicLong by lazy(LazyThreadSafetyMode.PUBLICATION) {
         AtomicLong(Instant.now(clock).toEpochMilli())
@@ -454,6 +463,19 @@ class ExtendedPoloniexApi(
         }.share(1, Duration.ofMinutes(20), scope)
     }
 
+    val tradeVolumeStat: Flow<Map<Market, Flow<Queue<TradeVolumeStat>>>> = run {
+        marketStream.map { marketInfo ->
+            marketInfo._2.keySet().toVavrStream()
+                .map { market ->
+                    val newTradeVolumeStatStream = marketTradeVolumeStat.getOrPut(market) {
+                        tradeVolumeStatStream(market).share(1, Duration.ofHours(1), scope)
+                    }
+                    tuple(market, newTradeVolumeStatStream)
+                }
+                .toMap { it }
+        }.share(1, Duration.ofHours(4), scope)
+    }
+
     val marketTickerStream: Flow<Map<Market, Ticker>> = run {
         fun mapTicker(m: Market, t: Ticker0): Tuple2<Market, Ticker> {
             return tuple(
@@ -567,29 +589,13 @@ class ExtendedPoloniexApi(
         }
 
         channelFlow {
-            while (isActive) {
-                try {
-                    send(fetchFee())
-                    break
-                } catch (e: CancellationException) {
-                    delay(1000)
-                } catch (e: Throwable) {
-                    if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
-                    delay(2000)
-                }
-            }
-
             // TODO: How to get fee instantly without polling ?
             while (isActive) {
-                delay(10 * 60 * 1000)
-
-                try {
+                onAnyErrorRetry(dataTypeMsg = "fee") {
+                    logger.debug("Fetching fee")
                     send(fetchFee())
-                } catch (e: CancellationException) {
-                    delay(1000)
-                } catch (e: Throwable) {
-                    if (logger.isDebugEnabled) logger.warn("Can't fetch fee from Poloniex because ${e.message}")
                 }
+                delay(10 * 60 * 1000)
             }
         }.share(1, Duration.ofDays(1024), scope)
     }
@@ -651,6 +657,25 @@ class ExtendedPoloniexApi(
         }
     }
 
+    private fun tradeVolumeStatStream(market: Market): Flow<Queue<TradeVolumeStat>> = channelFlow {
+        val period = ChartDataCandlestickPeriod.PERIOD_5_MIN
+        var stat = Queue.empty<TradeVolumeStat>()
+        var toTs = Instant.now(clock).round(period).minus(6, ChronoUnit.HOURS)
+        var fromTs: Instant
+
+        while (isActive) {
+            fromTs = toTs
+            val tradeVolumeStats = onAnyErrorRetry(dataTypeMsg = "candlestick chart") {
+                toTs = Instant.now(clock).round(period)
+                logger.debug { "Fetching candlestick chart data for $market $fromTs, $toTs, $period" }
+                super.candlestickChartData(market, fromTs, toTs, period).map { it.toTradeVolumeStat() }
+            }
+            stat = stat.drop(tradeVolumeStats.length()).enqueueAll(tradeVolumeStats)
+            send(stat)
+            delay(period.millis + Random.nextInt(60000))
+        }
+    }
+
     override suspend fun placeLimitOrder(market: Market, orderType: OrderType, price: BigDecimal, amount: BigDecimal, tpe: BuyOrderType?, clientOrderId: Long?): LimitOrderResult {
         return streamSynchronizer.withLockFunc {
             super.placeLimitOrder(market, orderType, price, amount, tpe, clientOrderId)
@@ -672,6 +697,19 @@ class ExtendedPoloniexApi(
     override suspend fun moveOrder(orderId: Long, price: Price, amount: Amount?, orderType: BuyOrderType?, clientOrderId: Long?): MoveOrderResult {
         return streamSynchronizer.withLockFunc {
             super.moveOrder(orderId, price, amount, orderType, clientOrderId)
+        }
+    }
+
+    private suspend fun <T> onAnyErrorRetry(dataTypeMsg: String, delaySec: Long = 1000, body: suspend () -> T): T {
+        while (true) {
+            try {
+                return body()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                logger.warn("Can't fetch $dataTypeMsg because ${e.message}")
+                delay(delaySec)
+            }
         }
     }
 
@@ -765,6 +803,12 @@ class ExtendedPoloniexApi(
                     unlockStream(key)
                 }
             }
+        }
+
+        private fun Candlestick.toTradeVolumeStat(): TradeVolumeStat {
+            val baseBuyVolume = this.baseVolume.divide(BIG_DECIMAL_TWO, 8, RoundingMode.HALF_EVEN)
+            val quoteBuyVolume = this.quoteVolume.divide(BIG_DECIMAL_TWO, 8, RoundingMode.HALF_EVEN)
+            return TradeVolumeStat(baseBuyVolume, baseBuyVolume, quoteBuyVolume, quoteBuyVolume)
         }
     }
 }
