@@ -35,20 +35,32 @@ data class Market(val baseCurrency: Currency, val quoteCurrency: Currency) {
         return null
     }
 
-    fun orderType(targetCurrency: Currency): OrderType? {
-        val currencyType = tpe(targetCurrency)
-
-        return if (currencyType != null) {
-            orderType(currencyType)
-        } else {
-            null
-        }
-    }
-
     fun orderType(targetCurrencyType: CurrencyType): OrderType {
         return when (targetCurrencyType) {
             CurrencyType.Base -> OrderType.Sell
             CurrencyType.Quote -> OrderType.Buy
+        }
+    }
+
+    fun orderType(currencyType: AmountType, currency: Currency): OrderType? {
+        return when (currencyType) {
+            AmountType.From -> when (currency) {
+                baseCurrency -> OrderType.Buy
+                quoteCurrency -> OrderType.Sell
+                else -> return null
+            }
+            AmountType.Target -> when (currency) {
+                baseCurrency -> OrderType.Sell
+                quoteCurrency -> OrderType.Buy
+                else -> return null
+            }
+        }
+    }
+
+    fun fromCurrency(orderType: OrderType): Currency {
+        return when (orderType) {
+            OrderType.Sell -> quoteCurrency
+            OrderType.Buy -> baseCurrency
         }
     }
 

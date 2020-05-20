@@ -57,4 +57,28 @@ class MergeTradeAlgoTest {
         assertEquals(fromAmountBeforeMerge + mergeInit, fromAmountAfterMerge)
         assertEquals(targetAmountBeforeMerge + mergeCurrent, targetAmountAfterMerge)
     }
+
+    @Test
+    fun `Test from amount for first market after merge`() {
+        val markets: Array<TranIntentMarket> = Array.of(
+            TranIntentMarketPartiallyCompleted(
+                market = Market("USDT", "TRX"),
+                orderSpeed = OrderSpeed.Delayed,
+                fromCurrencyType = CurrencyType.Base,
+                fromAmount = BigDecimal("2.00000000")
+            ),
+            TranIntentMarketPredicted(
+                market = Market("USDC", "TRX"),
+                orderSpeed = OrderSpeed.Delayed,
+                fromCurrencyType = CurrencyType.Quote
+            )
+        )
+
+        val mergeInit = BigDecimal("2.00000000")
+        val fromAmountBeforeMerge = (markets[0] as TranIntentMarketPartiallyCompleted).fromAmount
+        val mergedMarkets = mergeTradeAlgo.mergeMarkets(markets, mergeInit, mergeInit)
+        val fromAmountAfterMerge = (mergedMarkets[0] as TranIntentMarketPartiallyCompleted).fromAmount
+
+        assertEquals(fromAmountBeforeMerge + mergeInit, fromAmountAfterMerge)
+    }
 }

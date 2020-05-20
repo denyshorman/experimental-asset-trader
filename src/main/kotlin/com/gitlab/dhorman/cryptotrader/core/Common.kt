@@ -1,8 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.core
 
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.SubOrderBook
-import io.vavr.Tuple2
 import io.vavr.collection.TreeMap
 import java.math.BigDecimal
 
@@ -13,15 +11,6 @@ abstract class OrderBookAbstract(
 )
 
 data class FeeMultiplier(val maker: BigDecimal, val taker: BigDecimal)
-
-data class TradeStat(
-    val sell: TradeStatOrder,
-    val buy: TradeStatOrder
-)
-
-data class TradeStatOrder(
-    val baseQuoteAvgAmount: Tuple2<Amount, Amount>
-)
 
 enum class OrderSpeed {
     Instant,

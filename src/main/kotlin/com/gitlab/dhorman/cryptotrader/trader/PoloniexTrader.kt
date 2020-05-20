@@ -1,9 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.trader
 
-import com.gitlab.dhorman.cryptotrader.core.BareTrade
-import com.gitlab.dhorman.cryptotrader.core.ExhaustivePath
-import com.gitlab.dhorman.cryptotrader.core.Market
-import com.gitlab.dhorman.cryptotrader.core.OrderSpeed
+import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
@@ -48,7 +45,7 @@ class PoloniexTrader(
     private val poloniexApi: ExtendedPoloniexApi,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
     private val tradeAdjuster: PoloniexTradeAdjuster,
-    indicators: Indicators,
+    private val pathGenerator: PathGenerator,
     private val transactionsDao: TransactionsDao,
     private val unfilledMarketsDao: UnfilledMarketsDao,
     private val settingsDao: SettingsDao,
@@ -61,13 +58,12 @@ class PoloniexTrader(
     private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, poloniexApi)
     private val mergeAlgo = MergeTradeAlgo(amountCalculator, tradeAdjuster, tranIntentMarketExtensions)
     private val splitAlgo = SplitTradeAlgo(amountCalculator, tradeAdjuster, tranIntentMarketExtensions)
-    private val pathHelper = PathHelper(indicators, transactionsDao, tranIntentMarketExtensions, blacklistedMarketsDao)
 
     private lateinit var tranIntentScope: CoroutineScope
     private lateinit var delayedTradeManager: DelayedTradeManager
     private lateinit var tranIntentFactory: TransactionIntent.Companion.TransactionIntentFactory
 
-    val tranRequests = Channel<ExhaustivePath>(Channel.RENDEZVOUS)
+    val tranRequests = Channel<Array<TranIntentMarket>>(Channel.RENDEZVOUS)
 
     fun start(scope: CoroutineScope) = scope.launch(CoroutineName("PoloniexTraderStarter")) {
         logger.info("Start trading on Poloniex")
@@ -87,7 +83,7 @@ class PoloniexTrader(
             mergeAlgo,
             splitAlgo,
             delayedTradeManager,
-            pathHelper,
+            pathGenerator,
             blacklistedMarketsDao
         )
 
@@ -110,17 +106,15 @@ class PoloniexTrader(
 
                 logger.debug { "Requested currency $startCurrency and amount $requestedAmount for transaction" }
 
-                val bestPath = pathHelper.selectBestPath(requestedAmount, startCurrency, requestedAmount, settingsDao.primaryCurrencies) ?: return@collect
+                val (bestPath, profit, _) = pathGenerator
+                    .findBest(requestedAmount, startCurrency, requestedAmount, settingsDao.primaryCurrencies)
+                    .findOne(transactionsDao) ?: return@collect
 
                 logger.debug {
-                    val startAmount = bestPath.chain.head().fromAmount
-                    val endAmount = bestPath.chain.last().toAmount
-                    val longPath = bestPath.longPathString()
-
-                    "Found an optimal path: $longPath, using amount $startAmount with potential profit ${endAmount - startAmount}"
+                    "Found an optimal path: ${bestPath.marketsTinyString()} using amount $requestedAmount with potential profit $profit"
                 }
 
-                startPathTransaction(bestPath)
+                startPathTransaction(bestPath.toTranIntentMarket(requestedAmount, startCurrency))
             }
         } finally {
             logger.debug { "Trying to cancel all Poloniex transactions..." }
@@ -200,7 +194,10 @@ class PoloniexTrader(
                     var bestPath: Array<TranIntentMarket>?
 
                     while (true) {
-                        bestPath = pathHelper.findNewPath(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.primaryCurrencies)
+                        bestPath = pathGenerator
+                            .findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.primaryCurrencies)
+                            .findOne(transactionsDao)?._1
+                            ?.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
 
                         if (bestPath != null) {
                             logger.debug { "Found optimal path ${tranIntentMarketExtensions.pathString(bestPath)} for $id" }
@@ -213,7 +210,7 @@ class PoloniexTrader(
                         delay(60000)
                     }
 
-                    val changedMarkets = pathHelper.updateMarketsWithBestPath(markets, startMarketIdx, bestPath!!)
+                    val changedMarkets = markets.concat(startMarketIdx, bestPath!!)
                     val newId = UUID.randomUUID()
 
                     withContext(NonCancellable) {
@@ -233,9 +230,8 @@ class PoloniexTrader(
         logger.debug { "Sleeping transactions restored: ${sleepingTransactions.size}" }
     }
 
-    private suspend fun startPathTransaction(bestPath: ExhaustivePath) {
+    private suspend fun startPathTransaction(markets: Array<TranIntentMarket>) {
         val id = UUID.randomUUID()
-        val markets = pathHelper.prepareMarketsForIntent(bestPath)
         val marketIdx = 0
         val fromCurrency = markets[marketIdx].fromCurrency
         val requestedAmount = (markets[marketIdx] as TranIntentMarketPartiallyCompleted).fromAmount
@@ -297,19 +293,17 @@ class PoloniexTrader(
 
         val activeMarketId = updatedMarkets.length() - 1
 
-        val bestPath = pathHelper.findNewPath(
-            initCurrencyAmount,
-            currentCurrency,
-            currentCurrencyAmount,
-            settingsDao.primaryCurrencies
-        )
+        val bestPath = pathGenerator
+            .findBest(initCurrencyAmount, currentCurrency, currentCurrencyAmount, settingsDao.primaryCurrencies)
+            .findOne(transactionsDao)?._1
+            ?.toTranIntentMarket(currentCurrencyAmount, currentCurrency)
 
         if (bestPath == null) {
             logger.debug { "Path not found for ${tranIntentMarketExtensions.pathString(updatedMarkets)}" }
             return
         }
 
-        val changedMarkets = pathHelper.updateMarketsWithBestPath(updatedMarkets, activeMarketId, bestPath)
+        val changedMarkets = updatedMarkets.concat(activeMarketId, bestPath)
         val tranId = UUID.randomUUID()
 
         withContext(NonCancellable) {

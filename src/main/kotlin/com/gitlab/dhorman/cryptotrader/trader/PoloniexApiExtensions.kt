@@ -13,7 +13,7 @@ import kotlinx.coroutines.delay
 import mu.KotlinLogging
 import java.time.Instant
 
-val logger = KotlinLogging.logger {}
+private val logger = KotlinLogging.logger {}
 
 suspend fun ExtendedPoloniexApi.missedTrades(orderId: Long, processedTrades: Set<Long>): List<BareTrade> {
     while (true) {

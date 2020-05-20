@@ -4,8 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.DisconnectedException
-import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidDepthException
-import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.InvalidMarketException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.util.share
@@ -29,7 +27,6 @@ import java.io.IOException
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.net.ConnectException
-import java.net.SocketException
 import java.net.UnknownHostException
 import java.time.*
 import java.time.temporal.ChronoUnit
@@ -55,6 +52,19 @@ data class TradeVolumeStat(
     val quoteBuyVolume: BigDecimal,
     val quoteSellVolume: BigDecimal
 )
+
+fun TradeVolumeStat.volume(currencyType: CurrencyType, orderType: OrderType): BigDecimal {
+    return when (currencyType) {
+        CurrencyType.Base -> when (orderType) {
+            OrderType.Buy -> baseBuyVolume
+            OrderType.Sell -> baseSellVolume
+        }
+        CurrencyType.Quote -> when (orderType) {
+            OrderType.Buy -> quoteBuyVolume
+            OrderType.Sell -> quoteSellVolume
+        }
+    }
+}
 
 @Service
 class ExtendedPoloniexApi(
@@ -437,32 +447,6 @@ class ExtendedPoloniexApi(
         }.share(1, Duration.ofMinutes(20), scope)
     }
 
-    val tradesStatStream: Flow<Map<MarketId, Flow<TradeStat>>> = run {
-        channelFlow {
-            dayVolumeStream.collect { dayVolumeMap ->
-                val marketsMap = marketStream.first()._2
-                val map = marketsMap.map { market, marketId ->
-                    val amount = dayVolumeMap.getOrNull(market)
-                    val amountBase = amount?._1?.divide(BigDecimal(2), 8, RoundingMode.DOWN)
-                    val amountQuote = amount?._2?.divide(BigDecimal(2), 8, RoundingMode.DOWN)
-                    val buySellStat = TradeStatOrder(
-                        baseQuoteAvgAmount = tuple(
-                            amountBase ?: BigDecimal.ZERO,
-                            amountQuote ?: BigDecimal.ZERO
-                        )
-                    )
-                    val tradeStat = TradeStat(
-                        sell = buySellStat,
-                        buy = buySellStat
-                    )
-                    tuple(marketId, flowOf(tradeStat))
-                }
-
-                send(map)
-            }
-        }.share(1, Duration.ofMinutes(20), scope)
-    }
-
     val tradeVolumeStat: Flow<Map<Market, Flow<Queue<TradeVolumeStat>>>> = run {
         marketStream.map { marketInfo ->
             marketInfo._2.keySet().toVavrStream()
@@ -550,36 +534,15 @@ class ExtendedPoloniexApi(
     val orderBooksPollingStream: Flow<Map<Market, OrderBookSnapshot>> = run {
         channelFlow {
             while (isActive) {
-                try {
+                onAnyErrorRetry(dataTypeMsg = "order books") {
+                    logger.debug("Trying to fetch order books for all markets")
                     val orderBooks = super.orderBooks(market = null, depth = 20)
+                    logger.debug("Order books for all markets have been fetched")
                     send(orderBooks)
-                    delay(30000)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: UnknownHostException) {
-                    delay(2000)
-                } catch (e: ReadTimeoutException) {
-                    delay(2000)
-                } catch (e: WriteTimeoutException) {
-                    delay(2000)
-                } catch (e: IOException) {
-                    delay(2000)
-                } catch (e: ConnectException) {
-                    delay(2000)
-                } catch (e: SocketException) {
-                    delay(2000)
-                } catch (e: InvalidMarketException) {
-                    logger.warn(e.message)
-                    delay(1000)
-                } catch (e: InvalidDepthException) {
-                    logger.warn(e.message)
-                    delay(1000)
-                } catch (e: Throwable) {
-                    delay(1000)
-                    logger.error("Error occurred in orderBooksPolling stream: ${e.message}")
                 }
+                delay(30000)
             }
-        }.share(1, Duration.ofSeconds(30), scope)
+        }.share(1, Duration.ofSeconds(100), scope)
     }
 
     val feeStream: Flow<FeeMultiplier> = run {
@@ -597,7 +560,7 @@ class ExtendedPoloniexApi(
                 }
                 delay(10 * 60 * 1000)
             }
-        }.share(1, Duration.ofDays(1024), scope)
+        }.share(1, Duration.ofHours(1), scope)
     }
 
     fun generateOrderId(): Long {
@@ -704,11 +667,22 @@ class ExtendedPoloniexApi(
         while (true) {
             try {
                 return body()
-            } catch (e: CancellationException) {
-                throw e
             } catch (e: Throwable) {
-                logger.warn("Can't fetch $dataTypeMsg because ${e.message}")
-                delay(delaySec)
+                when (e) {
+                    is CancellationException -> throw e
+                    is UnknownHostException,
+                    is ReadTimeoutException,
+                    is WriteTimeoutException,
+                    is IOException,
+                    is ConnectException -> {
+                        logger.warn("Can't fetch $dataTypeMsg because connection issue has occurred ${e.message}")
+                        delay(delaySec)
+                    }
+                    else -> {
+                        logger.warn("Can't fetch $dataTypeMsg because ${e.message}")
+                        delay(delaySec)
+                    }
+                }
             }
         }
     }

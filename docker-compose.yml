@@ -20,6 +20,10 @@ services:
       - "${HTTP_API_PORT}:${HTTP_API_PORT}/tcp"
     networks:
       - backend
+    logging:
+      driver: local
+      options:
+        max-size: "250mb"
 
 networks:
   backend:

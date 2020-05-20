@@ -2,6 +2,7 @@ package com.gitlab.dhorman.cryptotrader.service.poloniex
 
 import com.gitlab.dhorman.cryptotrader.core.toMarket
 import com.gitlab.dhorman.cryptotrader.util.TestClock
+import com.gitlab.dhorman.cryptotrader.util.firstOrNull
 import io.vavr.kotlin.getOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -31,6 +32,14 @@ class ExtendedPoloniexApiTest {
 
     @Autowired
     private lateinit var clock: Clock
+
+    @Test
+    fun `Get orderBooksPollingStream`() {
+        runBlocking {
+            val res = poloniexApi.orderBooksPollingStream.firstOrNull()
+            println(res)
+        }
+    }
 
     @Test
     fun `Sync test for ExtendedPoloniexApi`() {

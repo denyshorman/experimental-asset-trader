@@ -61,7 +61,7 @@ class TransactionIntent(
     private val mergeAlgo: MergeTradeAlgo,
     private val splitAlgo: SplitTradeAlgo,
     private val delayedTradeManager: DelayedTradeManager,
-    private val pathHelper: PathHelper,
+    private val pathGenerator: PathGenerator,
     private val blacklistedMarkets: BlacklistedMarketsDao
 ) {
     private val soundSignalEnabled = System.getenv("ENABLE_SOUND_SIGNAL") != null
@@ -81,7 +81,7 @@ class TransactionIntent(
         mergeAlgo,
         splitAlgo,
         delayedTradeManager,
-        pathHelper,
+        pathGenerator,
         blacklistedMarkets
     )
 
@@ -388,7 +388,10 @@ class TransactionIntent(
                 while (true) {
                     logger.debug { "Trying to find a new path..." }
 
-                    bestPath = pathHelper.findNewPath(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.primaryCurrencies)
+                    bestPath = pathGenerator
+                        .findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.primaryCurrencies)
+                        .findOne(transactionsDao)?._1
+                        ?.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
 
                     if (bestPath != null) {
                         logger.debug { "A new profitable path found ${tranIntentMarketExtensions.pathString(bestPath)}" }
@@ -400,7 +403,7 @@ class TransactionIntent(
                     delay(60000)
                 }
 
-                val changedMarkets = pathHelper.updateMarketsWithBestPath(modifiedMarkets, marketIdx, bestPath!!)
+                val changedMarkets = modifiedMarkets.concat(marketIdx, bestPath!!)
 
                 withContext(NonCancellable) {
                     transactionsDao.updateActive(id, changedMarkets, marketIdx)
@@ -678,7 +681,7 @@ class TransactionIntent(
             private val mergeAlgo: MergeTradeAlgo,
             private val splitAlgo: SplitTradeAlgo,
             private val delayedTradeManager: DelayedTradeManager,
-            private val pathHelper: PathHelper,
+            private val pathGenerator: PathGenerator,
             private val blacklistedMarkets: BlacklistedMarketsDao
         ) {
             fun create(id: PathId, markets: Array<TranIntentMarket>, marketIdx: Int): TransactionIntent {
@@ -698,7 +701,7 @@ class TransactionIntent(
                     mergeAlgo,
                     splitAlgo,
                     delayedTradeManager,
-                    pathHelper,
+                    pathGenerator,
                     blacklistedMarkets
                 )
             }

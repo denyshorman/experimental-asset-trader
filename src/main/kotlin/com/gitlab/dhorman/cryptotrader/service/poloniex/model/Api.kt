@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.*
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize
 import com.fasterxml.jackson.databind.annotation.JsonSerialize
 import com.gitlab.dhorman.cryptotrader.core.Market
+import com.gitlab.dhorman.cryptotrader.core.OrderBookAbstract
 import com.gitlab.dhorman.cryptotrader.core.oneMinusAdjPoloniex
 import com.gitlab.dhorman.cryptotrader.service.poloniex.codec.BooleanStringNumberJsonCodec
 import com.gitlab.dhorman.cryptotrader.service.poloniex.codec.OrderBookSnapshotCodec
@@ -21,11 +22,11 @@ data class Error(
 
 @JsonDeserialize(using = OrderBookSnapshotCodec.Decoder::class)
 data class OrderBookSnapshot(
-    val asks: TreeMap<Price, Amount>,
-    val bids: TreeMap<Price, Amount>,
+    override val asks: TreeMap<Price, Amount>,
+    override val bids: TreeMap<Price, Amount>,
     val isFrozen: Boolean,
     val snapshot: Long
-)
+) : OrderBookAbstract(asks, bids)
 
 data class Ticker0(
     val id: Int,

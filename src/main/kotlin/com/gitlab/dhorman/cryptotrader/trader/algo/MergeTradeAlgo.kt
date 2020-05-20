@@ -44,7 +44,7 @@ class MergeTradeAlgo(
         var targetAmount = if (prevMarketIdx >= 0) {
             tranIntentMarketExtensions.targetAmount(updatedMarkets[prevMarketIdx] as TranIntentMarketCompleted) + currentCurrencyAmount
         } else {
-            oldCurrentMarket.fromAmount + initCurrencyAmount + currentCurrencyAmount
+            oldCurrentMarket.fromAmount + initCurrencyAmount
         }
 
         // 1. Update current market.
