@@ -73,7 +73,7 @@ class PathGenerator(
             .toList(LinkedList())
 
         return filteredPaths.sortedWith(Comparator { (_, profit0, profitability0), (_, profit1, profitability1) ->
-            val profitabilityComp = profitability0.compareTo(profitability1)
+            val profitabilityComp = profitability1.compareTo(profitability0)
             if (profitabilityComp == 0) {
                 profit1.compareTo(profit0)
             } else {
@@ -118,7 +118,7 @@ fun Flow<Tuple2<SimulatedPath, BigDecimal>>.simulatedPathWithProfitWithProfitabi
         flow {
             try {
                 val waitTime = path.waitTime(fromCurrency, fromAmount, fee, orderBooks, tradeVolumeStat, amountCalculator)
-                val profitability = waitTime
+                val profitability = profit.divide(waitTime, 16, RoundingMode.HALF_EVEN)
                 emit(tuple(path, profit, profitability))
             } catch (e: CancellationException) {
                 throw e
