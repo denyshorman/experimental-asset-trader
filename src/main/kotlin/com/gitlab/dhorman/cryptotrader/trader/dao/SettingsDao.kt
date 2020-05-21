@@ -17,9 +17,9 @@ class SettingsDao {
 
     @Volatile
     var fixedAmount: Map<Currency, Amount> = hashMap(
-        "USDT" to BigDecimal(104),
+        "USDT" to BigDecimal(111),
         "USDC" to BigDecimal(0),
-        "USDJ" to BigDecimal(0),
+        "USDJ" to BigDecimal(5),
         "DAI" to BigDecimal(0),
         "PAX" to BigDecimal(0)
     )
