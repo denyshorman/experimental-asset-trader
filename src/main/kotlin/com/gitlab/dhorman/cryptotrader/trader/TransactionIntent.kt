@@ -18,6 +18,7 @@ import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableDeltaExcept
 import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableException
 import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableTimeoutException
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
+import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.util.*
@@ -482,7 +483,12 @@ class TransactionIntent(
                 transactionsDao.addCompleted(id, committedMarkets)
             }
 
-            logger.debug("Add current intent to completed transactions list")
+            logger.debug("Added current intent to completed transactions list")
+
+            val initAmount = tranIntentMarketExtensions.fromAmount(committedMarkets.first() as TranIntentMarketCompleted)
+            val targetAmount = tranIntentMarketExtensions.targetAmount(committedMarkets.last() as TranIntentMarketCompleted)
+            val profit = targetAmount - initAmount
+            if (profit < BigDecimal.ZERO) logger.warn("Transaction $id has completed with negative profit $profit")
         }
     }
 

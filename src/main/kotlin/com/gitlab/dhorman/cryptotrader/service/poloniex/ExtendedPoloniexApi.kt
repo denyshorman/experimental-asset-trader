@@ -630,7 +630,7 @@ class ExtendedPoloniexApi(
             fromTs = toTs
             val tradeVolumeStats = onAnyErrorRetry(dataTypeMsg = "candlestick chart") {
                 toTs = Instant.now(clock).round(period)
-                logger.debug { "Fetching candlestick chart data for $market $fromTs, $toTs, $period" }
+                logger.trace { "Fetching candlestick chart data for $market $fromTs, $toTs, $period" }
                 super.candlestickChartData(market, fromTs, toTs, period).map { it.toTradeVolumeStat() }
             }
             stat = stat.drop(tradeVolumeStats.length()).enqueueAll(tradeVolumeStats)

@@ -15,6 +15,7 @@ import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.collection.Queue
 import io.vavr.kotlin.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.withContext
@@ -96,6 +97,8 @@ fun Flow<SimulatedPath>.simulatedPathWithProfit(
         try {
             val targetAmount = path.targetAmount(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
             emit(tuple(path, targetAmount - initAmount))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             logger.warn { "Can't calculate targetAmount for $path. ${e.message}" }
         }
@@ -117,6 +120,8 @@ fun Flow<Tuple2<SimulatedPath, BigDecimal>>.simulatedPathWithProfitWithProfitabi
                 val waitTime = path.waitTime(fromCurrency, fromAmount, fee, orderBooks, tradeVolumeStat, amountCalculator)
                 val profitability = waitTime
                 emit(tuple(path, profit, profitability))
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 logger.warn { "Can't calculate waitTime for $path. ${e.message}" }
             }

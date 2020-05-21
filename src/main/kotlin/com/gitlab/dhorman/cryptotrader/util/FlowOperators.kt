@@ -51,8 +51,7 @@ private open class ShareOperator<T>(
                         subscriberChannels.forEach { subscriber ->
                             try {
                                 subscriber.send(data)
-                            } catch (e: Throwable) {
-                                logger.debug { "Can't send data to subscriber $subscriber because ${e.message}" }
+                            } catch (_: Throwable) {
                             }
                         }
                     }
