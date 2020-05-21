@@ -67,7 +67,7 @@ open class PoloniexApi(
 ) {
     private val logger = KotlinLogging.logger {}
     private val signer = HmacSha512Digest(poloniexApiSecret)
-    private val reqLimiter = RequestLimiter(allowedRequests = 6, perInterval = Duration.ofSeconds(1))
+    private val reqLimiter = RequestLimiter(allowedRequests = 7, perInterval = Duration.ofSeconds(1))
 
     private val channels = ConcurrentHashMap<Int, BroadcastChannel<PushNotification>>()
     private val channelState = ConcurrentHashMap<Int, MutableStateFlow<Boolean>>()
