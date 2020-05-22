@@ -1,4 +1,4 @@
-package com.gitlab.dhorman.cryptotrader.trader.algo
+package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
@@ -25,6 +25,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import java.math.BigDecimal
 import java.util.*
+import kotlin.system.measureTimeMillis
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
@@ -49,20 +50,12 @@ class PathGeneratorTest {
             val toCurrencies = list("USDT", "USDC", "USDJ", "PAX", "DAI")
             val csvGenerator = CsvGenerator()
             csvGenerator.addLine("from_currency", "target_currency", "path", "profit", "profitability")
-            toCurrencies.asFlow()
-                .flatMapMerge(toCurrencies.size()) { fromCurrency ->
-                    flow {
-                        emit(pathGenerator.findBest(fromCurrencyAmount, fromCurrency, fromCurrencyAmount, toCurrencies))
-                    }
-                        .map { tuple(fromCurrency, it) }
-                        .flowOn(Dispatchers.Default)
-
-                }.collect { (fromCurrency, paths) ->
-                    for ((path, profit, profitability) in paths) {
-                        csvGenerator.addLine(fromCurrency, path.targetCurrency(fromCurrency)!!, path.marketsTinyString(), profit, profitability)
-                    }
-                }
-
+            toCurrencies.asFlow().flatMapMerge(toCurrencies.size()) { fromCurrency ->
+                pathGenerator.generateSimulatedPaths(fromCurrencyAmount, fromCurrency, fromCurrencyAmount, toCurrencies).map { tuple(fromCurrency, it) }
+            }.collect { (fromCurrency, tuple) ->
+                val (path, profit, profitability) = tuple
+                csvGenerator.addLine(fromCurrency, path.targetCurrency(fromCurrency)!!, path.marketsTinyString(), profit, profitability)
+            }
             csvGenerator.dumpToFile("build/reports/simulatedPaths.csv")
         }
     }
@@ -86,7 +79,7 @@ class PathGeneratorTest {
             )
 
             val targetAmount = simulatedPath.targetAmount(fromCurrency, fromCurrencyAmount, feeMultiplier, orderBooks, amountCalculator)
-            val waitTime = simulatedPath.waitTime(fromCurrency, fromCurrencyAmount, feeMultiplier, orderBooks, tradeVolumeStat, amountCalculator)
+            val waitTime = simulatedPath.waitTime(fromCurrency, tradeVolumeStat, arrayOf(tuple(fromCurrencyAmount, targetAmount)))
 
             println("Target amount: $targetAmount")
             println("Wait time: $waitTime")
@@ -96,7 +89,7 @@ class PathGeneratorTest {
     @Test
     fun `Test findOne`() {
         runBlocking {
-            val paths = listOf(
+            val paths = arrayOf(
                 tuple(
                     SimulatedPath(
                         Array.of(
@@ -144,7 +137,7 @@ class PathGeneratorTest {
                 )
             )
 
-            val bestPath = paths.findOne(transactionsDao)
+            val bestPath = paths.asFlow().findOne(transactionsDao)
             assertNotNull(bestPath)
             assertEquals(paths[2], bestPath)
         }
@@ -153,7 +146,7 @@ class PathGeneratorTest {
     @Test
     fun `Test findOne 2`() {
         runBlocking {
-            val paths = listOf(
+            val paths = arrayOf(
                 tuple(
                     SimulatedPath(
                         Array.of(
@@ -208,9 +201,33 @@ class PathGeneratorTest {
                 )
             )
 
-            val bestPath = paths.findOne(transactionsDao)
+            val bestPath = paths.asFlow().findOne(transactionsDao)
             assertNotNull(bestPath)
             assertEquals(paths[0], bestPath)
+        }
+    }
+
+    @Test
+    fun `Test findOne real`() {
+        runBlocking(Dispatchers.Default) {
+            val transactionsDao = mock<TransactionsDao>()
+            whenever(transactionsDao.getActive()).thenReturn(emptyList())
+
+            val startAmount = BigDecimal("100")
+            val startCurrency = "USDT"
+            val currencies = list("USDT", "USDC", "USDJ", "PAX", "DAI")
+
+            val timeInit = measureTimeMillis {
+                pathGenerator.generateSimulatedPaths(startAmount, startCurrency, startAmount, currencies).findOne(transactionsDao)
+            }
+
+            println("Found first with $timeInit ms")
+
+            val timeSecond = measureTimeMillis {
+                pathGenerator.generateSimulatedPaths(startAmount, startCurrency, startAmount, currencies).findOne(transactionsDao)
+            }
+
+            println("Found second with $timeSecond ms")
         }
     }
 }

@@ -16,9 +16,7 @@ import io.vavr.collection.Map
 import io.vavr.collection.Queue
 import io.vavr.kotlin.*
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.withContext
 import mu.KotlinLogging
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -31,72 +29,56 @@ class PathGenerator(
     private val blacklistedMarketsDao: BlacklistedMarketsDao,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator
 ) {
-    suspend fun generate(fromCurrency: Currency, fromCurrencyAmount: Amount, toCurrencies: Iterable<Currency>): List<SimulatedPath> {
+    suspend fun generate(fromCurrency: Currency, fromCurrencyAmount: Amount, toCurrencies: Iterable<Currency>): Sequence<SimulatedPath> {
         val blacklistedMarkets = blacklistedMarketsDao.getAll()
         val markets = poloniexApi.orderBooksPollingStream.first()
             .toVavrStream()
             .filter { (market, orderBook) -> !orderBook.isFrozen && !blacklistedMarkets.contains(market) }
             .map { it._1 }
-            .toList()
 
-        return withContext(Dispatchers.IO) {
-            MarketPathGenerator(markets)
-                .generateWithOrders(list(fromCurrency), toCurrencies.toVavrStream())
-                .toVavrStream()
-                .flatMap { (_, paths) ->
-                    paths.toVavrStream().map { path ->
-                        val orderIntents = path.map { (speed, market) ->
-                            SimulatedPath.OrderIntent(market, speed)
-                        }.toArray()
-                        SimulatedPath(orderIntents)
-                    }
+        return MarketPathGenerator(markets)
+            .generateWithOrders(listOf(fromCurrency), toCurrencies)
+            .asSequence()
+            .flatMap { (_, paths) ->
+                paths.map { path ->
+                    val orderIntents = path.map { (speed, market) -> SimulatedPath.OrderIntent(market, speed) }
+                    SimulatedPath(orderIntents.toVavrStream().toArray())
                 }
-                .toList()
-        }
+            }
     }
 
-    suspend fun findBest(
+    suspend fun generateSimulatedPaths(
         initAmount: Amount,
         fromCurrency: Currency,
         fromAmount: Amount,
         endCurrencies: List<Currency>
-    ): kotlin.collections.List<Tuple3<SimulatedPath, BigDecimal, BigDecimal>> {
+    ): Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>> {
         val allPaths = generate(fromCurrency, fromAmount, endCurrencies)
         val fee = poloniexApi.feeStream.first()
         val orderBooks = poloniexApi.orderBooksPollingStream.first()
         val tradeVolumeStat = poloniexApi.tradeVolumeStat.first()
 
-        val filteredPaths = allPaths.asFlow()
-            .simulatedPathWithProfit(initAmount, fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
-            .filter { (_, profit) -> profit > BigDecimal.ZERO }
-            .simulatedPathWithProfitWithProfitability(allPaths.size(), fromCurrency, fromAmount, fee, tradeVolumeStat, orderBooks, amountCalculator)
-            .toList(LinkedList())
-
-        return filteredPaths.sortedWith(Comparator { (_, profit0, profitability0), (_, profit1, profitability1) ->
-            val profitabilityComp = profitability1.compareTo(profitability0)
-            if (profitabilityComp == 0) {
-                profit1.compareTo(profit0)
-            } else {
-                profitabilityComp
-            }
-        })
+        return allPaths.asFlow()
+            .simulatedPathWithAmounts(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
+            .simulatedPathWithAmountsAndProfit()
+            .filter { (_, _, profit) -> profit > BigDecimal.ZERO }
+            .simulatedPathWithProfitAndProfitability(fromCurrency, tradeVolumeStat)
     }
 }
 
 private val logger = KotlinLogging.logger {}
 
-fun Flow<SimulatedPath>.simulatedPathWithProfit(
-    initAmount: Amount,
+fun Flow<SimulatedPath>.simulatedPathWithAmounts(
     fromCurrency: Currency,
     fromAmount: Amount,
     fee: FeeMultiplier,
     orderBooks: Map<Market, out OrderBookAbstract>,
     amountCalculator: AdjustedPoloniexBuySellAmountCalculator
-): Flow<Tuple2<SimulatedPath, BigDecimal>> {
+): Flow<Tuple2<SimulatedPath, Array<Tuple2<Amount, Amount>>>> {
     return transform { path ->
         try {
-            val targetAmount = path.targetAmount(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
-            emit(tuple(path, targetAmount - initAmount))
+            val amounts = path.amounts(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
+            emit(tuple(path, amounts))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -105,19 +87,21 @@ fun Flow<SimulatedPath>.simulatedPathWithProfit(
     }
 }
 
-fun Flow<Tuple2<SimulatedPath, BigDecimal>>.simulatedPathWithProfitWithProfitability(
-    allPathsSize: Int,
+fun Flow<Tuple2<SimulatedPath, Array<Tuple2<Amount, Amount>>>>.simulatedPathWithAmountsAndProfit(): Flow<Tuple3<SimulatedPath, Array<Tuple2<Amount, Amount>>, Amount>> {
+    return map { (path, amounts) ->
+        val profit = amounts.last()._2 - amounts.first()._1
+        tuple(path, amounts, profit)
+    }
+}
+
+fun Flow<Tuple3<SimulatedPath, Array<Tuple2<Amount, Amount>>, Amount>>.simulatedPathWithProfitAndProfitability(
     fromCurrency: Currency,
-    fromAmount: Amount,
-    fee: FeeMultiplier,
-    tradeVolumeStat: Map<Market, Flow<Queue<TradeVolumeStat>>>,
-    orderBooks: Map<Market, out OrderBookAbstract>,
-    amountCalculator: AdjustedPoloniexBuySellAmountCalculator
+    tradeVolumeStat: Map<Market, Flow<Queue<TradeVolumeStat>>>
 ): Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>> {
-    return flatMapMerge(allPathsSize) { (path, profit) ->
+    return flatMapMerge(Int.MAX_VALUE) { (path, amounts, profit) ->
         flow {
             try {
-                val waitTime = path.waitTime(fromCurrency, fromAmount, fee, orderBooks, tradeVolumeStat, amountCalculator)
+                val waitTime = path.waitTime(fromCurrency, tradeVolumeStat, amounts)
                 val profitability = profit.divide(waitTime, 16, RoundingMode.HALF_EVEN)
                 emit(tuple(path, profit, profitability))
             } catch (e: CancellationException) {
@@ -125,45 +109,65 @@ fun Flow<Tuple2<SimulatedPath, BigDecimal>>.simulatedPathWithProfitWithProfitabi
             } catch (e: Throwable) {
                 logger.warn { "Can't calculate waitTime for $path. ${e.message}" }
             }
-        }.flowOn(Dispatchers.Default)
+        }
     }
 }
 
-suspend fun kotlin.collections.List<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
+suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
     transactionsDao: TransactionsDao
 ): Tuple3<SimulatedPath, BigDecimal, BigDecimal>? {
-    if (this.isEmpty()) return null
-
     val activeTransactions = transactionsDao.getActive().map { (_, markets) ->
         markets.toVavrStream().dropWhile { it is TranIntentMarketCompleted }.toList()
     }
 
-    var selectedPath: Tuple3<SimulatedPath, BigDecimal, BigDecimal>? = null
-
-    for (value in this) {
-        val (path, _, _) = value
-        var matched = false
-
+    fun SimulatedPath.exists(): Boolean {
         for (transaction in activeTransactions) {
-            if (transaction.length() != path.orderIntents.length()) {
+            if (transaction.length() != this.orderIntents.length()) {
                 continue
             }
 
-            val allMatched = transaction.zip(path.orderIntents).all { (tranMarket, intentMarket) ->
+            val allMatched = transaction.zip(this.orderIntents).all { (tranMarket, intentMarket) ->
                 tranMarket.market == intentMarket.market && tranMarket.orderSpeed == intentMarket.orderSpeed
             }
 
             if (allMatched) {
-                matched = true
-                break
+                return true
             }
         }
+        return false
+    }
 
-        if (!matched) {
-            selectedPath = value
-            break
+    val comparator = Comparator<Tuple3<SimulatedPath, BigDecimal, BigDecimal>> { (_, profit0, profitability0), (_, profit1, profitability1) ->
+        val profitabilityComp = profitability0.compareTo(profitability1)
+        if (profitabilityComp == 0) {
+            profit0.compareTo(profit1)
+        } else {
+            profitabilityComp
         }
     }
 
-    return selectedPath ?: this.first()
+    val activeTranSimulatedPaths = LinkedList<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>()
+
+    var selectedPath: Tuple3<SimulatedPath, BigDecimal, BigDecimal>? = null
+
+    collect { value ->
+        val (path, _, _) = value
+        if (path.exists()) {
+            activeTranSimulatedPaths.add(value)
+            return@collect
+        }
+        if (selectedPath == null || comparator.compare(selectedPath, value) == 1) {
+            selectedPath = value
+        }
+    }
+
+    if (selectedPath == null && activeTranSimulatedPaths.isEmpty()) return null
+
+    for (value in activeTranSimulatedPaths) {
+        if (selectedPath == null || comparator.compare(selectedPath, value) == 1) {
+            selectedPath = value
+        }
+    }
+
+    return selectedPath
 }

@@ -8,12 +8,14 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.volume
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPredicted
+import io.vavr.Tuple2
 import io.vavr.collection.Array
 import io.vavr.collection.Map
 import io.vavr.collection.Queue
 import io.vavr.kotlin.component1
 import io.vavr.kotlin.component2
 import io.vavr.kotlin.getOrNull
+import io.vavr.kotlin.tuple
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import java.math.BigDecimal
@@ -144,6 +146,27 @@ fun SimulatedPath.OrderIntent.targetAmount(
     }
 }
 
+fun SimulatedPath.amounts(
+    fromCurrency: Currency,
+    fromCurrencyAmount: Amount,
+    fee: FeeMultiplier,
+    orderBooks: Map<Market, out OrderBookAbstract>,
+    amountCalculator: BuySellAmountCalculator
+): kotlin.Array<Tuple2<Amount, Amount>> {
+    var currency = fromCurrency
+    var amount = fromCurrencyAmount
+    val orderIntentIterator = orderIntents.iterator()
+
+    return Array(orderIntents.size()) {
+        val orderIntent = orderIntentIterator.next()
+        val orderBook = orderBooks.getOrNull(orderIntent.market) ?: throw Exception("Order book for market ${orderIntent.market} does not exist in map")
+        val fromAmount = amount
+        amount = orderIntent.targetAmount(currency, fromAmount, fee, orderBook, amountCalculator)
+        currency = orderIntent.market.other(currency) ?: throw RuntimeException("Currency $currency does not exist in market ${orderIntent.market}")
+        tuple(fromAmount, amount)
+    }
+}
+
 fun SimulatedPath.targetAmount(
     fromCurrency: Currency,
     fromCurrencyAmount: Amount,
@@ -188,21 +211,17 @@ fun SimulatedPath.OrderIntent.waitTime(
 
 suspend fun SimulatedPath.waitTime(
     fromCurrency: Currency,
-    fromCurrencyAmount: Amount,
-    fee: FeeMultiplier,
-    orderBooks: Map<Market, out OrderBookAbstract>,
     tradeVolumeStatMap: Map<Market, Flow<Queue<TradeVolumeStat>>>,
-    amountCalculator: BuySellAmountCalculator
+    amounts: kotlin.Array<Tuple2<Amount, Amount>>
 ): BigDecimal {
     var currency = fromCurrency
-    var amount = fromCurrencyAmount
     var waitTimeSum = ALMOST_ZERO
+    val amountsIterator = amounts.iterator()
     for (orderIntent in orderIntents) {
         val tradeVolumeStat = tradeVolumeStatMap.getOrNull(orderIntent.market)?.first()
             ?: throw Exception("Volume stat for market ${orderIntent.market} does not exist in map")
-        val orderBook = orderBooks.getOrNull(orderIntent.market) ?: throw Exception("Order book for market ${orderIntent.market} does not exist in map")
-        waitTimeSum += orderIntent.waitTime(currency, amount, tradeVolumeStat)
-        amount = orderIntent.targetAmount(currency, amount, fee, orderBook, amountCalculator)
+        val fromAmount = amountsIterator.next()._1
+        waitTimeSum += orderIntent.waitTime(currency, fromAmount, tradeVolumeStat)
         currency = orderIntent.market.other(currency) ?: throw RuntimeException("Currency $currency does not exist in market ${orderIntent.market}")
     }
     return waitTimeSum
