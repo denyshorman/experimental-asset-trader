@@ -90,7 +90,7 @@ class PoloniexTraderApi(
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/balances-in-use"])
     suspend fun getBalancesInUse(@RequestParam primaryCurrencies: List<Currency>): List<Tuple2<Currency, BigDecimal>> {
-        return transactionsDao.balancesInUse(primaryCurrencies.toVavrList())
+        return transactionsDao.balancesInUse(primaryCurrencies)
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/tickers"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])

@@ -12,7 +12,6 @@ import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.util.first
 import io.vavr.Tuple2
 import io.vavr.Tuple3
-import io.vavr.collection.List
 import io.vavr.collection.Map
 import io.vavr.collection.Queue
 import io.vavr.kotlin.*
@@ -52,7 +51,7 @@ class PathGenerator(
         initAmount: Amount,
         fromCurrency: Currency,
         fromAmount: Amount,
-        endCurrencies: List<Currency>
+        endCurrencies: Iterable<Currency>
     ): Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>> {
         val allPaths = generate(fromCurrency, fromAmount, endCurrencies)
         val fee = poloniexApi.feeStream.first()

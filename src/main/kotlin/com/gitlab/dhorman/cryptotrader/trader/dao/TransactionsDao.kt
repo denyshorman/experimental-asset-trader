@@ -4,16 +4,13 @@ import com.fasterxml.jackson.core.json.JsonWriteFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonTypeRef
 import com.fasterxml.jackson.module.kotlin.readValue
-import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.Views
 import io.vavr.Tuple2
 import io.vavr.Tuple4
 import io.vavr.collection.Array
-import io.vavr.kotlin.toVavrStream
 import io.vavr.kotlin.tuple
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
@@ -131,9 +128,9 @@ class TransactionsDao(
             .awaitFirstOrNull()
     }
 
-    suspend fun balancesInUse(currencies: io.vavr.collection.List<Currency>): List<Tuple2<Currency, BigDecimal>> {
+    suspend fun balancesInUse(currencies: Iterable<Currency>): List<Tuple2<Currency, BigDecimal>> {
         // TODO: Escape input and wait until driver will support List input
-        val currencyList = currencies.toVavrStream().map { "'$it'" }.joinToString()
+        val currencyList = currencies.joinToString(",") { "'$it'" }
 
         return databaseClient.execute("SELECT from_currency, SUM(from_amount) amount FROM poloniex_active_transactions WHERE from_currency IN ($currencyList) GROUP BY from_currency")
             .fetch().all()
@@ -145,10 +142,5 @@ class TransactionsDao(
             }
             .collectList()
             .awaitSingle()
-    }
-
-    // TODO: Implement getLatestOrderAndTradeId
-    fun getLatestOrderAndTradeId(market: Market, orderType: OrderType): Tuple2<Long, Long>? {
-        return null
     }
 }

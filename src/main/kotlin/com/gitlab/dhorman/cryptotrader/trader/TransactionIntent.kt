@@ -127,13 +127,13 @@ class TransactionIntent(
         val newMarketIdx = marketIdx + 1
         var modifiedMarkets = withContext(NonCancellable) {
             tranManager.repeatableReadTran {
-                val unfilledMarkets = unfilledMarketsDao.get(settingsDao.primaryCurrencies, currentMarket.fromCurrency)
+                val unfilledMarkets = unfilledMarketsDao.get(settingsDao.getPrimaryCurrencies(), currentMarket.fromCurrency)
 
                 val modifiedMarkets = mergeAlgo.mergeMarkets(markets, unfilledMarkets)
 
                 if (unfilledMarkets.length() != 0) {
                     transactionsDao.updateActive(id, modifiedMarkets, marketIdx)
-                    unfilledMarketsDao.remove(settingsDao.primaryCurrencies, currentMarket.fromCurrency)
+                    unfilledMarketsDao.remove(settingsDao.getPrimaryCurrencies(), currentMarket.fromCurrency)
 
                     logger.debug { "Merged unfilled amounts $unfilledMarkets into current intent. Before: $markets ; After: $modifiedMarkets" }
                 }
@@ -365,10 +365,10 @@ class TransactionIntent(
                     throw e
                 }
             } catch (e: OrderMatchingDisabledException) {
-                blacklistedMarkets.add(currentMarket.market, settingsDao.blacklistMarketTime)
+                blacklistedMarkets.add(currentMarket.market, settingsDao.getBlacklistMarketTime())
                 throw NotProfitableTimeoutException
             } catch (e: MarketDisabledException) {
-                blacklistedMarkets.add(currentMarket.market, settingsDao.blacklistMarketTime)
+                blacklistedMarkets.add(currentMarket.market, settingsDao.getBlacklistMarketTime())
                 throw NotProfitableTimeoutException
             } finally {
                 withContext(NonCancellable) {
@@ -393,7 +393,7 @@ class TransactionIntent(
                     logger.debug { "Trying to find a new path..." }
 
                     bestPath = pathGenerator
-                        .generateSimulatedPaths(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.primaryCurrencies)
+                        .generateSimulatedPaths(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())
                         .findOne(transactionsDao)?._1
                         ?.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
 
@@ -428,9 +428,10 @@ class TransactionIntent(
                     val fromCurrencyInitAmount = tranIntentMarketExtensions.fromAmount(initMarket, modifiedMarkets, 0)
                     val fromCurrencyCurrent = currMarket.fromCurrency
                     val fromCurrencyCurrentAmount = tranIntentMarketExtensions.fromAmount(currMarket, modifiedMarkets, marketIdx)
+                    val primaryCurrencies = settingsDao.getPrimaryCurrencies()
 
-                    val primaryCurrencyUnfilled = settingsDao.primaryCurrencies.contains(fromCurrencyCurrent)
-                        && settingsDao.primaryCurrencies.contains(fromCurrencyInit)
+                    val primaryCurrencyUnfilled = primaryCurrencies.contains(fromCurrencyCurrent)
+                        && primaryCurrencies.contains(fromCurrencyInit)
                         && fromCurrencyInitAmount <= fromCurrencyCurrentAmount
 
                     if (primaryCurrencyUnfilled) {

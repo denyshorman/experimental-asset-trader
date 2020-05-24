@@ -58,7 +58,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
             .awaitFirstOrNull()
     }
 
-    suspend fun get(initFromCurrencies: List<Currency>, fromCurrency: Currency): List<Tuple2<Amount, Amount>> {
+    suspend fun get(initFromCurrencies: Iterable<Currency>, fromCurrency: Currency): List<Tuple2<Amount, Amount>> {
         val initCurrencies = initFromCurrencies.joinToString(",") { "'$it'" } // TODO: Remove when r2dbc postgres adds support from IN stmt
 
         return databaseClient.execute(
@@ -82,7 +82,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
             .awaitSingle()
     }
 
-    suspend fun remove(initFromCurrencies: List<Currency>, fromCurrency: Currency) {
+    suspend fun remove(initFromCurrencies: Iterable<Currency>, fromCurrency: Currency) {
         val initCurrencies = initFromCurrencies.joinToString(",") { "'$it'" } // TODO: Remove when r2dbc postgres adds support from IN stmt
 
         databaseClient.execute("DELETE FROM poloniex_unfilled_markets WHERE init_currency IN ($initCurrencies) AND current_currency = $1")

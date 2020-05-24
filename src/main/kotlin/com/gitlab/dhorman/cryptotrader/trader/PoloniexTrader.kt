@@ -107,7 +107,7 @@ class PoloniexTrader(
                 logger.debug { "Requested currency $startCurrency and amount $requestedAmount for transaction" }
 
                 val (bestPath, profit, _) = pathGenerator
-                    .generateSimulatedPaths(requestedAmount, startCurrency, requestedAmount, settingsDao.primaryCurrencies)
+                    .generateSimulatedPaths(requestedAmount, startCurrency, requestedAmount, settingsDao.getPrimaryCurrencies())
                     .findOne(transactionsDao) ?: return@collect
 
                 logger.debug {
@@ -127,7 +127,7 @@ class PoloniexTrader(
         coroutineScope {
             val allBalancesAsync = async {
                 val allBalances = poloniexApi.balanceStream.first()
-                allBalances.removeAll(settingsDao.primaryCurrencies)
+                allBalances.removeAll(settingsDao.getPrimaryCurrencies())
             }
             val activePathsAsync = async {
                 transactionsDao.getActive().asSequence()
@@ -162,7 +162,7 @@ class PoloniexTrader(
                 tuple(currency, delta)
             }.filter { it._2 > BigDecimal.ZERO }.toList()
 
-            unfilledMarketsDao.add(settingsDao.primaryCurrencies.first(), BigDecimal.ZERO, roundingLeftovers)
+            unfilledMarketsDao.add(settingsDao.getPrimaryCurrencies().first(), BigDecimal.ZERO, roundingLeftovers)
 
             logger.debug { "Added rounding leftovers $roundingLeftovers to unfilled amount list " }
         }
@@ -195,7 +195,7 @@ class PoloniexTrader(
 
                     while (true) {
                         bestPath = pathGenerator
-                            .generateSimulatedPaths(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.primaryCurrencies)
+                            .generateSimulatedPaths(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())
                             .findOne(transactionsDao)?._1
                             ?.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
 
@@ -294,7 +294,7 @@ class PoloniexTrader(
         val activeMarketId = updatedMarkets.length() - 1
 
         val bestPath = pathGenerator
-            .generateSimulatedPaths(initCurrencyAmount, currentCurrency, currentCurrencyAmount, settingsDao.primaryCurrencies)
+            .generateSimulatedPaths(initCurrencyAmount, currentCurrency, currentCurrencyAmount, settingsDao.getPrimaryCurrencies())
             .findOne(transactionsDao)?._1
             ?.toTranIntentMarket(currentCurrencyAmount, currentCurrency)
 
@@ -319,23 +319,26 @@ class PoloniexTrader(
     suspend fun requestBalanceForTransaction(): Tuple2<Currency, Amount>? {
         logger.trace { "Requesting new balance for transaction" }
 
-        val usedBalances = transactionsDao.balancesInUse(settingsDao.primaryCurrencies)
+        val primaryCurrencies = settingsDao.getPrimaryCurrencies()
+        val fixedAmount = settingsDao.getFixedAmount()
+
+        val usedBalances = transactionsDao.balancesInUse(primaryCurrencies)
             .groupBy({ it._1 }, { it._2 })
             .mapValues { it.value.reduce { a, b -> a + b } }
 
         val allBalances = poloniexApi.balanceStream.first()
 
-        val minAmount = settingsDao.minTradeAmount
+        val minAmount = settingsDao.getMinTradeAmount()
 
         val availableBalance = allBalances.toVavrStream()
-            .filter { settingsDao.primaryCurrencies.contains(it._1) }
+            .filter { primaryCurrencies.contains(it._1) }
             .map { currencyAvailableAndOnOrders ->
                 val (currency, availableAndOnOrders) = currencyAvailableAndOnOrders
                 val (available, onOrders) = availableAndOnOrders
                 val balanceInUse = usedBalances.getOrDefault(currency, BigDecimal.ZERO)
                 val reservedAmount = onOrders - balanceInUse
                 var availableAmount = (available
-                    - settingsDao.fixedAmount.getOrElse(currency, BigDecimal.ZERO)
+                    - fixedAmount.getOrDefault(currency, BigDecimal.ZERO)
                     + if (reservedAmount >= BigDecimal.ZERO) BigDecimal.ZERO else reservedAmount)
                 if (availableAmount < BigDecimal.ZERO) availableAmount = BigDecimal.ZERO
                 tuple(currency, availableAmount)
