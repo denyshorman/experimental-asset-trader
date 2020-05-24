@@ -14,6 +14,7 @@ import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
 import com.gitlab.dhorman.cryptotrader.util.CsvGenerator
+import com.gitlab.dhorman.cryptotrader.util.first
 import io.swagger.annotations.ApiOperation
 import io.vavr.Tuple2
 import io.vavr.Tuple3

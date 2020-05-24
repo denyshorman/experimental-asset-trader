@@ -8,6 +8,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.volume
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPredicted
+import com.gitlab.dhorman.cryptotrader.util.first
 import io.vavr.Tuple2
 import io.vavr.collection.Array
 import io.vavr.collection.Map
@@ -17,7 +18,6 @@ import io.vavr.kotlin.component2
 import io.vavr.kotlin.getOrNull
 import io.vavr.kotlin.tuple
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.*

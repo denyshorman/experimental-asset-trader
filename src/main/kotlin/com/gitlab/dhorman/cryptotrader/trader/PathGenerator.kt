@@ -9,6 +9,7 @@ import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmount
 import com.gitlab.dhorman.cryptotrader.trader.dao.BlacklistedMarketsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
+import com.gitlab.dhorman.cryptotrader.util.first
 import io.vavr.Tuple2
 import io.vavr.Tuple3
 import io.vavr.collection.List

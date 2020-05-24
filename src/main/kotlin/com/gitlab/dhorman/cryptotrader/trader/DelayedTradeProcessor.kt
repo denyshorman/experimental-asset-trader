@@ -11,6 +11,7 @@ import com.gitlab.dhorman.cryptotrader.trader.exception.CantMoveOrderSafelyExcep
 import com.gitlab.dhorman.cryptotrader.trader.exception.CompletePlaceMoveOrderLoop
 import com.gitlab.dhorman.cryptotrader.trader.exception.MoveNotRequiredException
 import com.gitlab.dhorman.cryptotrader.trader.exception.RepeatPlaceMoveOrderLoopAgain
+import com.gitlab.dhorman.cryptotrader.util.first
 import com.gitlab.dhorman.cryptotrader.util.returnLastIfNoValueWithinSpecifiedTime
 import io.netty.handler.timeout.ReadTimeoutException
 import io.netty.handler.timeout.WriteTimeoutException

@@ -2,8 +2,8 @@ package com.gitlab.dhorman.cryptotrader.trader.dao
 
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.util.TestClock
+import com.gitlab.dhorman.cryptotrader.util.first
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.*
 import org.springframework.beans.factory.annotation.Autowired

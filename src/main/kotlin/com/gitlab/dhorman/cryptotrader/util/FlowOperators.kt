@@ -1,8 +1,5 @@
 package com.gitlab.dhorman.cryptotrader.util
 
-import io.vavr.Tuple2
-import io.vavr.collection.HashMap
-import io.vavr.collection.Map
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ProducerScope
@@ -28,7 +25,6 @@ private open class ShareOperator<T>(
     private val gracePeriod: Duration? = null,
     private val scope: CoroutineScope? = null
 ) {
-    private var subscribers = 0L
     private val subscriberChannels = mutableSetOf<SendChannel<T>>()
     private val subscriberChannelsMutex = Mutex()
     private val upstreamSubscriptionLock = Mutex()
@@ -57,8 +53,8 @@ private open class ShareOperator<T>(
                     }
                 }
             } catch (e: CancellationException) {
-                if (subscriberChannels.size > 0) {
-                    logger.warn("upstream cancelled when subscriberChannels (${subscriberChannels.size}) variable is not empty.")
+                if (subscriberChannels.isNotEmpty()) {
+                    logger.warn("$upstream cancelled when subscriberChannels (${subscriberChannels.size}) variable is not empty.")
                 }
                 throw e
             }
@@ -123,7 +119,7 @@ private open class ShareOperator<T>(
     val shareOperator = channelFlow<T> {
         try {
             upstreamSubscriptionLock.withLock {
-                if (++subscribers == 1L) {
+                if (subscriberChannels.isEmpty()) {
                     cancelGracePeriodTimerJob()
                     processQueueAndSubscribeSelf()
                     subscribeToUpstream()
@@ -138,7 +134,7 @@ private open class ShareOperator<T>(
                 upstreamSubscriptionLock.withLock {
                     unsubscribeSelf()
 
-                    if (--subscribers == 0L) {
+                    if (subscriberChannels.isEmpty()) {
                         val launched = launchGracePeriodTimerJob()
 
                         if (!launched) {
@@ -197,18 +193,21 @@ fun <T> Channel<T>.buffer(scope: CoroutineScope, timespan: Duration): Channel<Li
     return upstream
 }
 
-fun <K, V> flowFromMap(map: Map<K, V>): Flow<Tuple2<K, V>> = flow {
-    map.forEach { emit(it) }
-}
+private object AbortException : Throwable("", null, true, false)
 
-suspend fun <K, V> Flow<Tuple2<K, V>>.collectMap(): Map<K, V> {
-    var map = HashMap.empty<K, V>()
-
-    collect {
-        map = map.put(it)
+suspend fun <T> Flow<T>.first(): T {
+    var result: T? = null
+    try {
+        collect { value ->
+            result = value
+            throw AbortException
+        }
+    } catch (e: AbortException) {
+        // Do nothing
     }
 
-    return map
+    if (result == null) throw NoSuchElementException("Expected at least one element")
+    return result!!
 }
 
 suspend fun <T> Flow<T>.firstOrNull(): T? {
@@ -217,9 +216,9 @@ suspend fun <T> Flow<T>.firstOrNull(): T? {
     try {
         collect {
             result = it
-            throw CancellationException()
+            throw AbortException
         }
-    } catch (e: CancellationException) {
+    } catch (e: AbortException) {
         // Ignore
     }
 

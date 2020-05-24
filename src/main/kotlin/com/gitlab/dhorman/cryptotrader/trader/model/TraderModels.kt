@@ -11,10 +11,10 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.CurrencyType
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedBuySellAmountCalculator
+import com.gitlab.dhorman.cryptotrader.util.first
 import io.vavr.collection.Array
 import io.vavr.kotlin.component1
 import io.vavr.kotlin.component2
-import kotlinx.coroutines.flow.first
 import java.math.BigDecimal
 
 @JsonTypeInfo(
