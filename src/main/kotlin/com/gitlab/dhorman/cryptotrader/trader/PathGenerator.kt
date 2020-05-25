@@ -60,7 +60,7 @@ class PathGenerator(
 
         return allPaths.asFlow()
             .simulatedPathWithAmounts(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
-            .simulatedPathWithAmountsAndProfit()
+            .simulatedPathWithAmountsAndProfit(initAmount)
             .filter { (_, _, profit) -> profit > BigDecimal.ZERO }
             .simulatedPathWithProfitAndProfitability(fromCurrency, tradeVolumeStat)
     }
@@ -87,9 +87,9 @@ fun Flow<SimulatedPath>.simulatedPathWithAmounts(
     }
 }
 
-fun Flow<Tuple2<SimulatedPath, Array<Tuple2<Amount, Amount>>>>.simulatedPathWithAmountsAndProfit(): Flow<Tuple3<SimulatedPath, Array<Tuple2<Amount, Amount>>, Amount>> {
+fun Flow<Tuple2<SimulatedPath, Array<Tuple2<Amount, Amount>>>>.simulatedPathWithAmountsAndProfit(initAmount: Amount): Flow<Tuple3<SimulatedPath, Array<Tuple2<Amount, Amount>>, Amount>> {
     return map { (path, amounts) ->
-        val profit = amounts.last()._2 - amounts.first()._1
+        val profit = amounts.last()._2 - initAmount
         tuple(path, amounts, profit)
     }
 }

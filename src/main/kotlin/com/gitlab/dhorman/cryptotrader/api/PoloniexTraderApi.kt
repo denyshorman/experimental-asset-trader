@@ -114,7 +114,7 @@ class PoloniexTraderApi(
 
                 allPaths.asFlow()
                     .simulatedPathWithAmounts(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
-                    .simulatedPathWithAmountsAndProfit()
+                    .simulatedPathWithAmountsAndProfit(fromAmount)
                     .simulatedPathWithProfitAndProfitability(fromCurrency, tradeVolumeStat)
                     .map { (path, profit, profitability) ->
                         CsvGenerator.toCsvNewLine(
