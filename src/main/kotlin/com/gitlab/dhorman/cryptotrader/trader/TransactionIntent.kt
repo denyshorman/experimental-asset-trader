@@ -387,24 +387,24 @@ class TransactionIntent(
                 val currMarket = modifiedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted
                 val fromCurrency = currMarket.fromCurrency
                 val fromCurrencyAmount = currMarket.fromAmount
-                var bestPath: Array<TranIntentMarket>?
+                val bestPath: Array<TranIntentMarket>?
 
                 while (true) {
                     logger.debug { "Trying to find a new path..." }
 
-                    bestPath = pathGenerator
+                    val newPath = pathGenerator
                         .generateSimulatedPaths(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())
-                        .findOne(transactionsDao)?._1
-                        ?.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
+                        .findOne(transactionsDao)
 
-                    if (bestPath != null) {
-                        logger.debug { "A new profitable path found ${tranIntentMarketExtensions.pathString(bestPath)}" }
+                    if (newPath != null) {
+                        bestPath = newPath._1.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
+                        val profit = newPath._2
+                        logger.debug { "A new profitable ($profit) path found ${tranIntentMarketExtensions.pathString(bestPath)}" }
                         break
                     } else {
                         logger.debug { "Profitable path not found" }
+                        delay(60000)
                     }
-
-                    delay(60000)
                 }
 
                 val changedMarkets = modifiedMarkets.concat(marketIdx, bestPath!!)

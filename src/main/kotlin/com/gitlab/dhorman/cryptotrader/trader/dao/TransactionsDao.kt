@@ -41,6 +41,14 @@ class TransactionsDao(
             .awaitSingle()
     }
 
+    suspend fun getActive(id: UUID): Array<TranIntentMarket>? {
+        return databaseClient.execute("SELECT markets FROM poloniex_active_transactions where id = $1")
+            .bind(0, id)
+            .fetch().one()
+            .map { mapper.readValue<Array<TranIntentMarket>>(it["markets"] as String) }
+            .awaitFirstOrNull()
+    }
+
     suspend fun addActive(id: UUID, markets: Array<TranIntentMarket>, activeMarketId: Int) {
         val marketsJson = mapper
             .configure(JsonWriteFeature.WRITE_NUMBERS_AS_STRINGS.mappedFeature(), true)
