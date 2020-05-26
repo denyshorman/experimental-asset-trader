@@ -40,3 +40,30 @@ package:
   interruptible: true
   only:
     - master
+
+deploy:
+  image: debian
+  stage: deploy
+  before_script:
+    - mkdir ~/.ssh
+    - cp $DEPLOY_SERVER_SSH_PRIVATE_KEY ~/.ssh/id_rsa
+    - cp $DEPLOY_SERVER_SSH_KNOWN_HOSTS ~/.ssh/known_hosts
+    - chmod 700 ~/.ssh
+    - chmod 600 ~/.ssh/id_rsa
+    - chmod 644 ~/.ssh/known_hosts
+    - apt-get -qq update && apt-get install netcat-openbsd openssh-client tor -y -qq > /dev/null
+    - tor --runasdaemon 1
+    - while ! nc -z localhost 9050; do sleep 0.1; done
+  script:
+    - |
+      ssh -o ProxyCommand='nc -X 5 -x localhost:9050 %h %p' \
+      $DEPLOY_SERVER_SSH_USER@$DEPLOY_SERVER_SSH_SERVER "
+      docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY &&
+      docker-compose down &&
+      docker-compose pull &&
+      docker-compose up -d &&
+      docker logout $CI_REGISTRY
+      "
+  only:
+    - master
+  when: manual
