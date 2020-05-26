@@ -3,6 +3,7 @@ image: scratch
 stages:
   - build
   - package
+  - deploy
 
 build:
   image: bellsoft/liberica-openjdk-alpine:14
