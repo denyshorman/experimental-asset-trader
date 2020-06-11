@@ -160,11 +160,13 @@ data class TradeHistoryPrivate(
     val amount: BigDecimal,
     val total: BigDecimal,
     val fee: BigDecimal,
+    val feeDisplay: BigDecimal,
     @JsonProperty("orderNumber") val orderId: Long,
     val type: OrderType,
     val category: TradeCategory
 ) {
     val feeMultiplier get(): BigDecimal = fee.oneMinusAdjPoloniex
+    val feeDisplayMultiplier get(): BigDecimal = feeDisplay.oneMinusAdjPoloniex
 }
 
 data class OrderTrade(
@@ -192,11 +194,14 @@ data class LimitOrderResult(
     @JsonProperty("orderNumber") val orderId: Long,
     @JsonProperty("resultingTrades") val trades: Array<BuyResultingTrade>,
     val fee: BigDecimal,
+    val tokenFee: BigDecimal,
+    val tokenFeeCurrency: Currency?,
     @JsonProperty("currencyPair") val market: Market,
     val amountUnfilled: Amount?, // available when ImmediateOrCancel order type is used
     val clientOrderId: Long?
 ) {
     val feeMultiplier get(): BigDecimal = fee.oneMinusAdjPoloniex
+    val tokenFeeMultiplier get(): BigDecimal = tokenFee.oneMinusAdjPoloniex
 }
 
 data class BuyResultingTrade(
@@ -206,7 +211,8 @@ data class BuyResultingTrade(
     val amount: Amount,
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") val date: LocalDateTime,
     val total: BigDecimal,
-    val takerAdjustment: BigDecimal
+    val takerAdjustment: BigDecimal,
+    val tokenCurrency: Currency?
 )
 
 enum class BuyOrderType(@get:JsonValue val id: String) {
