@@ -84,7 +84,8 @@ class PoloniexTrader(
             splitAlgo,
             delayedTradeManager,
             pathGenerator,
-            blacklistedMarketsDao
+            blacklistedMarketsDao,
+            clock
         )
 
         collectRoundingLeftovers()

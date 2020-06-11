@@ -4,9 +4,7 @@ import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.getOrderBookFlowBy
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.BuyOrderType
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.algo.MergeTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.algo.SplitTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
@@ -44,9 +42,11 @@ import java.math.BigDecimal
 import java.net.ConnectException
 import java.net.SocketException
 import java.net.UnknownHostException
+import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 class TransactionIntent(
@@ -66,7 +66,8 @@ class TransactionIntent(
     private val splitAlgo: SplitTradeAlgo,
     private val delayedTradeManager: DelayedTradeManager,
     private val pathGenerator: PathGenerator,
-    private val blacklistedMarkets: BlacklistedMarketsDao
+    private val blacklistedMarkets: BlacklistedMarketsDao,
+    private val clock: Clock
 ) {
     private val soundSignalEnabled = System.getenv("ENABLE_SOUND_SIGNAL") != null
     private val fromAmountInputChannel = Channel<Tuple3<Amount, Amount, CompletableDeferred<Boolean>>>()
@@ -86,7 +87,8 @@ class TransactionIntent(
         splitAlgo,
         delayedTradeManager,
         pathGenerator,
-        blacklistedMarkets
+        blacklistedMarkets,
+        clock
     )
 
     fun start(): Job = TranIntentScope.launch(CoroutineName("INTENT $id")) {
@@ -517,7 +519,43 @@ class TransactionIntent(
         feeFlow: Flow<FeeMultiplier>,
         cancel: AtomicBoolean
     ): Array<BareTrade> {
+        return InstantTradeMutex.withLock(market, orderType) {
+            tradeInstantlyImpl(path, market, orderType, fromCurrencyAmount, orderBookFlow, feeFlow, cancel)
+        }
+    }
+
+    private suspend fun tradeInstantlyImpl(
+        path: Array<TranIntentMarket>,
+        market: Market,
+        orderType: OrderType,
+        fromCurrencyAmount: Amount,
+        orderBookFlow: Flow<OrderBookAbstract>,
+        feeFlow: Flow<FeeMultiplier>,
+        cancel: AtomicBoolean
+    ): Array<BareTrade> {
+        var lastClientOrderId: Long? = null
+        var lastOrderCreateTime: Instant? = null
+        var lastPrice: Price? = null
+        var recheckTrades = false
+
         while (true) {
+            if (recheckTrades) {
+                logger.debug {
+                    "Trying to fetch missed trades using workaround for order $lastClientOrderId " +
+                        "with time $lastOrderCreateTime, " +
+                        "price $lastPrice"
+                }
+
+                val missedTrades = poloniexApi.missedTrades(market, orderType, TradeCategory.Exchange, lastOrderCreateTime!!, lastPrice!!, true, emptySet())
+
+                if (missedTrades.nonEmpty()) {
+                    logger.debug { "Missed trades: $missedTrades" }
+                    return missedTrades.toArray()
+                } else {
+                    logger.debug("Missed trades not found")
+                }
+            }
+
             if (cancel.get()) throw CancellationException()
 
             val initAmount = tranIntentMarketExtensions.fromAmount(path.first(), path, 0)
@@ -550,20 +588,25 @@ class TransactionIntent(
 
             val transaction = try {
                 logger.debug { "Trying to $orderType on market $market with price $lastTradePrice and amount $expectQuoteAmount" }
-                // TODO: Handle case when request has been sent but response has not been received due to connection issues.
-                poloniexApi.placeLimitOrder(market, orderType, lastTradePrice, expectQuoteAmount, BuyOrderType.FillOrKill)
+                lastClientOrderId = poloniexApi.generateOrderId()
+                lastOrderCreateTime = Instant.now(clock)
+                lastPrice = lastTradePrice
+                poloniexApi.placeLimitOrder(market, orderType, lastTradePrice, expectQuoteAmount, BuyOrderType.FillOrKill, lastClientOrderId)
             } catch (e: Throwable) {
                 when (e) {
                     is CancellationException -> throw e
                     is UnableToFillOrderException -> {
+                        recheckTrades = false
                         logger.debug(e.originalMsg)
                         delay(100)
                     }
                     is TransactionFailedException -> {
+                        recheckTrades = false
                         logger.debug(e.originalMsg)
                         delay(500)
                     }
                     is MaxOrdersExceededException -> {
+                        recheckTrades = false
                         logger.warn(e.originalMsg)
                         delay(1500)
                     }
@@ -573,6 +616,8 @@ class TransactionIntent(
                     is WriteTimeoutException,
                     is ConnectException,
                     is SocketException -> {
+                        recheckTrades = true
+                        logger.debug { "Can't do instant trade: ${e.message}" }
                         delay(2000)
                     }
                     is NotEnoughCryptoException,
@@ -692,7 +737,8 @@ class TransactionIntent(
             private val splitAlgo: SplitTradeAlgo,
             private val delayedTradeManager: DelayedTradeManager,
             private val pathGenerator: PathGenerator,
-            private val blacklistedMarkets: BlacklistedMarketsDao
+            private val blacklistedMarkets: BlacklistedMarketsDao,
+            private val clock: Clock
         ) {
             fun create(id: PathId, markets: Array<TranIntentMarket>, marketIdx: Int): TransactionIntent {
                 return TransactionIntent(
@@ -712,8 +758,20 @@ class TransactionIntent(
                     splitAlgo,
                     delayedTradeManager,
                     pathGenerator,
-                    blacklistedMarkets
+                    blacklistedMarkets,
+                    clock
                 )
+            }
+        }
+
+        private object InstantTradeMutex {
+            private val locks = ConcurrentHashMap<Tuple2<Market, OrderType>, Mutex>()
+            private val defaultLock = { Mutex() }
+
+            suspend fun <T> withLock(market: Market, orderType: OrderType, action: suspend () -> T): T {
+                return locks.getOrPut(tuple(market, orderType), defaultLock).withLock {
+                    action()
+                }
             }
         }
     }

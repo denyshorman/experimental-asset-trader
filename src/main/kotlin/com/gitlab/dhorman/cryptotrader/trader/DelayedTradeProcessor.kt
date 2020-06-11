@@ -414,7 +414,7 @@ class DelayedTradeProcessor(
                                                 "price ${order.price}, " +
                                                 "processed trades $processedTrades"
                                         }
-                                        poloniexApi.missedTrades(market, orderType, TradeCategory.Exchange, order.createTime, order.price, processedTrades)
+                                        poloniexApi.missedTrades(market, orderType, TradeCategory.Exchange, order.createTime, order.price, false, processedTrades)
                                     }
                                 }
                             }

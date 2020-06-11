@@ -37,6 +37,7 @@ suspend fun ExtendedPoloniexApi.missedTrades(
     tradeCategory: TradeCategory,
     fromTs: Instant,
     price: Price,
+    priceUpperLimit: Boolean,
     processedTrades: Set<Long>
 ): List<BareTrade> {
     while (true) {
@@ -46,7 +47,7 @@ suspend fun ExtendedPoloniexApi.missedTrades(
                 .filter {
                     it.type == orderType
                         && it.category == tradeCategory
-                        && it.price == price
+                        && (if (priceUpperLimit) if (orderType == OrderType.Buy) it.price >= price else it.price <= price else it.price.compareTo(price) == 0)
                         && !processedTrades.contains(it.tradeId)
                 }
                 .map { trade -> BareTrade(trade.amount, trade.price, trade.feeMultiplier) }
