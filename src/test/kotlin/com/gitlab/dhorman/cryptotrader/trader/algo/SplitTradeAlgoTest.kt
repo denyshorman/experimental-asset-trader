@@ -199,6 +199,82 @@ class SplitTradeAlgoTest {
         assertEquals(tranIntentMarketExtensions.targetAmount(commit[1] as TranIntentMarketCompleted), (commit[2] as TranIntentMarketPartiallyCompleted).fromAmount)
     }
 
+    @Test
+    fun `Correctly split markets by trade`() {
+        val markets = Array.of(
+            TranIntentMarketCompleted(
+                market = Market("USDT", "STEEM"),
+                orderSpeed = OrderSpeed.Instant,
+                fromCurrencyType = CurrencyType.Base,
+                trades = Array.of(
+                    BareTrade(quoteAmount = BigDecimal("1E-8"), price = BigDecimal("0.20256151"), feeMultiplier = BigDecimal("0.99910000")),
+                    BareTrade(quoteAmount = BigDecimal("1E-8"), price = BigDecimal("0.20256151"), feeMultiplier = BigDecimal("0.99910000")),
+                    BareTrade(quoteAmount = BigDecimal("0.00602591"), price = BigDecimal("0.20256151"), feeMultiplier = BigDecimal("0.99910000")),
+                    BareTrade(quoteAmount = BigDecimal("1.53335976"), price = BigDecimal("0.20256151"), feeMultiplier = BigDecimal("0.99910000")),
+                    BareTrade(quoteAmount = BigDecimal("0.04357190"), price = BigDecimal("0.20258026"), feeMultiplier = BigDecimal("0.99910000")),
+                    BareTrade(quoteAmount = BigDecimal("14.90336851"), price = BigDecimal("0.20258016"), feeMultiplier = BigDecimal("0.99910000")),
+                    BareTrade(quoteAmount = BigDecimal("4E-8"), price = BigDecimal("0"), feeMultiplier = BigDecimal("1")),
+                    BareTrade(quoteAmount = BigDecimal("1.9E-7"), price = BigDecimal("1"), feeMultiplier = BigDecimal("0"))
+                )
+            ),
+            TranIntentMarketCompleted(
+                market = Market("BTC", "STEEM"),
+                orderSpeed = OrderSpeed.Instant,
+                fromCurrencyType = CurrencyType.Quote,
+                trades = Array.of(
+                    BareTrade(quoteAmount = BigDecimal("5.43088303"), price = BigDecimal("0.00002163"), feeMultiplier = BigDecimal("0.99875000")),
+                    BareTrade(quoteAmount = BigDecimal("9.46039833"), price = BigDecimal("0.00002162"), feeMultiplier = BigDecimal("0.99875000")),
+                    BareTrade(quoteAmount = BigDecimal("0.00602049"), price = BigDecimal("0.00002162"), feeMultiplier = BigDecimal("0.99875000")),
+                    BareTrade(quoteAmount = BigDecimal("1.53197974"), price = BigDecimal("0.00002162"), feeMultiplier = BigDecimal("0.99875000")),
+                    BareTrade(quoteAmount = BigDecimal("0.04353269"), price = BigDecimal("0.00002162"), feeMultiplier = BigDecimal("0.99875000")),
+                    BareTrade(quoteAmount = BigDecimal("1E-8"), price = BigDecimal("0"), feeMultiplier = BigDecimal("0")),
+                    BareTrade(quoteAmount = BigDecimal("-0.00132588"), price = BigDecimal("1"), feeMultiplier = BigDecimal("0"))
+                )
+            ),
+            TranIntentMarketCompleted(
+                market = Market("BTC", "ETH"),
+                orderSpeed = OrderSpeed.Delayed,
+                fromCurrencyType = CurrencyType.Base,
+                trades = Array.of(
+                    BareTrade(quoteAmount = BigDecimal("0.01282798"), price = BigDecimal("0.02506702"), feeMultiplier = BigDecimal("0.99875000")),
+                    BareTrade(quoteAmount = BigDecimal("0.00000492"), price = BigDecimal("0.02506702"), feeMultiplier = BigDecimal("0.99875000")),
+                    BareTrade(quoteAmount = BigDecimal("0.00131948"), price = BigDecimal("0.02506702"), feeMultiplier = BigDecimal("0.99875000")),
+                    BareTrade(quoteAmount = BigDecimal("0.00003746"), price = BigDecimal("0.02506702"), feeMultiplier = BigDecimal("0.99875000")),
+                    BareTrade(quoteAmount = BigDecimal("3E-8"), price = BigDecimal("0"), feeMultiplier = BigDecimal("1"))
+                )
+            ),
+            TranIntentMarketCompleted(
+                market = Market("USDT", "ETH"),
+                orderSpeed = OrderSpeed.Delayed,
+                fromCurrencyType = CurrencyType.Quote,
+                trades = Array.of(BareTrade(quoteAmount = BigDecimal("0.01417212"), price = BigDecimal("233.72317567"), feeMultiplier = BigDecimal("0.99875000")))
+            ),
+            TranIntentMarketCompleted(
+                market = Market("USDT", "DAI"),
+                orderSpeed = OrderSpeed.Instant,
+                fromCurrencyType = CurrencyType.Base,
+                trades = Array.of(BareTrade(quoteAmount = BigDecimal("3.30364745"), price = BigDecimal("1.00138180"), feeMultiplier = BigDecimal("0.99875000")))
+            ),
+            TranIntentMarketPartiallyCompleted(
+                market = Market("DAI", "BTC"),
+                orderSpeed = OrderSpeed.Instant,
+                fromCurrencyType = CurrencyType.Base,
+                fromAmount = BigDecimal("3.29951789")
+            ),
+            TranIntentMarketPredicted(market = Market("BTC", "STEEM"), orderSpeed = OrderSpeed.Instant, fromCurrencyType = CurrencyType.Base),
+            TranIntentMarketPredicted(market = Market("USDT", "STEEM"), orderSpeed = OrderSpeed.Delayed, fromCurrencyType = CurrencyType.Quote)
+        )
+
+        val trade = BareTrade(BigDecimal("0.00035233"), BigDecimal("9364.68529055"), BigDecimal("0.99875000"))
+
+        assertTrue { (markets[5] as TranIntentMarketPartiallyCompleted).fromAmount >= amountCalculator.fromAmountBuy(trade) }
+
+        val (update, commit) = splitTradeAlgo.splitMarkets(markets, 5, Array.of(trade))
+
+        println(update)
+        println(commit)
+    }
+
     companion object {
         private val logger = KotlinLogging.logger {}
 

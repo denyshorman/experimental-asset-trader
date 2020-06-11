@@ -245,27 +245,33 @@ class SplitTradeAlgo(
 
                 val percent = updatedTradesTargetAmount.divide(updatedTradesTargetAmount + committedTradesTargetAmount, 8, RoundingMode.DOWN)
 
-                val a = (adjFromAmount * percent).setScale(8, RoundingMode.HALF_EVEN)
-                val b = adjFromAmount - a
+                val f0 = (adjFromAmount * percent).setScale(8, RoundingMode.HALF_EVEN)
+                val f1 = adjFromAmount - f0
 
-                val x = updatedTradesFromAmount + a
-                val y = committedTradesFromAmount + b
+                val d0: BigDecimal
+                val d1: BigDecimal
 
-                val d = when {
-                    x < BigDecimal.ZERO -> -x
-                    y < BigDecimal.ZERO -> y
-                    else -> BigDecimal.ZERO
+                when {
+                    updatedTradesFromAmount + f0 < BigDecimal.ZERO -> {
+                        d0 = -updatedTradesFromAmount
+                        d1 = updatedTradesFromAmount + adjFromAmount
+                    }
+                    committedTradesFromAmount + f1 < BigDecimal.ZERO -> {
+                        d0 = committedTradesFromAmount + adjFromAmount
+                        d1 = -committedTradesFromAmount
+                    }
+                    else -> {
+                        d0 = f0
+                        d1 = f1
+                    }
                 }
 
-                val xx = a - d
-                val yy = b + d
-
-                if (updatedTradesFromAmount + xx < BigDecimal.ZERO || committedTradesFromAmount + yy < BigDecimal.ZERO) {
-                    throw RuntimeException("From amount can't be negative $updatedTradesFromAmount + $xx , $committedTradesFromAmount + $yy")
+                if (updatedTradesFromAmount + d0 < BigDecimal.ZERO || committedTradesFromAmount + d1 < BigDecimal.ZERO) {
+                    throw RuntimeException("From amount can't be negative $updatedTradesFromAmount + $d0 , $committedTradesFromAmount + $d1")
                 }
 
-                if (xx.compareTo(BigDecimal.ZERO) != 0) updatedTrades.add(tradeAdjuster.adjustFromAmount(xx))
-                if (yy.compareTo(BigDecimal.ZERO) != 0) committedTrades.add(tradeAdjuster.adjustFromAmount(yy))
+                if (d0.compareTo(BigDecimal.ZERO) != 0) updatedTrades.add(tradeAdjuster.adjustFromAmount(d0))
+                if (d1.compareTo(BigDecimal.ZERO) != 0) committedTrades.add(tradeAdjuster.adjustFromAmount(d1))
             }
 
             val updated = TranIntentMarketCompleted(
