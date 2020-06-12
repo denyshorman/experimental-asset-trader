@@ -541,9 +541,9 @@ class ExtendedPoloniexApi(
                     logger.debug("Order books for all markets have been fetched")
                     send(orderBooks)
                 }
-                delay(30000)
+                delay(5500)
             }
-        }.share(1, Duration.ofSeconds(100), scope)
+        }.share(1, Duration.ofSeconds(5), scope)
     }
 
     val feeStream: Flow<FeeMultiplier> = run {
