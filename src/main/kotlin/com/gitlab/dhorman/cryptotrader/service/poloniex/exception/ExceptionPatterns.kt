@@ -20,5 +20,6 @@ const val InvalidMarketMsg = """Invalid currency pair."""
 const val InvalidDepthMsg = """Invalid depth."""
 const val OrderMatchingDisabledMsg = """Order matching is currently disabled."""
 const val AlreadyCalledCancelOrMoveOrderMsg = """You have already called cancelOrder or moveOrder on this order. Please wait for that call's response."""
+const val InternalErrorMsg = """Internal error. Please try again."""
 val OrderCompletedOrNotExistPattern = """Order (\d+) is either completed or does not exist\.""".toRegex()
 val OrderWithClientIdCompletedOrNotExistPattern = """Order with clientOrderId (\d+) is either completed or does not exist\.""".toRegex()

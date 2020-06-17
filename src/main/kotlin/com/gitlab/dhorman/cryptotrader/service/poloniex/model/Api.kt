@@ -160,13 +160,12 @@ data class TradeHistoryPrivate(
     val amount: BigDecimal,
     val total: BigDecimal,
     val fee: BigDecimal,
-    val feeDisplay: BigDecimal,
+    val feeDisplay: String,
     @JsonProperty("orderNumber") val orderId: Long,
     val type: OrderType,
     val category: TradeCategory
 ) {
     val feeMultiplier get(): BigDecimal = fee.oneMinusAdjPoloniex
-    val feeDisplayMultiplier get(): BigDecimal = feeDisplay.oneMinusAdjPoloniex
 }
 
 data class OrderTrade(

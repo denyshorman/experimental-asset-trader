@@ -275,6 +275,10 @@ class DelayedTradeProcessor(
                                     } catch (e: TransactionFailedException) {
                                         logger.debug(e.originalMsg)
                                         return@moveOrderLoopBegin
+                                    } catch (e: PoloniexInternalErrorException) {
+                                        logger.debug(e.originalMsg)
+                                        delay(1000)
+                                        return@moveOrderLoopBegin
                                     } catch (e: MaxOrdersExceededException) {
                                         logger.debug(e.originalMsg)
                                         delay(1500)
@@ -594,6 +598,7 @@ class DelayedTradeProcessor(
                     }
 
                     is OrderBookEmptyException,
+                    is PoloniexInternalErrorException,
                     is MaxOrdersExceededException -> run {
                         logger.debug(e.message)
                         delay(1000)

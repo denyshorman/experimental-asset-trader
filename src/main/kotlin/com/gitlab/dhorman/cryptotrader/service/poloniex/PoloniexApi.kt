@@ -510,6 +510,10 @@ open class PoloniexApi(
             return AlreadyCalledCancelOrMoveOrderException
         }
 
+        if (InternalErrorMsg == msg) {
+            return PoloniexInternalErrorException
+        }
+
         return e
     }
 
