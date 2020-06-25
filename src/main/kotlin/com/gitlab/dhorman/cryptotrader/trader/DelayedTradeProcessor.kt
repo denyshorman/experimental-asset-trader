@@ -401,13 +401,12 @@ class DelayedTradeProcessor(
                                 }
                             }
 
+                            val processedTrades = orders.asSequence().flatMap { order ->
+                                order.trades.asSequence().filter { it.value.processed }.map { it.key }
+                            }.toHashSet()
+
                             val missedTradesDeferred = orders.map { order ->
                                 async {
-                                    val processedTrades = order.trades.asSequence()
-                                        .filter { it.value.processed }
-                                        .map { it.key }
-                                        .toHashSet()
-
                                     if (order.orderId != null) {
                                         logger.debug { "Trying to fetch missed trades for order ${order.orderId} and processed trades $processedTrades" }
                                         poloniexApi.missedTrades(order.orderId!!, processedTrades)
