@@ -192,19 +192,17 @@ fun SimulatedPath.OrderIntent.waitTime(
     return when (orderSpeed) {
         OrderSpeed.Instant -> ALMOST_ZERO
         OrderSpeed.Delayed -> {
-            var timeSum = ALMOST_ZERO
+            if (tradeVolumeStat.size() == 0) return INT_MAX_VALUE_BIG_DECIMAL
+            var volumeSum = ALMOST_ZERO
             val fromCurrencyType = market.tpe(fromCurrency) ?: throw RuntimeException("Currency $fromCurrency does not exist in market $market")
             val orderType = market.orderType(AmountType.From, fromCurrency) ?: throw RuntimeException("Currency $fromCurrency does not exist in market $market")
             tradeVolumeStat.forEach { stat ->
                 val volumePerPeriod = stat.volume(fromCurrencyType, orderType)
-                val time = when {
-                    fromAmount.compareTo(BigDecimal.ZERO) == 0 -> ALMOST_ZERO
-                    volumePerPeriod.compareTo(BigDecimal.ZERO) == 0 -> INT_MAX_VALUE_BIG_DECIMAL
-                    else -> fromAmount.divide(volumePerPeriod, 16, RoundingMode.HALF_EVEN)
-                }
-                timeSum += time
+                volumeSum += volumePerPeriod
             }
-            timeSum.divide(tradeVolumeStat.size().toBigDecimal(), 16, RoundingMode.HALF_EVEN)
+            if (volumeSum.compareTo(BigDecimal.ZERO) == 0) return INT_MAX_VALUE_BIG_DECIMAL
+            val avgVolume = volumeSum.divide(tradeVolumeStat.size().toBigDecimal(), 16, RoundingMode.HALF_EVEN)
+            fromAmount.divide(avgVolume, 16, RoundingMode.HALF_EVEN)
         }
     }
 }
@@ -221,7 +219,8 @@ suspend fun SimulatedPath.waitTime(
         val tradeVolumeStat = tradeVolumeStatMap.getOrNull(orderIntent.market)?.first()
             ?: throw Exception("Volume stat for market ${orderIntent.market} does not exist in map")
         val fromAmount = amountsIterator.next()._1
-        waitTimeSum += orderIntent.waitTime(currency, fromAmount, tradeVolumeStat)
+        val waitTime = orderIntent.waitTime(currency, fromAmount, tradeVolumeStat)
+        waitTimeSum += if (waitTime.compareTo(INT_MAX_VALUE_BIG_DECIMAL) == 0 && waitTimeSum >= waitTime) BigDecimal.ZERO else waitTime
         currency = orderIntent.market.other(currency) ?: throw RuntimeException("Currency $currency does not exist in market ${orderIntent.market}")
     }
     return waitTimeSum
