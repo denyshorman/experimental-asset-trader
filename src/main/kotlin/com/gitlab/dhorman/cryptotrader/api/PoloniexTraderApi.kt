@@ -9,10 +9,9 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Ticker
 import com.gitlab.dhorman.cryptotrader.trader.*
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
+import com.gitlab.dhorman.cryptotrader.trader.dao.SettingsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
-import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
-import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
-import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
+import com.gitlab.dhorman.cryptotrader.trader.model.*
 import com.gitlab.dhorman.cryptotrader.util.CsvGenerator
 import com.gitlab.dhorman.cryptotrader.util.first
 import io.swagger.annotations.ApiOperation
@@ -38,6 +37,7 @@ import java.util.*
 class PoloniexTraderApi(
     private val poloniexTrader: PoloniexTrader,
     private val transactionsDao: TransactionsDao,
+    private val settingsDao: SettingsDao,
     private val poloniexApi: ExtendedPoloniexApi,
     private val pathGenerator: PathGenerator,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator
@@ -71,6 +71,42 @@ class PoloniexTraderApi(
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active"])
     suspend fun getActiveTransactions(): List<Tuple2<UUID, Array<TranIntentMarket>>> {
         return transactionsDao.getActive()
+    }
+
+    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active/{id}"])
+    suspend fun getPathsForActiveTransaction(@PathVariable id: UUID, serverHttpResponse: ServerHttpResponse): Flow<String> {
+        serverHttpResponse.headers.set(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=paths.csv")
+        val fee = poloniexApi.feeStream.first()
+        val orderBooks = poloniexApi.orderBooksPollingStream.first()
+        val tradeVolumeStat = poloniexApi.tradeVolumeStat.first()
+        val primaryCurrencies = settingsDao.getPrimaryCurrencies()
+        val activeTransaction = transactionsDao.getActive(id) ?: throw Exception("Transaction $id not found")
+        val initAmount = when (val tran = activeTransaction[0]) {
+            is TranIntentMarketCompleted -> tranIntentMarketExtensions.fromAmount(tran)
+            is TranIntentMarketPartiallyCompleted -> tran.fromAmount
+            is TranIntentMarketPredicted -> throw Exception("Transaction $id does not have from amount")
+        }
+        val idx = tranIntentMarketExtensions.partiallyCompletedMarketIndex(activeTransaction)
+            ?: throw Exception("Partially completed market not found")
+        val currentMarket = activeTransaction[idx] as TranIntentMarketPartiallyCompleted
+        val currentCurrency = currentMarket.fromCurrency
+        val currentAmount = currentMarket.fromAmount
+
+        val allPaths = pathGenerator.generate(currentCurrency, currentAmount, primaryCurrencies)
+
+        return allPaths.asFlow()
+            .simulatedPathWithAmounts(currentCurrency, currentAmount, fee, orderBooks, amountCalculator)
+            .simulatedPathWithAmountsAndProfit(initAmount)
+            .simulatedPathWithProfitAndProfitability(currentCurrency, tradeVolumeStat)
+            .map { (path, profit, profitability) ->
+                CsvGenerator.toCsvNewLine(
+                    currentCurrency,
+                    path.targetCurrency(currentCurrency)!!,
+                    path.marketsTinyString(),
+                    profit,
+                    profitability
+                )
+            }
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/completed"])
