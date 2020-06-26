@@ -108,8 +108,7 @@ class PoloniexTrader(
                 logger.debug { "Requested currency $startCurrency and amount $requestedAmount for transaction" }
 
                 val (bestPath, profit, _) = pathGenerator
-                    .generateSimulatedPaths(requestedAmount, startCurrency, requestedAmount, settingsDao.getPrimaryCurrencies())
-                    .findOne(transactionsDao) ?: return@collect
+                    .findBest(requestedAmount, startCurrency, requestedAmount, settingsDao.getPrimaryCurrencies()) ?: return@collect
 
                 logger.debug {
                     "Found an optimal path: ${bestPath.marketsTinyString()} using amount $requestedAmount with potential profit $profit"
@@ -196,8 +195,7 @@ class PoloniexTrader(
 
                     while (true) {
                         bestPath = pathGenerator
-                            .generateSimulatedPaths(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())
-                            .findOne(transactionsDao)?._1
+                            .findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())?._1
                             ?.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
 
                         if (bestPath != null) {
@@ -295,8 +293,7 @@ class PoloniexTrader(
         val activeMarketId = updatedMarkets.length() - 1
 
         val bestPath = pathGenerator
-            .generateSimulatedPaths(initCurrencyAmount, currentCurrency, currentCurrencyAmount, settingsDao.getPrimaryCurrencies())
-            .findOne(transactionsDao)?._1
+            .findBest(initCurrencyAmount, currentCurrency, currentCurrencyAmount, settingsDao.getPrimaryCurrencies())?._1
             ?.toTranIntentMarket(currentCurrencyAmount, currentCurrency)
 
         if (bestPath == null) {

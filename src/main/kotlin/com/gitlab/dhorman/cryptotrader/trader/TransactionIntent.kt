@@ -394,9 +394,7 @@ class TransactionIntent(
                 while (true) {
                     logger.debug { "Trying to find a new path..." }
 
-                    val newPath = pathGenerator
-                        .generateSimulatedPaths(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())
-                        .findOne(transactionsDao)
+                    val newPath = pathGenerator.findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())
 
                     if (newPath != null) {
                         bestPath = newPath._1.toTranIntentMarket(fromCurrencyAmount, fromCurrency)

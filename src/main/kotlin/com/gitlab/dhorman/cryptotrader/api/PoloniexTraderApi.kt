@@ -1,6 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.api
 
 import com.gitlab.dhorman.cryptotrader.core.Market
+import com.gitlab.dhorman.cryptotrader.core.SimulatedPath
 import com.gitlab.dhorman.cryptotrader.core.marketsTinyString
 import com.gitlab.dhorman.cryptotrader.core.targetCurrency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
@@ -21,6 +22,7 @@ import io.vavr.Tuple4
 import io.vavr.collection.Array
 import io.vavr.collection.Map
 import io.vavr.kotlin.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import mu.KotlinLogging
 import org.springframework.http.HttpHeaders
@@ -107,6 +109,25 @@ class PoloniexTraderApi(
                     profitability
                 )
             }
+            .flowOn(Dispatchers.IO)
+    }
+
+    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active/{id}/best-path"])
+    suspend fun findBestPathForActiveTransaction(@PathVariable id: UUID): Tuple3<SimulatedPath, BigDecimal, BigDecimal>? {
+        val primaryCurrencies = settingsDao.getPrimaryCurrencies()
+        val activeTransaction = transactionsDao.getActive(id) ?: throw Exception("Transaction $id not found")
+        val initAmount = when (val tran = activeTransaction[0]) {
+            is TranIntentMarketCompleted -> tranIntentMarketExtensions.fromAmount(tran)
+            is TranIntentMarketPartiallyCompleted -> tran.fromAmount
+            is TranIntentMarketPredicted -> throw Exception("Transaction $id does not have from amount")
+        }
+        val idx = tranIntentMarketExtensions.partiallyCompletedMarketIndex(activeTransaction)
+            ?: throw Exception("Partially completed market not found")
+        val currentMarket = activeTransaction[idx] as TranIntentMarketPartiallyCompleted
+        val currentCurrency = currentMarket.fromCurrency
+        val currentAmount = currentMarket.fromAmount
+
+        return pathGenerator.findBest(initAmount, currentCurrency, currentAmount, primaryCurrencies)
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/completed"])
@@ -163,6 +184,6 @@ class PoloniexTraderApi(
                     }
                     .collect { emit(it) }
             }
-        }
+        }.flowOn(Dispatchers.IO)
     }
 }

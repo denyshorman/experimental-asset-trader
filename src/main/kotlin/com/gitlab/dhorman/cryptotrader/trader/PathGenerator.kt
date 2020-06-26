@@ -16,7 +16,9 @@ import io.vavr.collection.Map
 import io.vavr.collection.Queue
 import io.vavr.kotlin.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.withContext
 import mu.KotlinLogging
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -26,6 +28,7 @@ import java.util.*
 @Component
 class PathGenerator(
     private val poloniexApi: ExtendedPoloniexApi,
+    private val transactionsDao: TransactionsDao,
     private val blacklistedMarketsDao: BlacklistedMarketsDao,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator
 ) {
@@ -63,6 +66,18 @@ class PathGenerator(
             .simulatedPathWithAmountsAndProfit(initAmount)
             .filter { (_, _, profit) -> profit > BigDecimal.ZERO }
             .simulatedPathWithProfitAndProfitability(fromCurrency, tradeVolumeStat)
+    }
+
+    suspend fun findBest(
+        initAmount: Amount,
+        fromCurrency: Currency,
+        fromAmount: Amount,
+        endCurrencies: Iterable<Currency>
+    ): Tuple3<SimulatedPath, BigDecimal, BigDecimal>? {
+        return withContext(Dispatchers.IO) {
+            generateSimulatedPaths(initAmount, fromCurrency, fromAmount, endCurrencies)
+                .findOne(transactionsDao)
+        }
     }
 }
 
@@ -156,7 +171,7 @@ suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
             activeTranSimulatedPaths.add(value)
             return@collect
         }
-        if (selectedPath == null || comparator.compare(selectedPath, value) == 1) {
+        if (selectedPath == null || comparator.compare(selectedPath, value) == -1) {
             selectedPath = value
         }
     }
@@ -164,7 +179,7 @@ suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
     if (selectedPath == null && activeTranSimulatedPaths.isEmpty()) return null
 
     for (value in activeTranSimulatedPaths) {
-        if (selectedPath == null || comparator.compare(selectedPath, value) == 1) {
+        if (selectedPath == null || comparator.compare(selectedPath, value) == -1) {
             selectedPath = value
         }
     }
