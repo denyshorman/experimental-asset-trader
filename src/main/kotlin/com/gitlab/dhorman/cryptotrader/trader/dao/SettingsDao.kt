@@ -41,6 +41,14 @@ class SettingsDao(private val settingsCachedDao: SettingsCachedDao) {
     suspend fun getBlacklistMarketTime(): Int {
         return settingsCachedDao.getBlacklistMarketTime()
     }
+
+    suspend fun getCheckProfitabilityInterval(): Int {
+        return settingsCachedDao.getCheckProfitabilityInterval()
+    }
+
+    suspend fun getCheckPathPriceThreshold(): BigDecimal {
+        return settingsCachedDao.getCheckPathPriceThreshold()
+    }
 }
 
 @Repository
@@ -59,6 +67,8 @@ class SettingsCachedDao(
     private var _fixedAmount: Map<Currency, Amount> = emptyMap()
     private var _minTradeAmount: BigDecimal = BigDecimal.ZERO
     private var _blacklistMarketTime: Int = 0
+    private var _checkProfitabilityInterval: Int = 0
+    private var _checkPathPriceThreshold: BigDecimal = BigDecimal.ZERO
 
     suspend fun getPrimaryCurrencies(): List<Currency> {
         initCache()
@@ -78,6 +88,16 @@ class SettingsCachedDao(
     suspend fun getBlacklistMarketTime(): Int {
         initCache()
         return _blacklistMarketTime
+    }
+
+    suspend fun getCheckProfitabilityInterval(): Int {
+        initCache()
+        return _checkProfitabilityInterval
+    }
+
+    suspend fun getCheckPathPriceThreshold(): BigDecimal {
+        initCache()
+        return _checkPathPriceThreshold
     }
 
     private suspend fun initCache() {
@@ -153,6 +173,20 @@ class SettingsCachedDao(
                     _blacklistMarketTime = value.toInt()
                 } catch (e: Throwable) {
                     logger.warn("Can't parse blacklistMarketTime from database ${e.message}")
+                }
+            }
+            "checkProfitabilityInterval" -> {
+                try {
+                    _checkProfitabilityInterval = value.toInt()
+                } catch (e: Throwable) {
+                    logger.warn("Can't parse checkProfitabilityInterval from database ${e.message}")
+                }
+            }
+            "checkPathPriceThreshold" -> {
+                try {
+                    _checkPathPriceThreshold = value.toBigDecimal()
+                } catch (e: Throwable) {
+                    logger.warn("Can't parse checkPathPriceThreshold from database ${e.message}")
                 }
             }
             else -> {

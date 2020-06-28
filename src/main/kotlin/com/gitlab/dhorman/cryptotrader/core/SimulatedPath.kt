@@ -226,6 +226,16 @@ suspend fun SimulatedPath.waitTime(
     return waitTimeSum
 }
 
+fun SimulatedPath.marketSpeedCount(orderSpeed: OrderSpeed): Int {
+    var counter = 0
+    for (orderIntent in orderIntents) {
+        if (orderIntent.orderSpeed == orderSpeed) {
+            counter++
+        }
+    }
+    return counter
+}
+
 fun SimulatedPath.toTranIntentMarket(fromAmount: Amount, fromCurrency: Currency): Array<TranIntentMarket> {
     var currency = fromCurrency
     val markets = LinkedList<TranIntentMarket>()

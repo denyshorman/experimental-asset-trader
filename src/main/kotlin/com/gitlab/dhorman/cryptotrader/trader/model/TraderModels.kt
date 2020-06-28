@@ -190,6 +190,12 @@ class TranIntentMarketExtensions(
             .fold(BigDecimal.ZERO) { x, y -> x + y }
     }
 
+    suspend fun diffTargetFromAmount(markets: Array<TranIntentMarket>): BigDecimal {
+        val initAmount = fromAmount(markets.first(), markets, 0)
+        val targetAmount = targetAmount(markets.last(), markets, markets.length() - 1)
+        return targetAmount - initAmount
+    }
+
     suspend fun predictedTargetAmount(market: TranIntentMarketPartiallyCompleted): Amount {
         val fee = poloniexApi.feeStream.first()
         val orderBook = poloniexApi.getOrderBookFlowBy(market.market).first()

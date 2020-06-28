@@ -12,6 +12,7 @@ import com.gitlab.dhorman.cryptotrader.trader.dao.BlacklistedMarketsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.SettingsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
+import com.gitlab.dhorman.cryptotrader.trader.exception.NewProfitablePathFoundException
 import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableDeltaException
 import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableException
 import com.gitlab.dhorman.cryptotrader.trader.exception.NotProfitableTimeoutException
@@ -216,7 +217,8 @@ class TransactionIntent(
 
                         coroutineScope {
                             val profitMonitoringJob = launch(start = CoroutineStart.UNDISPATCHED) {
-                                val startTime = Instant.now()
+                                var lastPathSeekerJobLaunchTime = Instant.now(clock)
+                                var pathSeekerJob: Job? = null
                                 var counter = 0L
 
                                 while (isActive) {
@@ -226,31 +228,38 @@ class TransactionIntent(
                                     val targetAmount = tranIntentMarketExtensions.targetAmount(updatedMarkets.last(), updatedMarkets, updatedMarkets.length() - 1)
 
                                     val profitable = initAmount < targetAmount
-                                    val timeout = Duration.between(startTime, Instant.now()).toMinutes() > 40
 
-                                    if (profitable && !timeout) {
+                                    if (profitable) {
                                         if (counter++ % 15 == 0L) {
                                             logger.debug { "Expected profit: +${targetAmount - initAmount}" }
                                         }
-                                        delay(2000)
-                                        continue
-                                    }
-
-                                    logger.debug {
-                                        val reason = if (!profitable) {
-                                            "path is not profitable (${targetAmount - initAmount})"
-                                        } else {
-                                            "timeout has occurred"
+                                    } else {
+                                        logger.debug {
+                                            val market = updatedMarkets[marketIdx].market
+                                            "Cancelling path ($marketIdx $market) because path is not profitable (${targetAmount - initAmount})"
                                         }
-
-                                        val market = updatedMarkets[marketIdx].market
-
-                                        "Cancelling path ($marketIdx $market) because $reason"
+                                        throw NotProfitableDeltaException(initAmount, targetAmount)
                                     }
 
+                                    val now = Instant.now(clock)
+                                    val timeToFindNewPath = Duration.between(lastPathSeekerJobLaunchTime, now).toMinutes() > settingsDao.getCheckProfitabilityInterval()
 
-                                    if (!profitable) throw NotProfitableDeltaException(initAmount, targetAmount)
-                                    throw NotProfitableTimeoutException
+                                    if (timeToFindNewPath && (pathSeekerJob == null || pathSeekerJob.isCompleted)) {
+                                        lastPathSeekerJobLaunchTime = now
+
+                                        pathSeekerJob = launch pathSeeker@{
+                                            val primaryCurrencies = settingsDao.getPrimaryCurrencies()
+                                            val (path, profit, _) = pathGenerator.findBetter(updatedMarkets, primaryCurrencies) ?: return@pathSeeker
+                                            if (updatedMarkets === modifiedMarkets) {
+                                                logger.debug { "Better path has been found $path with profit +$profit > +${targetAmount - initAmount}" }
+                                                throw NewProfitablePathFoundException(updatedMarkets, path)
+                                            } else {
+                                                logger.debug { "Better path has been found but current intent has been modified during search" }
+                                            }
+                                        }
+                                    }
+
+                                    delay(2000)
                                 }
                             }
 
@@ -391,19 +400,23 @@ class TransactionIntent(
                 val fromCurrencyAmount = currMarket.fromAmount
                 val bestPath: Array<TranIntentMarket>?
 
-                while (true) {
-                    logger.debug { "Trying to find a new path..." }
+                if (e is NewProfitablePathFoundException && modifiedMarkets === e.oldPath) {
+                    bestPath = e.newPath.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
+                } else {
+                    while (true) {
+                        logger.debug { "Trying to find a new path..." }
 
-                    val newPath = pathGenerator.findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())
+                        val newPath = pathGenerator.findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())
 
-                    if (newPath != null) {
-                        bestPath = newPath._1.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
-                        val profit = newPath._2
-                        logger.debug { "A new profitable ($profit) path found ${tranIntentMarketExtensions.pathString(bestPath)}" }
-                        break
-                    } else {
-                        logger.debug { "Profitable path not found" }
-                        delay(60000)
+                        if (newPath != null) {
+                            bestPath = newPath._1.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
+                            val profit = newPath._2
+                            logger.debug { "A new profitable ($profit) path found ${tranIntentMarketExtensions.pathString(bestPath)}" }
+                            break
+                        } else {
+                            logger.debug { "Profitable path not found" }
+                            delay(60000)
+                        }
                     }
                 }
 
