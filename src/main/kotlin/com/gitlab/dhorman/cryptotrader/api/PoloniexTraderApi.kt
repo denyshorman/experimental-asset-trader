@@ -127,7 +127,7 @@ class PoloniexTraderApi(
         val currentCurrency = currentMarket.fromCurrency
         val currentAmount = currentMarket.fromAmount
 
-        return pathGenerator.findBest(initAmount, currentCurrency, currentAmount, primaryCurrencies)
+        return pathGenerator.findBest(initAmount, currentCurrency, currentAmount, primaryCurrencies, id)
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/completed"])

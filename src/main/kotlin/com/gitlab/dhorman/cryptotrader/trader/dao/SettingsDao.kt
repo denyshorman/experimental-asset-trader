@@ -49,6 +49,10 @@ class SettingsDao(private val settingsCachedDao: SettingsCachedDao) {
     suspend fun getCheckPathPriceThreshold(): BigDecimal {
         return settingsCachedDao.getCheckPathPriceThreshold()
     }
+
+    suspend fun getUnfilledInitAmountThreshold(): BigDecimal {
+        return settingsCachedDao.getUnfilledInitAmountThreshold()
+    }
 }
 
 @Repository
@@ -69,6 +73,7 @@ class SettingsCachedDao(
     private var _blacklistMarketTime: Int = 0
     private var _checkProfitabilityInterval: Int = 0
     private var _checkPathPriceThreshold: BigDecimal = BigDecimal.ZERO
+    private var _unfilledInitAmountThreshold: BigDecimal = BigDecimal.ZERO
 
     suspend fun getPrimaryCurrencies(): List<Currency> {
         initCache()
@@ -98,6 +103,11 @@ class SettingsCachedDao(
     suspend fun getCheckPathPriceThreshold(): BigDecimal {
         initCache()
         return _checkPathPriceThreshold
+    }
+
+    suspend fun getUnfilledInitAmountThreshold(): BigDecimal {
+        initCache()
+        return _unfilledInitAmountThreshold
     }
 
     private suspend fun initCache() {
@@ -187,6 +197,13 @@ class SettingsCachedDao(
                     _checkPathPriceThreshold = value.toBigDecimal()
                 } catch (e: Throwable) {
                     logger.warn("Can't parse checkPathPriceThreshold from database ${e.message}")
+                }
+            }
+            "unfilledInitAmountThreshold" -> {
+                try {
+                    _unfilledInitAmountThreshold = value.toBigDecimal()
+                } catch (e: Throwable) {
+                    logger.warn("Can't parse unfilledInitAmountThreshold from database ${e.message}")
                 }
             }
             else -> {

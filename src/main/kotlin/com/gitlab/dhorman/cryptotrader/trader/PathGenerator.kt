@@ -9,6 +9,7 @@ import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmount
 import com.gitlab.dhorman.cryptotrader.trader.dao.BlacklistedMarketsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.SettingsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
+import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
@@ -19,10 +20,8 @@ import io.vavr.Tuple3
 import io.vavr.collection.Map
 import io.vavr.collection.Queue
 import io.vavr.kotlin.*
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.withContext
 import mu.KotlinLogging
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -33,6 +32,7 @@ import java.util.*
 class PathGenerator(
     private val poloniexApi: ExtendedPoloniexApi,
     private val transactionsDao: TransactionsDao,
+    private val unfilledMarketsDao: UnfilledMarketsDao,
     private val settingsDao: SettingsDao,
     private val blacklistedMarketsDao: BlacklistedMarketsDao,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator
@@ -79,17 +79,19 @@ class PathGenerator(
         initAmount: Amount,
         fromCurrency: Currency,
         fromAmount: Amount,
-        endCurrencies: Iterable<Currency>
+        endCurrencies: Iterable<Currency>,
+        pathId: PathId? = null
     ): Tuple3<SimulatedPath, BigDecimal, BigDecimal>? {
         return withContext(Dispatchers.IO) {
             generateSimulatedPaths(initAmount, fromCurrency, fromAmount, endCurrencies)
-                .findOne(transactionsDao)
+                .findOne(transactionsDao, unfilledMarketsDao, settingsDao.getUnfilledInitAmountThreshold(), pathId)
         }
     }
 
     suspend fun findBetter(
         path: io.vavr.collection.Array<TranIntentMarket>,
-        endCurrencies: Iterable<Currency>
+        endCurrencies: Iterable<Currency>,
+        pathId: PathId? = null
     ): Tuple3<SimulatedPath, BigDecimal, BigDecimal>? {
         return withContext(Dispatchers.IO) {
             val initAmount = tranIntentMarketExtensions.fromAmount(path.first(), path, 0)
@@ -145,7 +147,7 @@ class PathGenerator(
                             threshold > definedPriceThreshold
                         }
                 }
-                .findOne(transactionsDao)
+                .findOne(transactionsDao, unfilledMarketsDao, settingsDao.getUnfilledInitAmountThreshold(), pathId)
         }
     }
 }
@@ -207,14 +209,45 @@ fun Flow<Tuple3<SimulatedPath, Array<Tuple2<Amount, Amount>>, Amount>>.simulated
 }
 
 suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
-    transactionsDao: TransactionsDao
-): Tuple3<SimulatedPath, BigDecimal, BigDecimal>? {
-    val activeTransactions = transactionsDao.getActive().map { (_, markets) ->
-        markets.toVavrStream().dropWhile { it is TranIntentMarketCompleted }.toList()
+    transactionsDao: TransactionsDao,
+    unfilledMarketsDao: UnfilledMarketsDao,
+    unfilledInitAmountThreshold: BigDecimal,
+    pathId: PathId? = null
+): Tuple3<SimulatedPath, BigDecimal, BigDecimal>? = coroutineScope {
+    val activeTransactionsFuture = async {
+        transactionsDao.getActive().map { (pathId, markets) ->
+            val path = markets.toVavrStream().dropWhile { it is TranIntentMarketCompleted }.toList()
+            tuple(pathId, path)
+        }
+    }
+
+    val unfilledCurrenciesFuture = async {
+        unfilledMarketsDao.getAllCurrenciesWithInitAmountMoreOrEqual(unfilledInitAmountThreshold)
+    }
+
+    val activeTransactions = activeTransactionsFuture.await()
+    val unfilledCurrencies = unfilledCurrenciesFuture.await()
+
+    val pathCurrenciesInvolved = HashSet<Currency>()
+    activeTransactions.forEach { (id, path) ->
+        path.forEach { intent ->
+            if (pathId != id) {
+                pathCurrenciesInvolved.add(intent.fromCurrency)
+                pathCurrenciesInvolved.add(intent.targetCurrency)
+            }
+        }
+    }
+
+    val currenciesToBeInvolved = LinkedList<Tuple2<Amount, Currency>>()
+    unfilledCurrencies.forEach {
+        val (_, unfilledCurrency) = it
+        if (!pathCurrenciesInvolved.contains(unfilledCurrency)) {
+            currenciesToBeInvolved.add(it)
+        }
     }
 
     fun SimulatedPath.exists(): Boolean {
-        for (transaction in activeTransactions) {
+        for ((_, transaction) in activeTransactions) {
             if (transaction.length() != this.orderIntents.length()) {
                 continue
             }
@@ -230,7 +263,41 @@ suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
         return false
     }
 
-    val comparator = Comparator<Tuple3<SimulatedPath, BigDecimal, BigDecimal>> { (_, profit0, profitability0), (_, profit1, profitability1) ->
+    val comparator = Comparator<Tuple3<SimulatedPath, BigDecimal, BigDecimal>> { (path0, profit0, profitability0), (path1, profit1, profitability1) ->
+        if (!currenciesToBeInvolved.isEmpty()) {
+            var amount0 = BigDecimal.ZERO
+            var amount1 = BigDecimal.ZERO
+            var waitTime0 = 0
+            var waitTime1 = 0
+            for ((amount, currency) in currenciesToBeInvolved) {
+                var i = 1
+                for (orderIntent in path0.orderIntents) {
+                    if (orderIntent.market.contains(currency)) {
+                        amount0 += amount
+                        waitTime0 += i
+                        break
+                    }
+                    if (orderIntent.orderSpeed == OrderSpeed.Delayed) i++
+                }
+                i = 1
+                for (orderIntent in path1.orderIntents) {
+                    if (orderIntent.market.contains(currency)) {
+                        amount1 += amount
+                        waitTime1 += i
+                        break
+                    }
+                    if (orderIntent.orderSpeed == OrderSpeed.Delayed) i++
+                }
+            }
+
+            when {
+                waitTime0 == 0 && waitTime1 == 0 -> {
+                }
+                waitTime0 == 0 && waitTime1 != 0 -> return@Comparator 1
+                waitTime0 != 0 && waitTime1 == 0 -> return@Comparator -1
+                else -> return@Comparator (amount0.toDouble() / waitTime0).compareTo(amount1.toDouble() / waitTime1)
+            }
+        }
         val profitabilityComp = profitability0.compareTo(profitability1)
         if (profitabilityComp == 0) {
             profit0.compareTo(profit1)
@@ -254,7 +321,7 @@ suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
         }
     }
 
-    if (selectedPath == null && activeTranSimulatedPaths.isEmpty()) return null
+    if (selectedPath == null && activeTranSimulatedPaths.isEmpty()) return@coroutineScope null
 
     for (value in activeTranSimulatedPaths) {
         if (selectedPath == null || comparator.compare(selectedPath, value) == -1) {
@@ -262,7 +329,7 @@ suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
         }
     }
 
-    return selectedPath
+    selectedPath
 }
 
 fun calcProfitability(profit: BigDecimal, waitTime: BigDecimal): BigDecimal {

@@ -46,6 +46,7 @@ class PoloniexTrader(
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
     private val tradeAdjuster: PoloniexTradeAdjuster,
     private val pathGenerator: PathGenerator,
+    private val intentManager: IntentManager,
     private val transactionsDao: TransactionsDao,
     private val unfilledMarketsDao: UnfilledMarketsDao,
     private val settingsDao: SettingsDao,
@@ -54,7 +55,6 @@ class PoloniexTrader(
     private val clock: Clock
 ) {
     private val logger = KotlinLogging.logger {}
-    private val intentManager = IntentManager()
     private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, poloniexApi)
     private val mergeAlgo = MergeTradeAlgo(amountCalculator, tradeAdjuster, tranIntentMarketExtensions)
     private val splitAlgo = SplitTradeAlgo(amountCalculator, tradeAdjuster, tranIntentMarketExtensions)
@@ -195,7 +195,7 @@ class PoloniexTrader(
 
                     while (true) {
                         bestPath = pathGenerator
-                            .findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())?._1
+                            .findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies(), id)?._1
                             ?.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
 
                         if (bestPath != null) {

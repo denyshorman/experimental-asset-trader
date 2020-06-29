@@ -37,6 +37,15 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
             .awaitSingle()
     }
 
+    suspend fun getAllCurrenciesWithInitAmountMoreOrEqual(threshold: BigDecimal): kotlin.collections.List<Tuple2<Amount, Currency>> {
+        return databaseClient.execute("SELECT init_currency_amount, current_currency FROM poloniex_unfilled_markets WHERE init_currency_amount >= $1")
+            .bind(0, threshold)
+            .fetch().all()
+            .map { tuple(it["init_currency_amount"] as Amount, it["current_currency"] as Currency) }
+            .collectList()
+            .awaitSingle()
+    }
+
     suspend fun get(id: Long): Tuple4<Currency, Amount, Currency, Amount>? {
         return databaseClient.execute(
             """

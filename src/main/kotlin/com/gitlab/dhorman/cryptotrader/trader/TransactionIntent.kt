@@ -249,7 +249,7 @@ class TransactionIntent(
 
                                         pathSeekerJob = launch pathSeeker@{
                                             val primaryCurrencies = settingsDao.getPrimaryCurrencies()
-                                            val (path, profit, _) = pathGenerator.findBetter(updatedMarkets, primaryCurrencies) ?: return@pathSeeker
+                                            val (path, profit, _) = pathGenerator.findBetter(updatedMarkets, primaryCurrencies, id) ?: return@pathSeeker
                                             if (updatedMarkets === modifiedMarkets) {
                                                 logger.debug { "Better path has been found $path with profit +$profit > +${targetAmount - initAmount}" }
                                                 throw NewProfitablePathFoundException(updatedMarkets, path)
@@ -406,7 +406,7 @@ class TransactionIntent(
                     while (true) {
                         logger.debug { "Trying to find a new path..." }
 
-                        val newPath = pathGenerator.findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies())
+                        val newPath = pathGenerator.findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies(), id)
 
                         if (newPath != null) {
                             bestPath = newPath._1.toTranIntentMarket(fromCurrencyAmount, fromCurrency)

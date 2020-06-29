@@ -6,6 +6,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.core.PoloniexBuySellAmou
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.CurrencyType
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
+import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPredicted
@@ -139,7 +140,11 @@ class PathGeneratorTest {
                 )
             )
 
-            val bestPath = paths.asFlow().findOne(transactionsDao)
+            val unfilledMarketsDao = mock<UnfilledMarketsDao>()
+            val threshold = BigDecimal("0.3")
+            whenever(unfilledMarketsDao.getAllCurrenciesWithInitAmountMoreOrEqual(threshold)).thenReturn(emptyList())
+
+            val bestPath = paths.asFlow().findOne(transactionsDao, unfilledMarketsDao, threshold)
             assertNotNull(bestPath)
             assertEquals(paths[2], bestPath)
         }
@@ -203,7 +208,11 @@ class PathGeneratorTest {
                 )
             )
 
-            val bestPath = paths.asFlow().findOne(transactionsDao)
+            val unfilledMarketsDao = mock<UnfilledMarketsDao>()
+            val threshold = BigDecimal("0.3")
+            whenever(unfilledMarketsDao.getAllCurrenciesWithInitAmountMoreOrEqual(threshold)).thenReturn(emptyList())
+
+            val bestPath = paths.asFlow().findOne(transactionsDao, unfilledMarketsDao, threshold)
             assertNotNull(bestPath)
             assertEquals(paths[0], bestPath)
         }
@@ -219,14 +228,18 @@ class PathGeneratorTest {
             val startCurrency = "USDT"
             val currencies = list("USDT", "USDC", "USDJ", "PAX", "DAI")
 
+            val unfilledMarketsDao = mock<UnfilledMarketsDao>()
+            val threshold = BigDecimal("0.3")
+            whenever(unfilledMarketsDao.getAllCurrenciesWithInitAmountMoreOrEqual(threshold)).thenReturn(emptyList())
+
             val timeInit = measureTimeMillis {
-                pathGenerator.generateSimulatedPaths(startAmount, startCurrency, startAmount, currencies).findOne(transactionsDao)
+                pathGenerator.generateSimulatedPaths(startAmount, startCurrency, startAmount, currencies).findOne(transactionsDao, unfilledMarketsDao, threshold)
             }
 
             println("Found first with $timeInit ms")
 
             val timeSecond = measureTimeMillis {
-                pathGenerator.generateSimulatedPaths(startAmount, startCurrency, startAmount, currencies).findOne(transactionsDao)
+                pathGenerator.generateSimulatedPaths(startAmount, startCurrency, startAmount, currencies).findOne(transactionsDao, unfilledMarketsDao, threshold)
             }
 
             println("Found second with $timeSecond ms")

@@ -5,11 +5,21 @@ import io.vavr.collection.Array
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
+import org.springframework.stereotype.Component
 import java.util.*
 
+@Component
 class IntentManager {
-    private val paths = mutableListOf<TransactionIntent>()
+    private val paths = LinkedList<TransactionIntent>()
     private val mutex = Mutex()
+
+    suspend fun getAll(): List<TransactionIntent> {
+        return mutex.withLock {
+            val pathsCopy = LinkedList<TransactionIntent>()
+            pathsCopy.addAll(paths)
+            pathsCopy
+        }
+    }
 
     suspend fun get(markets: Array<TranIntentMarket>, marketIdx: Int): TransactionIntent? {
         return mutex.withLock {
