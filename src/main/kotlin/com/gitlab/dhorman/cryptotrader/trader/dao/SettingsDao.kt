@@ -53,6 +53,10 @@ class SettingsDao(private val settingsCachedDao: SettingsCachedDao) {
     suspend fun getUnfilledInitAmountThreshold(): BigDecimal {
         return settingsCachedDao.getUnfilledInitAmountThreshold()
     }
+
+    suspend fun getTotalMustBeAtLeastThreshold(): BigDecimal {
+        return settingsCachedDao.getTotalMustBeAtLeastThreshold()
+    }
 }
 
 @Repository
@@ -74,6 +78,7 @@ class SettingsCachedDao(
     private var _checkProfitabilityInterval: Int = 0
     private var _checkPathPriceThreshold: BigDecimal = BigDecimal.ZERO
     private var _unfilledInitAmountThreshold: BigDecimal = BigDecimal.ZERO
+    private var _totalMustBeAtLeastThreshold: BigDecimal = BigDecimal.ZERO
 
     suspend fun getPrimaryCurrencies(): List<Currency> {
         initCache()
@@ -108,6 +113,11 @@ class SettingsCachedDao(
     suspend fun getUnfilledInitAmountThreshold(): BigDecimal {
         initCache()
         return _unfilledInitAmountThreshold
+    }
+
+    suspend fun getTotalMustBeAtLeastThreshold(): BigDecimal {
+        initCache()
+        return _totalMustBeAtLeastThreshold
     }
 
     private suspend fun initCache() {
@@ -204,6 +214,13 @@ class SettingsCachedDao(
                     _unfilledInitAmountThreshold = value.toBigDecimal()
                 } catch (e: Throwable) {
                     logger.warn("Can't parse unfilledInitAmountThreshold from database ${e.message}")
+                }
+            }
+            "totalMustBeAtLeastThreshold" -> {
+                try {
+                    _totalMustBeAtLeastThreshold = value.toBigDecimal()
+                } catch (e: Throwable) {
+                    logger.warn("Can't parse totalMustBeAtLeastThreshold from database ${e.message}")
                 }
             }
             else -> {

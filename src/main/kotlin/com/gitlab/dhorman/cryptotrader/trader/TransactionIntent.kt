@@ -368,7 +368,7 @@ class TransactionIntent(
                 }
             } catch (e: NotProfitableException) {
                 val initAmount = tranIntentMarketExtensions.fromAmount(modifiedMarkets.first(), modifiedMarkets, 0)
-                val threshold = BigDecimal.ONE
+                val threshold = settingsDao.getTotalMustBeAtLeastThreshold()
 
                 if (initAmount < threshold) {
                     throw TotalMustBeAtLeastException(threshold, "Cancelled by profit monitoring job. Can't move because $initAmount < $threshold")
