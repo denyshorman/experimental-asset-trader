@@ -15,7 +15,6 @@ import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.model.*
 import com.gitlab.dhorman.cryptotrader.util.CsvGenerator
 import com.gitlab.dhorman.cryptotrader.util.first
-import io.swagger.annotations.ApiOperation
 import io.vavr.Tuple2
 import io.vavr.Tuple3
 import io.vavr.Tuple4
@@ -47,19 +46,11 @@ class PoloniexTraderApi(
     private val logger = KotlinLogging.logger {}
     private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, poloniexApi)
 
-    @ApiOperation(
-        value = "Retrieve ticker snapshot",
-        notes = "Use this resource to retrieve ticker snapshot"
-    )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/tickers"])
     suspend fun tickersSnapshot(): Map<Market, Ticker> {
         return poloniexApi.marketTickerStream.first()
     }
 
-    @ApiOperation(
-        value = "Retrieve balance snapshot",
-        notes = "Use this resource to retrieve balance snapshot"
-    )
     @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/balances"])
     suspend fun balancesSnapshot(): Map<Currency, Tuple2<Amount, Amount>> {
         return poloniexApi.balanceStream.first()

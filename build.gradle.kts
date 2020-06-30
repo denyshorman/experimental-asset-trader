@@ -7,8 +7,6 @@ group = "com.gitlab.dhorman"
 version = versioning.info.build
 java.sourceCompatibility = JavaVersion.VERSION_11
 
-val swaggerVersion = "3.0.0-SNAPSHOT"
-
 plugins {
     kotlin("jvm") version "1.3.72"
     kotlin("plugin.spring") version "1.3.72"
@@ -19,11 +17,6 @@ plugins {
 
 repositories {
     mavenCentral()
-    jcenter()
-    maven(url = "https://kotlin.bintray.com/kotlinx")
-    maven(url = "https://repo.spring.io/snapshot")
-    maven(url = "https://repo.spring.io/milestone")
-    maven(url = "https://oss.jfrog.org/artifactory/oss-snapshot-local") // swagger
 }
 
 dependencies {
@@ -47,16 +40,8 @@ dependencies {
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("org.springframework.boot:spring-boot-starter-webflux")
-    //implementation("org.springframework.boot:spring-boot-starter-rsocket")
-    //implementation("org.springframework.boot:spring-boot-starter-actuator")
-    implementation("io.springfox:springfox-swagger2:$swaggerVersion")
-    implementation("io.springfox:springfox-swagger-ui:$swaggerVersion")
-    implementation("io.springfox:springfox-spring-webflux:$swaggerVersion")
-    implementation("io.springfox:springfox-bean-validators:$swaggerVersion")
     implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
-    implementation("org.springframework.plugin:spring-plugin-core:2.0.0.RELEASE") // TODO: Remove when springfox and spring will be released
     implementation("io.r2dbc:r2dbc-postgresql")
-    //developmentOnly("org.springframework.boot:spring-boot-devtools")
     testImplementation("org.junit.jupiter:junit-jupiter:5.6.1")
     testImplementation("org.mockito:mockito-core:3.3.3")
     testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.2.0")
@@ -70,7 +55,7 @@ dependencies {
 tasks {
     withType<KotlinCompile>().all {
         with(kotlinOptions) {
-            jvmTarget = "1.8"
+            jvmTarget = "11"
 
             freeCompilerArgs = freeCompilerArgs + listOf(
                 "-Xjsr305=strict",

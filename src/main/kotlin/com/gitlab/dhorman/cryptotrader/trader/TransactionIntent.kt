@@ -511,7 +511,7 @@ class TransactionIntent(
 
     private suspend fun merge(initFromAmount: Amount, currentFromAmount: Amount): Boolean {
         return withContext(NonCancellable) {
-            var merged: CompletableDeferred<Boolean>? = null
+            var merged: CompletableDeferred<Boolean>?
             generalMutex.withLock {
                 if (fromAmountInputChannel.isClosedForSend) return@withContext false
                 merged = CompletableDeferred()
