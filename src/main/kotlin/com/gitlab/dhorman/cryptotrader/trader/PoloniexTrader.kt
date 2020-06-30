@@ -2,18 +2,14 @@ package com.gitlab.dhorman.cryptotrader.trader
 
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.TotalMustBeAtLeastException
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.CurrencyType
-import com.gitlab.dhorman.cryptotrader.service.poloniex.model.OrderType
 import com.gitlab.dhorman.cryptotrader.trader.algo.MergeTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.algo.SplitTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.core.PoloniexTradeAdjuster
-import com.gitlab.dhorman.cryptotrader.trader.dao.BlacklistedMarketsDao
-import com.gitlab.dhorman.cryptotrader.trader.dao.SettingsDao
-import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
-import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
+import com.gitlab.dhorman.cryptotrader.trader.dao.*
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
@@ -26,6 +22,10 @@ import io.vavr.collection.Array
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.flatMapMerge
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.collect
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
@@ -37,6 +37,7 @@ import java.math.RoundingMode
 import java.time.Clock
 import java.time.Duration
 import java.util.*
+import kotlin.time.days
 
 typealias PathId = UUID
 
@@ -51,6 +52,7 @@ class PoloniexTrader(
     private val unfilledMarketsDao: UnfilledMarketsDao,
     private val settingsDao: SettingsDao,
     private val blacklistedMarketsDao: BlacklistedMarketsDao,
+    private val marketLimitsDao: MarketLimitsDao,
     @Qualifier("pg_tran_manager") private val tranManager: ReactiveTransactionManager,
     private val clock: Clock
 ) {
@@ -88,6 +90,7 @@ class PoloniexTrader(
             clock
         )
 
+        startMonitoringMarketLimits()
         collectRoundingLeftovers()
         startMonitoringForTranRequests()
         resumeSleepingTransactions()
@@ -171,6 +174,56 @@ class PoloniexTrader(
     private fun CoroutineScope.startMonitoringForTranRequests(): Job = this.launch {
         for (tranRequest in tranRequests) {
             startPathTransaction(tranRequest)
+        }
+    }
+
+    private fun CoroutineScope.startMonitoringMarketLimits(): Job = this.launch {
+        val delayTime = 1.days
+        val marketLimitsCache = marketLimitsDao.getAll()
+        if (marketLimitsCache.isNotEmpty()) {
+            logger.debug("Market limits are up to date")
+            delay(delayTime)
+        }
+
+        while (isActive) {
+            logger.debug("Start Market limits updates")
+
+            val allMarkets = poloniexApi.marketStream.first()
+            val allBaseCurrencies = HashSet<Currency>()
+            val markets = LinkedList<Market>()
+            allMarkets._2.keysIterator().forEach {market ->
+                val didNotContain = allBaseCurrencies.add(market.baseCurrency)
+                if (didNotContain) markets.add(market)
+            }
+
+            val marketLimits = markets.asFlow().flatMapMerge(Int.MAX_VALUE) {market ->
+                flow {
+                    try {
+                        withContext(NonCancellable) {
+                            val order = poloniexApi.placeLimitOrder(
+                                market,
+                                OrderType.Buy,
+                                SEVEN_ZEROS_AND_ONE,
+                                BigDecimal.ONE,
+                                BuyOrderType.FillOrKill
+                            )
+                            logger.warn("Order $order has been accidentally executed")
+                        }
+                    } catch (e: TotalMustBeAtLeastException) {
+                        emit(MarketLimit(market, null, null, e.totalAmount))
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        logger.warn("Can't trigger TotalMustBeAtLeastException. Another exception returned: ${e.message}")
+                    }
+                }
+            }.toList(LinkedList())
+
+            marketLimitsDao.setAll(marketLimits)
+
+            logger.debug("Market limits have been updated")
+
+            delay(delayTime)
         }
     }
 

@@ -6,6 +6,7 @@ import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.PoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.fromAmountBuy
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.quoteAmount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.TotalMustBeAtLeastException
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
@@ -13,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.fail
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import java.math.BigDecimal
@@ -102,6 +104,26 @@ class PoloniexApiTest {
             println("open orders: $res2")
             val res3 = poloniexApi.cancelOrder(clientOrderId, CancelOrderIdType.Client)
             println("cancel order $res3")
+        }
+
+        Unit
+    }
+
+    @Test
+    fun `Place limit order to trigger TotalMustBeAtLeastException`() = runBlocking(Dispatchers.Default) {
+        try {
+            poloniexApi.placeLimitOrder(
+                Market("TRX", "AVA"),
+                OrderType.Buy,
+                BigDecimal("0.00000001"),
+                BigDecimal.ONE,
+                BuyOrderType.FillOrKill
+            )
+            fail("Should throw TotalMustBeAtLeastException")
+        } catch (e: TotalMustBeAtLeastException) {
+            println(e.message)
+        } catch (e: Throwable) {
+            fail(e.message)
         }
 
         Unit
