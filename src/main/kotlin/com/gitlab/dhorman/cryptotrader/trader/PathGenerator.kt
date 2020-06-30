@@ -6,10 +6,7 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.TradeVolumeStat
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
-import com.gitlab.dhorman.cryptotrader.trader.dao.BlacklistedMarketsDao
-import com.gitlab.dhorman.cryptotrader.trader.dao.SettingsDao
-import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
-import com.gitlab.dhorman.cryptotrader.trader.dao.UnfilledMarketsDao
+import com.gitlab.dhorman.cryptotrader.trader.dao.*
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
@@ -35,6 +32,7 @@ class PathGenerator(
     private val unfilledMarketsDao: UnfilledMarketsDao,
     private val settingsDao: SettingsDao,
     private val blacklistedMarketsDao: BlacklistedMarketsDao,
+    private val marketLimitsDao: MarketLimitsDao,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator
 ) {
     private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, poloniexApi)
@@ -67,9 +65,11 @@ class PathGenerator(
         val fee = poloniexApi.feeStream.first()
         val orderBooks = poloniexApi.orderBooksPollingStream.first()
         val tradeVolumeStat = poloniexApi.tradeVolumeStat.first()
+        val baseCurrencyLimits = marketLimitsDao.getAllBaseCurrencyLimits()
 
         return allPaths.asFlow()
             .simulatedPathWithAmounts(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
+            .filterAmountsByBaseCurrencyLimits(fromCurrency, baseCurrencyLimits)
             .simulatedPathWithAmountsAndProfit(initAmount)
             .filter { (_, _, profit) -> profit > BigDecimal.ZERO }
             .simulatedPathWithProfitAndProfitability(fromCurrency, tradeVolumeStat)
@@ -120,9 +120,11 @@ class PathGenerator(
 
             val currSimulatedPathDelayedCount = currSimulatedPath.marketSpeedCount(OrderSpeed.Delayed)
             val definedPriceThreshold = settingsDao.getCheckPathPriceThreshold()
+            val baseCurrencyLimits = marketLimitsDao.getAllBaseCurrencyLimits()
 
             generate(fromCurrency, fromAmount, endCurrencies).asFlow()
                 .simulatedPathWithAmounts(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
+                .filterAmountsByBaseCurrencyLimits(fromCurrency, baseCurrencyLimits)
                 .simulatedPathWithAmountsAndProfit(initAmount)
                 .filter { (_, _, profit) -> profit > currProfit }
                 .simulatedPathWithProfitAndProfitability(fromCurrency, tradeVolumeStat)
@@ -179,6 +181,36 @@ fun Flow<SimulatedPath>.simulatedPathWithAmounts(
         } catch (e: Throwable) {
             logger.warn { "Can't calculate targetAmount for $path. ${e.message}" }
         }
+    }
+}
+
+fun Flow<Tuple2<SimulatedPath, Array<Tuple2<Amount, Amount>>>>.filterAmountsByBaseCurrencyLimits(
+    fromCurrency: Currency,
+    baseCurrencyLimits: kotlin.collections.Map<Currency, Amount>
+): Flow<Tuple2<SimulatedPath, Array<Tuple2<Amount, Amount>>>> {
+    return filter { (path, amounts) ->
+        var currency = fromCurrency
+        val amountsIterator = amounts.iterator()
+        for (orderIntent in path.orderIntents) {
+            val baseCurrencyLimit = baseCurrencyLimits[orderIntent.market.baseCurrency]
+            if (baseCurrencyLimit != null) {
+                val baseCurrencyAmount = when (currency) {
+                    orderIntent.market.baseCurrency -> amountsIterator.next()._1
+                    orderIntent.market.quoteCurrency -> amountsIterator.next()._2
+                    else -> {
+                        logger.warn("Currency $currency does not exist in market ${orderIntent.market}")
+                        return@filter true
+                    }
+                }
+
+                if (baseCurrencyAmount < baseCurrencyLimit) return@filter false
+            }
+            currency = orderIntent.market.other(currency) ?: run {
+                logger.warn("Currency $currency does not exist in market ${orderIntent.market}")
+                return@filter true
+            }
+        }
+        true
     }
 }
 

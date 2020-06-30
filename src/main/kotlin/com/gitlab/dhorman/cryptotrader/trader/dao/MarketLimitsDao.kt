@@ -2,6 +2,7 @@ package com.gitlab.dhorman.cryptotrader.trader.dao
 
 import com.gitlab.dhorman.cryptotrader.core.Market
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
+import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Price
 import io.r2dbc.postgresql.api.PostgresqlConnection
 import io.r2dbc.spi.ConnectionFactory
@@ -28,6 +29,10 @@ class MarketLimitsDao(private val marketLimitsDao: MarketLimitsCachedDao) {
     suspend fun setAll(marketLimits: List<MarketLimit>) {
         marketLimitsDao.setAll(marketLimits)
     }
+
+    suspend fun getAllBaseCurrencyLimits(): Map<Currency, Amount> {
+        return marketLimitsDao.getAllBaseCurrencyLimits()
+    }
 }
 
 @Repository
@@ -40,6 +45,9 @@ class MarketLimitsCachedDao(private val marketLimitsDao: MarketLimitsDbDao) {
     @Volatile
     private var marketLimits = emptyList<MarketLimit>()
 
+    @Volatile
+    private var marketBaseCurrencyLimits = emptyMap<Currency, Amount>()
+
     private val mutex = Mutex()
 
     suspend fun getAll(): List<MarketLimit> {
@@ -47,10 +55,28 @@ class MarketLimitsCachedDao(private val marketLimitsDao: MarketLimitsDbDao) {
         return marketLimits
     }
 
+    suspend fun getAllBaseCurrencyLimits(): Map<Currency, Amount> {
+        initCache()
+        return marketBaseCurrencyLimits
+    }
+
     suspend fun setAll(marketLimits: List<MarketLimit>) {
         initCache()
-        this.marketLimits = marketLimits
-        marketLimitsDao.setAll(marketLimits)
+        mutex.withLock {
+            this.marketLimits = marketLimits
+            indexData()
+            marketLimitsDao.setAll(marketLimits)
+        }
+    }
+
+    private fun indexData() {
+        val marketBaseCurrencyLimitsMap = HashMap<Currency, Amount>(marketLimits.size)
+        marketBaseCurrencyLimits = marketBaseCurrencyLimitsMap
+        marketLimits.forEach { limit ->
+            if (limit.total != null) {
+                marketBaseCurrencyLimitsMap[limit.market.baseCurrency] = limit.total
+            }
+        }
     }
 
     private suspend fun initCache() {
@@ -66,6 +92,7 @@ class MarketLimitsCachedDao(private val marketLimitsDao: MarketLimitsDbDao) {
     private suspend fun fetchAll() {
         val marketLimits = marketLimitsDao.getAll()
         this.marketLimits = marketLimits
+        indexData()
     }
 
     private fun subscribeToUpdates() {
