@@ -257,3 +257,14 @@ fun SimulatedPath.toTranIntentMarket(fromAmount: Amount, fromCurrency: Currency)
 fun Array<TranIntentMarket>.concat(marketIdx: Int, other: Array<TranIntentMarket>): Array<TranIntentMarket> {
     return this.dropRight(this.length() - marketIdx).appendAll(other)
 }
+
+fun SimulatedPath.isRiskFree(): Boolean {
+    var i = 0
+    while (i < orderIntents.length()) {
+        if (i > 0 && orderIntents[i].orderSpeed == OrderSpeed.Delayed) {
+            return false
+        }
+        i++
+    }
+    return true
+}

@@ -295,6 +295,15 @@ suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
     }
 
     val comparator = Comparator<Tuple3<SimulatedPath, BigDecimal, BigDecimal>> { (path0, profit0, profitability0), (path1, profit1, profitability1) ->
+        val riskFree0 = path0.isRiskFree()
+        val riskFree1 = path1.isRiskFree()
+
+        if (riskFree0 && !riskFree1) {
+            return@Comparator 1
+        } else if (!riskFree0 && riskFree1) {
+            return@Comparator -1
+        }
+
         if (!currenciesToBeInvolved.isEmpty()) {
             var amount0 = BigDecimal.ZERO
             var amount1 = BigDecimal.ZERO
