@@ -17,6 +17,7 @@ build:
       - build/libs/*.jar
     expire_in: 1 day
   interruptible: true
+  retry: 1
   only:
     - master
 
@@ -39,6 +40,7 @@ package:
     - docker buildx create --use --name mybuilder
     - docker buildx build --platform $BUILD_PLATFORMS --push -t $CI_REGISTRY_IMAGE .
   interruptible: true
+  retry: 1
   only:
     - master
 
@@ -68,3 +70,4 @@ deploy:
   only:
     - master
   when: manual
+  retry: 1
