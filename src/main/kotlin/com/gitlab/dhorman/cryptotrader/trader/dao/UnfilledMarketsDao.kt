@@ -3,7 +3,6 @@ package com.gitlab.dhorman.cryptotrader.trader.dao
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import io.vavr.Tuple2
-import io.vavr.Tuple4
 import io.vavr.collection.List
 import io.vavr.kotlin.toVavrList
 import io.vavr.kotlin.tuple
@@ -16,7 +15,7 @@ import java.math.BigDecimal
 
 @Repository
 class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: DatabaseClient) {
-    suspend fun getAll(): List<Tuple4<Currency, Amount, Currency, Amount>> {
+    suspend fun getAll(): List<UnfilledData> {
         return databaseClient.execute(
             """
             SELECT init_currency, init_currency_amount, current_currency, current_currency_amount
@@ -25,7 +24,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
         )
             .fetch().all()
             .map {
-                tuple(
+                UnfilledData(
                     it["init_currency"] as Currency,
                     it["init_currency_amount"] as Amount,
                     it["current_currency"] as Currency,
@@ -37,16 +36,23 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
             .awaitSingle()
     }
 
-    suspend fun getAllCurrenciesWithInitAmountMoreOrEqual(threshold: BigDecimal): kotlin.collections.List<Tuple2<Amount, Currency>> {
-        return databaseClient.execute("SELECT init_currency_amount, current_currency FROM poloniex_unfilled_markets WHERE init_currency_amount >= $1")
+    suspend fun getAllCurrenciesWithInitAmountMoreOrEqual(threshold: BigDecimal): kotlin.collections.List<UnfilledData> {
+        return databaseClient.execute("SELECT init_currency, init_currency_amount, current_currency, current_currency_amount FROM poloniex_unfilled_markets WHERE init_currency_amount >= $1")
             .bind(0, threshold)
             .fetch().all()
-            .map { tuple(it["init_currency_amount"] as Amount, it["current_currency"] as Currency) }
+            .map {
+                UnfilledData(
+                    it["init_currency"] as Currency,
+                    it["init_currency_amount"] as Amount,
+                    it["current_currency"] as Currency,
+                    it["current_currency_amount"] as Amount
+                )
+            }
             .collectList()
             .awaitSingle()
     }
 
-    suspend fun get(id: Long): Tuple4<Currency, Amount, Currency, Amount>? {
+    suspend fun get(id: Long): UnfilledData? {
         return databaseClient.execute(
             """
             SELECT init_currency, init_currency_amount, current_currency, current_currency_amount
@@ -57,7 +63,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
             .bind(0, id)
             .fetch().first()
             .map {
-                tuple(
+                UnfilledData(
                     it["init_currency"] as Currency,
                     it["init_currency_amount"] as Amount,
                     it["current_currency"] as Currency,
@@ -148,3 +154,10 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
             .awaitFirstOrNull()
     }
 }
+
+data class UnfilledData(
+    val initCurrency: Currency,
+    val initAmount: Amount,
+    val currency: Currency,
+    val amount: Amount
+)

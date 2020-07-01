@@ -38,6 +38,7 @@ import java.time.Clock
 import java.time.Duration
 import java.util.*
 import kotlin.time.days
+import kotlin.time.hours
 
 typealias PathId = UUID
 
@@ -91,6 +92,7 @@ class PoloniexTrader(
         )
 
         startMonitoringMarketLimits()
+        startPeriodicUnfilledAmountPathSearcher()
         collectRoundingLeftovers()
         startMonitoringForTranRequests()
         resumeSleepingTransactions()
@@ -145,7 +147,7 @@ class PoloniexTrader(
             }
             val unfilledAmountsAsync = async {
                 unfilledMarketsDao.getAll()
-                    .groupBy({ it._3 }, { it._4 })
+                    .groupBy({ it.currency }, { it.amount })
                     .mapValues { it.value.fold(BigDecimal.ZERO) { a, b -> a + b } }
             }
 
@@ -191,12 +193,12 @@ class PoloniexTrader(
             val allMarkets = poloniexApi.marketStream.first()
             val allBaseCurrencies = HashSet<Currency>()
             val markets = LinkedList<Market>()
-            allMarkets._2.keysIterator().forEach {market ->
+            allMarkets._2.keysIterator().forEach { market ->
                 val didNotContain = allBaseCurrencies.add(market.baseCurrency)
                 if (didNotContain) markets.add(market)
             }
 
-            val marketLimits = markets.asFlow().flatMapMerge(Int.MAX_VALUE) {market ->
+            val marketLimits = markets.asFlow().flatMapMerge(Int.MAX_VALUE) { market ->
                 flow {
                     try {
                         withContext(NonCancellable) {
@@ -224,6 +226,20 @@ class PoloniexTrader(
             logger.debug("Market limits have been updated")
 
             delay(delayTime)
+        }
+    }
+
+    private fun CoroutineScope.startPeriodicUnfilledAmountPathSearcher(): Job = this.launch {
+        while (isActive) {
+            delay(1.hours)
+
+            val unfilled = unfilledMarketsDao.getAllCurrenciesWithInitAmountMoreOrEqual(BigDecimal("0.7"))
+
+            unfilled.asFlow().flatMapMerge(Runtime.getRuntime().availableProcessors()) {
+                flow<Unit> {
+                    startPathTranFromUnfilledTrans(it)
+                }
+            }
         }
     }
 
@@ -307,12 +323,8 @@ class PoloniexTrader(
         }
     }
 
-    suspend fun startPathTranFromUnfilledTrans(id: Long) {
-        val (initCurrency, initCurrencyAmount, currentCurrency, currentCurrencyAmount) = unfilledMarketsDao.get(id)
-            ?: run {
-                logger.warn("Unfilled amount was not found for id $id")
-                return
-            }
+    suspend fun startPathTranFromUnfilledTrans(unfilledData: UnfilledData) {
+        val (initCurrency, initCurrencyAmount, currentCurrency, currentCurrencyAmount) = unfilledData
 
         val f = BigDecimal("0.99910000")
         val q = currentCurrencyAmount.divide(f, 8, RoundingMode.DOWN)
@@ -348,23 +360,34 @@ class PoloniexTrader(
         val bestPath = pathGenerator
             .findBest(initCurrencyAmount, currentCurrency, currentCurrencyAmount, settingsDao.getPrimaryCurrencies())?._1
             ?.toTranIntentMarket(currentCurrencyAmount, currentCurrency)
-
-        if (bestPath == null) {
-            logger.debug { "Path not found for ${tranIntentMarketExtensions.pathString(updatedMarkets)}" }
-            return
-        }
+            ?: return
 
         val changedMarkets = updatedMarkets.concat(activeMarketId, bestPath)
         val tranId = UUID.randomUUID()
 
-        withContext(NonCancellable) {
+        val created = withContext(NonCancellable) {
             tranManager.repeatableReadTran {
-                unfilledMarketsDao.remove(id)
+                val (init, current) = unfilledMarketsDao.get(listOf(initCurrency), currentCurrency).firstOrNull()
+                    ?: return@repeatableReadTran false
+
+                if (init != initCurrencyAmount || current != currentCurrencyAmount) return@repeatableReadTran false
+
+                unfilledMarketsDao.remove(listOf(initCurrency), currentCurrency)
                 transactionsDao.addActive(tranId, changedMarkets, activeMarketId)
+                true
             }
         }
 
-        tranIntentFactory.create(tranId, changedMarkets, activeMarketId).start()
+        if (created) tranIntentFactory.create(tranId, changedMarkets, activeMarketId).start()
+    }
+
+    suspend fun startPathTranFromUnfilledTrans(id: Long) {
+        val data = unfilledMarketsDao.get(id) ?: run {
+            logger.warn("Unfilled amount was not found for id $id")
+            return
+        }
+
+        startPathTranFromUnfilledTrans(data)
     }
 
     suspend fun requestBalanceForTransaction(): Tuple2<Currency, Amount>? {

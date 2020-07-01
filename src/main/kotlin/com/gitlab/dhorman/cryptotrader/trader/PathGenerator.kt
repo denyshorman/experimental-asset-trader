@@ -270,10 +270,9 @@ suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
         }
     }
 
-    val currenciesToBeInvolved = LinkedList<Tuple2<Amount, Currency>>()
+    val currenciesToBeInvolved = LinkedList<UnfilledData>()
     unfilledCurrencies.forEach {
-        val (_, unfilledCurrency) = it
-        if (!pathCurrenciesInvolved.contains(unfilledCurrency)) {
+        if (!pathCurrenciesInvolved.contains(it.currency)) {
             currenciesToBeInvolved.add(it)
         }
     }
@@ -301,7 +300,7 @@ suspend fun Flow<Tuple3<SimulatedPath, BigDecimal, BigDecimal>>.findOne(
             var amount1 = BigDecimal.ZERO
             var waitTime0 = 0
             var waitTime1 = 0
-            for ((amount, currency) in currenciesToBeInvolved) {
+            for ((_, amount, currency, _) in currenciesToBeInvolved) {
                 var i = 1
                 for (orderIntent in path0.orderIntents) {
                     if (orderIntent.market.contains(currency)) {
