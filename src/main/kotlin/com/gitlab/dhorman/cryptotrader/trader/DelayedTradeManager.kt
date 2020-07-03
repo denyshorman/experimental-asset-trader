@@ -20,7 +20,6 @@ class DelayedTradeManager(
     private val splitAlgo: SplitTradeAlgo,
     private val poloniexApi: ExtendedPoloniexApi,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
-    private val transactionsDao: TransactionsDao,
     private val clock: Clock
 ) {
     private val processors = hashMapOf<Tuple2<Market, OrderType>, DelayedTradeProcessor>()
@@ -47,7 +46,6 @@ class DelayedTradeManager(
                 splitAlgo,
                 poloniexApi,
                 amountCalculator,
-                transactionsDao,
                 clock
             )
             processors[key] = newProcessor

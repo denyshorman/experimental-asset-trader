@@ -72,7 +72,7 @@ class PoloniexTrader(
         logger.info("Start trading on Poloniex")
 
         tranIntentScope = CoroutineScope(Dispatchers.Default + SupervisorJob(coroutineContext[Job]))
-        delayedTradeManager = DelayedTradeManager(tranIntentScope, splitAlgo, poloniexApi, amountCalculator, transactionsDao, clock)
+        delayedTradeManager = DelayedTradeManager(tranIntentScope, splitAlgo, poloniexApi, amountCalculator, clock)
         tranIntentFactory = TransactionIntent.Companion.TransactionIntentFactory(
             tranIntentScope,
             intentManager,

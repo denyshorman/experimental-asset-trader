@@ -559,9 +559,9 @@ class TransactionIntent(
 
                 val missedTrades = poloniexApi.missedTrades(market, orderType, TradeCategory.Exchange, lastOrderCreateTime!!, lastPrice!!, true, emptySet())
 
-                if (missedTrades.nonEmpty()) {
+                if (missedTrades.isNotEmpty()) {
                     logger.debug { "Missed trades: $missedTrades" }
-                    return missedTrades.toArray()
+                    return Array.ofAll(missedTrades)
                 } else {
                     logger.debug("Missed trades not found")
                 }

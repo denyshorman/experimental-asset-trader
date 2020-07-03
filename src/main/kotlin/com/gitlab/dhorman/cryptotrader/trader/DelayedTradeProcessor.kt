@@ -6,7 +6,6 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.trader.algo.SplitTradeAlgo
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
-import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.exception.CantMoveOrderSafelyException
 import com.gitlab.dhorman.cryptotrader.trader.exception.CompletePlaceMoveOrderLoop
 import com.gitlab.dhorman.cryptotrader.trader.exception.MoveNotRequiredException
@@ -46,7 +45,6 @@ class DelayedTradeProcessor(
     splitAlgo: SplitTradeAlgo,
     private val poloniexApi: ExtendedPoloniexApi,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
-    private val transactionsDao: TransactionsDao,
     private val clock: Clock
 ) {
     private val scheduler = TradeScheduler(orderType, splitAlgo, amountCalculator)
@@ -141,87 +139,186 @@ class DelayedTradeProcessor(
         fun stopSelf() = thisJob?.cancel()
         fun stoppedSelf() = thisJob?.isCancelled == true
 
-        val tradeMonitoringJob = launch(Job(), CoroutineStart.UNDISPATCHED) {
-            poloniexApi.accountNotificationStream.collect { notifications ->
-                var tradeList: LinkedList<BareTrade>? = null
-                var tradeStatusList: LinkedList<Order.Trade>? = null
-                var orderCancelledList: LinkedList<Order>? = null
-                var orderCreatedList: LinkedList<Order>? = null
+        while (isActive) {
+            try {
+                coroutineScope placeMoveLoopBegin@{
+                    logger.debug { "Start place-move order loop" }
 
-                withContext(NonCancellable) {
-                    for (notification in notifications) {
-                        when (notification) {
-                            is TradeNotification -> run {
-                                val order = if (notification.clientOrderId != null) lastOrder.getOrderWithClientOrderId(notification.clientOrderId) else null
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        logger.debug { "Start connection monitoring" }
+                        poloniexApi.channelStateFlow(DefaultChannel.AccountNotifications.id).filter { !it }.first()
+                        throw DisconnectedException
+                    }
 
-                                if (order != null) {
-                                    if (tradeList == null) {
-                                        tradeList = LinkedList()
-                                        tradeStatusList = LinkedList()
-                                    }
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        poloniexApi.accountNotificationStream.collect { notifications ->
+                            var tradeList: LinkedList<BareTrade>? = null
+                            var tradeStatusList: LinkedList<Order.Trade>? = null
+                            var orderCancelledList: LinkedList<Order>? = null
+                            var orderCreatedList: LinkedList<Order>? = null
 
-                                    val tradeStatus = Order.Trade(notification.tradeId, processed = false)
-                                    order.trades[notification.tradeId] = tradeStatus
-                                    tradeStatusList!!.add(tradeStatus)
-                                    tradeList!!.add(notification.toBareTrade())
-                                }
-                            }
-                            is LimitOrderCreated -> run {
-                                if (notification.clientOrderId != null) {
-                                    val order = lastOrder.getOrderWithClientOrderId(notification.clientOrderId)
-                                    if (order != null) {
-                                        if (orderCreatedList == null) orderCreatedList = LinkedList()
-                                        orderCreatedList!!.add(order)
+                            withContext(NonCancellable) {
+                                for (notification in notifications) {
+                                    when (notification) {
+                                        is TradeNotification -> run {
+                                            val order = if (notification.clientOrderId != null) lastOrder.getOrderWithClientOrderId(notification.clientOrderId) else null
+
+                                            if (order != null) {
+                                                if (tradeList == null) {
+                                                    tradeList = LinkedList()
+                                                    tradeStatusList = LinkedList()
+                                                }
+
+                                                val tradeStatus = Order.Trade(notification.tradeId, processed = false)
+                                                order.trades[notification.tradeId] = tradeStatus
+                                                tradeStatusList!!.add(tradeStatus)
+                                                tradeList!!.add(notification.toBareTrade())
+                                            }
+                                        }
+                                        is LimitOrderCreated -> run {
+                                            if (notification.clientOrderId != null) {
+                                                val order = lastOrder.getOrderWithClientOrderId(notification.clientOrderId)
+                                                if (order != null) {
+                                                    if (orderCreatedList == null) orderCreatedList = LinkedList()
+                                                    orderCreatedList!!.add(order)
+                                                }
+                                            }
+                                        }
+                                        is OrderUpdate -> run {
+                                            if (notification.clientOrderId != null && notification.newAmount.compareTo(BigDecimal.ZERO) == 0) {
+                                                val order = lastOrder.getOrderWithClientOrderId(notification.clientOrderId)
+                                                if (order != null) {
+                                                    if (orderCancelledList == null) orderCancelledList = LinkedList()
+                                                    orderCancelledList!!.add(order)
+                                                }
+                                            }
+                                        }
+                                        else -> run {
+                                            // ignore other events
+                                        }
                                     }
                                 }
-                            }
-                            is OrderUpdate -> run {
-                                if (notification.clientOrderId != null && notification.newAmount.compareTo(BigDecimal.ZERO) == 0) {
-                                    val order = lastOrder.getOrderWithClientOrderId(notification.clientOrderId)
-                                    if (order != null) {
-                                        if (orderCancelledList == null) orderCancelledList = LinkedList()
-                                        orderCancelledList!!.add(order)
-                                    }
+
+                                if (tradeList != null && !tradeList!!.isEmpty()) {
+                                    scheduler.addTrades(tradeList!!)
+                                    tradeStatusList!!.forEach { it.processed = true } // TODO: Does not work well for blackout
                                 }
-                            }
-                            else -> run {
-                                // ignore other events
+
+                                orderCancelledList?.forEach { it.status.value = Order.Status.Cancelled }
+                                orderCreatedList?.forEach { it.status.value = Order.Status.Created }
                             }
                         }
                     }
 
-                    if (tradeList != null && !tradeList!!.isEmpty()) {
-                        scheduler.addTrades(tradeList!!)
-                        tradeStatusList!!.forEach { it.processed = true } // TODO: Does not work well for blackout
-                    }
+                    while (isActive) {
+                        try {
+                            withContext(NonCancellable) {
+                                placeOrder()
+                                logger.debug { "Order ${lastOrder!!.orderId} has been placed (q = ${lastOrder!!.quoteAmount}, p = ${lastOrder!!.price})" }
+                            }
 
-                    orderCancelledList?.forEach { it.status.value = Order.Status.Cancelled }
-                    orderCreatedList?.forEach { it.status.value = Order.Status.Created }
-                }
-            }
-        }
-
-        try {
-            while (isActive) {
-                lastOrder = null
-                lastError = null
-
-                logger.debug { "Start place-move order loop" }
-
-                try {
-                    coroutineScope placeMoveLoopBegin@{
-                        launch(start = CoroutineStart.UNDISPATCHED) {
-                            logger.debug { "Start connection monitoring" }
-                            poloniexApi.channelStateFlow(DefaultChannel.AccountNotifications.id).filter { !it }.first()
-                            throw DisconnectedException
-                        }
-
-                        while (isActive) {
-                            lastOrder = null
                             try {
-                                withContext(NonCancellable) {
-                                    placeOrder()
-                                    logger.debug { "Order ${lastOrder!!.orderId} has been placed (q = ${lastOrder!!.quoteAmount}, p = ${lastOrder!!.price})" }
+                                withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
+                                    lastOrder!!.awaitStatus(Order.Status.Created)
+                                }
+                            } catch (e: TimeoutCancellationException) {
+                                logger.error("Created event has not been received within specified timeout for ${lastOrder?.clientOrderId}")
+                                throw DisconnectedException
+                            }
+
+                            val timeout = Duration.ofSeconds(4)
+                            val timeoutMillis = timeout.toMillis()
+                            var bookUpdateTime = System.currentTimeMillis()
+                            var bookChangeCounter = 0
+                            var prevBook: OrderBookAbstract? = null
+
+                            logger.debug { "Start market maker movement process" }
+
+                            orderBook.returnLastIfNoValueWithinSpecifiedTime(timeout).conflate().collect moveOrderLoopBegin@{ book ->
+                                try {
+                                    withContext(NonCancellable) {
+                                        if (stoppedSelf()) return@withContext
+
+                                        bookChangeCounter = if (bookChangeCounter >= 10) 0 else bookChangeCounter + 1
+                                        val now = System.currentTimeMillis()
+                                        val fixPriceGaps = now - bookUpdateTime >= timeoutMillis || bookChangeCounter == 0
+                                        bookUpdateTime = now
+                                        prevBook = book
+
+                                        moveOrder(book, fixPriceGaps)
+
+                                        logger.debug { "Moved order (q = ${lastOrder?.quoteAmount}, p = ${lastOrder?.price})" }
+                                    }
+                                } catch (e: CantMoveOrderSafelyException) {
+                                    withContext<Unit>(NonCancellable) {
+                                        cancelOrder(lastOrder!!.orderId!!, CancelOrderIdType.Server)
+                                        try {
+                                            withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
+                                                lastOrder!!.awaitStatus(Order.Status.Cancelled)
+                                            }
+                                            throw RepeatPlaceMoveOrderLoopAgain
+                                        } catch (e: TimeoutCancellationException) {
+                                            logger.error("Cancelled event has not been received within specified timeout for order ${lastOrder?.clientOrderId}")
+                                            throw DisconnectedException
+                                        }
+                                    }
+                                } catch (e: OrderBookEmptyException) {
+                                    logger.warn("Can't move order: ${e.message}")
+                                    return@moveOrderLoopBegin
+                                } catch (e: TransactionFailedException) {
+                                    logger.debug(e.originalMsg)
+                                    return@moveOrderLoopBegin
+                                } catch (e: PoloniexInternalErrorException) {
+                                    logger.debug(e.originalMsg)
+                                    delay(1000)
+                                    return@moveOrderLoopBegin
+                                } catch (e: MaxOrdersExceededException) {
+                                    logger.debug(e.originalMsg)
+                                    delay(1500)
+                                    return@moveOrderLoopBegin
+                                } catch (e: MoveNotRequiredException) {
+                                    return@moveOrderLoopBegin
+                                } catch (e: UnableToPlacePostOnlyOrderException) {
+                                    logger.debug {
+                                        val orderBookStr = when (orderType) {
+                                            OrderType.Buy -> prevBook?.bids?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
+                                            OrderType.Sell -> prevBook?.asks?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
+                                        }
+                                        "${e.message} ; book = $orderBookStr | currFromAmount = ${scheduler.fromAmount} | $lastOrder"
+                                    }
+                                    return@moveOrderLoopBegin
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Throwable) {
+                                    when (e) {
+                                        is OrderCompletedOrNotExistException,
+                                        is InvalidOrderNumberException,
+                                        is NotEnoughCryptoException,
+                                        is AmountMustBeAtLeastException,
+                                        is TotalMustBeAtLeastException,
+                                        is RateMustBeLessThanException -> run {
+                                            logger.debug { "Tried to move order but error received: ${e.message} | $lastOrder" }
+                                            try {
+                                                withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
+                                                    lastOrder!!.prevOrder!!.awaitStatus(Order.Status.Cancelled)
+                                                }
+                                                throw RepeatPlaceMoveOrderLoopAgain
+                                            } catch (e: TimeoutCancellationException) {
+                                                logger.error("Cancelled event has not been received within specified timeout for ${lastOrder?.prevOrder?.clientOrderId}")
+                                                throw DisconnectedException
+                                            }
+                                        }
+                                        else -> throw e
+                                    }
+                                }
+
+                                try {
+                                    withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
+                                        lastOrder!!.prevOrder!!.awaitStatus(Order.Status.Cancelled)
+                                    }
+                                } catch (e: TimeoutCancellationException) {
+                                    logger.error("Cancelled event has not been received within specified timeout for ${lastOrder?.prevOrder?.clientOrderId}")
+                                    throw DisconnectedException
                                 }
 
                                 try {
@@ -232,218 +329,108 @@ class DelayedTradeProcessor(
                                     logger.error("Created event has not been received within specified timeout for ${lastOrder?.clientOrderId}")
                                     throw DisconnectedException
                                 }
-
-                                val timeout = Duration.ofSeconds(4)
-                                val timeoutMillis = timeout.toMillis()
-                                var bookUpdateTime = System.currentTimeMillis()
-                                var bookChangeCounter = 0
-                                var prevBook: OrderBookAbstract? = null
-
-                                logger.debug { "Start market maker movement process" }
-
-                                orderBook.returnLastIfNoValueWithinSpecifiedTime(timeout).conflate().collect moveOrderLoopBegin@{ book ->
-                                    try {
-                                        withContext(NonCancellable) {
-                                            if (stoppedSelf()) return@withContext
-
-                                            bookChangeCounter = if (bookChangeCounter >= 10) 0 else bookChangeCounter + 1
-                                            val now = System.currentTimeMillis()
-                                            val fixPriceGaps = now - bookUpdateTime >= timeoutMillis || bookChangeCounter == 0
-                                            bookUpdateTime = now
-                                            prevBook = book
-
-                                            moveOrder(book, fixPriceGaps)
-
-                                            logger.debug { "Moved order (q = ${lastOrder?.quoteAmount}, p = ${lastOrder?.price})" }
-                                        }
-                                    } catch (e: CantMoveOrderSafelyException) {
-                                        withContext<Unit>(NonCancellable) {
-                                            cancelOrder(lastOrder!!.orderId!!, CancelOrderIdType.Server)
-                                            try {
-                                                withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
-                                                    lastOrder!!.awaitStatus(Order.Status.Cancelled)
-                                                }
-                                                throw RepeatPlaceMoveOrderLoopAgain
-                                            } catch (e: TimeoutCancellationException) {
-                                                logger.error("Cancelled event has not been received within specified timeout for order ${lastOrder?.clientOrderId}")
-                                                throw DisconnectedException
-                                            }
-                                        }
-                                    } catch (e: OrderBookEmptyException) {
-                                        logger.warn("Can't move order: ${e.message}")
-                                        return@moveOrderLoopBegin
-                                    } catch (e: TransactionFailedException) {
-                                        logger.debug(e.originalMsg)
-                                        return@moveOrderLoopBegin
-                                    } catch (e: PoloniexInternalErrorException) {
-                                        logger.debug(e.originalMsg)
-                                        delay(1000)
-                                        return@moveOrderLoopBegin
-                                    } catch (e: MaxOrdersExceededException) {
-                                        logger.debug(e.originalMsg)
-                                        delay(1500)
-                                        return@moveOrderLoopBegin
-                                    } catch (e: MoveNotRequiredException) {
-                                        return@moveOrderLoopBegin
-                                    } catch (e: UnableToPlacePostOnlyOrderException) {
-                                        logger.debug {
-                                            val orderBookStr = when (orderType) {
-                                                OrderType.Buy -> prevBook?.bids?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
-                                                OrderType.Sell -> prevBook?.asks?.take(3)?.joinToString(separator = ";") { "(${it._1},${it._2})" }
-                                            }
-                                            "${e.message} ; book = $orderBookStr | currFromAmount = ${scheduler.fromAmount} | $lastOrder"
-                                        }
-                                        return@moveOrderLoopBegin
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Throwable) {
-                                        when (e) {
-                                            is OrderCompletedOrNotExistException,
-                                            is InvalidOrderNumberException,
-                                            is NotEnoughCryptoException,
-                                            is AmountMustBeAtLeastException,
-                                            is TotalMustBeAtLeastException,
-                                            is RateMustBeLessThanException -> run {
-                                                logger.debug { "Tried to move order but error received: ${e.message} | $lastOrder" }
-                                                try {
-                                                    withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
-                                                        lastOrder!!.prevOrder!!.awaitStatus(Order.Status.Cancelled)
-                                                    }
-                                                    throw RepeatPlaceMoveOrderLoopAgain
-                                                } catch (e: TimeoutCancellationException) {
-                                                    logger.error("Cancelled event has not been received within specified timeout for ${lastOrder?.prevOrder?.clientOrderId}")
-                                                    throw DisconnectedException
-                                                }
-                                            }
-                                            else -> throw e
-                                        }
-                                    }
-
-                                    try {
-                                        withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
-                                            lastOrder!!.prevOrder!!.awaitStatus(Order.Status.Cancelled)
-                                        }
-                                    } catch (e: TimeoutCancellationException) {
-                                        logger.error("Cancelled event has not been received within specified timeout for ${lastOrder?.prevOrder?.clientOrderId}")
-                                        throw DisconnectedException
-                                    }
-
-                                    try {
-                                        withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
-                                            lastOrder!!.awaitStatus(Order.Status.Created)
-                                        }
-                                    } catch (e: TimeoutCancellationException) {
-                                        logger.error("Created event has not been received within specified timeout for ${lastOrder?.clientOrderId}")
-                                        throw DisconnectedException
-                                    }
-                                }
-                            } catch (_: RepeatPlaceMoveOrderLoopAgain) {
                             }
+                        } catch (_: RepeatPlaceMoveOrderLoopAgain) {
                         }
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: CompletePlaceMoveOrderLoop) {
-                } catch (e: DisconnectedException) {
-                    logger.debug { "Disconnected from account notification channel" }
-                    poloniexApi.channelStateFlow(DefaultChannel.AccountNotifications.id).filter { it }.first()
-                    logger.debug { "Connected to account notification channel" }
-                } catch (e: Throwable) {
-                    lastError = e
-                    logger.debug("Error occurred during place-move order loop: ${lastError?.message}")
-                } finally {
-                    withContext(NonCancellable) {
-                        try {
-                            if (lastOrder == null) {
-                                logger.debug { "Don't have any opened orders" }
-                                return@withContext
-                            }
-
-                            val orders = lastOrder!!.asSequence().take(2).toList()
-
-                            while (true) {
-                                try {
-                                    coroutineScope {
-                                        val orderCancelStatusesDeferred = orders.asSequence()
-                                            .filter { it.status.value != Order.Status.Cancelled }
-                                            .map { order ->
-                                                async {
-                                                    val cancelStatus = cancelOrder(order.clientOrderId, CancelOrderIdType.Client)
-
-                                                    when (cancelStatus) {
-                                                        OrderCancelStatus.Cancelled -> {
-                                                            try {
-                                                                withTimeout(OrderPlaceCancelConfirmationTimeoutMs) {
-                                                                    logger.debug { "Waiting for order ${order.clientOrderId} cancel confirmation..." }
-                                                                    order.awaitStatus(Order.Status.Cancelled)
-                                                                    logger.debug { "Order cancel confirmation event has been received for order ${order.clientOrderId}." }
-                                                                }
-                                                            } catch (e: TimeoutCancellationException) {
-                                                                logger.warn { "Cancel event has not been received within specified timeout for order ${order.clientOrderId}" }
-                                                            }
-                                                        }
-                                                        OrderCancelStatus.OrderNotExist -> {
-                                                            logger.debug { "Can't cancel order ${order.clientOrderId} because it does not exist" }
-                                                        }
-                                                    }
-
-                                                    cancelStatus
-                                                }
-                                            }
-                                            .toList()
-
-                                        orderCancelStatusesDeferred.forEach { it.await() }
-                                    }
-                                    break
-                                } catch (e: AlreadyCalledCancelOrMoveOrderException) {
-                                    logger.warn { "Can't cancel orders because one of orders is already waiting for cancel" }
-                                    delay(500)
-                                }
-                            }
-
-                            val processedTrades = orders.asSequence().flatMap { order ->
-                                order.trades.asSequence().filter { it.value.processed }.map { it.key }
-                            }.toHashSet()
-
-                            val missedTradesDeferred = orders.map { order ->
-                                async {
-                                    if (order.orderId != null) {
-                                        logger.debug { "Trying to fetch missed trades for order ${order.orderId} and processed trades $processedTrades" }
-                                        poloniexApi.missedTrades(order.orderId!!, processedTrades)
-                                    } else {
-                                        logger.debug {
-                                            "Trying to fetch missed trades using workaround for order ${order.clientOrderId} " +
-                                                "with time ${order.createTime}, " +
-                                                "price ${order.price}, " +
-                                                "processed trades $processedTrades"
-                                        }
-                                        poloniexApi.missedTrades(market, orderType, TradeCategory.Exchange, order.createTime, order.price, false, processedTrades)
-                                    }
-                                }
-                            }
-
-                            val missedTrades = missedTradesDeferred.flatMap { it.await() }
-
-                            if (missedTrades.isNotEmpty()) {
-                                logger.debug { "Adding missed trades: $missedTrades" }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: CompletePlaceMoveOrderLoop) {
+            } catch (e: DisconnectedException) {
+                logger.debug("Disconnected from account notification channel")
+                poloniexApi.channelStateFlow(DefaultChannel.AccountNotifications.id).filter { it }.first()
+                logger.debug("Connected to account notification channel")
+            } catch (e: Throwable) {
+                lastError = e
+                logger.debug("Error occurred during place-move order loop: ${lastError?.message}")
+            } finally {
+                withContext(NonCancellable) {
+                    try {
+                        when (lastOrder?.status?.value) {
+                            Order.Status.Created -> {
+                                val missedTrades = cancelOrderAndGetMissedTrades(lastOrder!!)
                                 scheduler.addTrades(missedTrades)
-                            } else {
-                                logger.debug("Missed trades not found")
                             }
-                        } finally {
-                            if (lastError != null) {
-                                scheduler.unregisterAll(lastError)
-                                stopSelf()
+                            Order.Status.Pending -> when (lastOrder?.prevOrder?.status?.value) {
+                                null -> {
+                                    val missedTrades = cancelOrderAndGetMissedTrades(lastOrder!!)
+                                    scheduler.addTrades(missedTrades)
+                                }
+                                Order.Status.Cancelled -> {
+                                    val missedTrades = cancelOrderAndGetMissedTrades(lastOrder!!, 2)
+                                    scheduler.addTrades(missedTrades)
+                                }
+                                Order.Status.Created -> {
+                                    val status = cancelOrderAndUpdateStatus(lastOrder!!.prevOrder!!)
+                                    val missedTrades0 = getMissedTrades(lastOrder!!.prevOrder!!)
+
+                                    val missedTrades1 = if (status == OrderCancelStatus.OrderNotExist) {
+                                        cancelOrderAndGetMissedTrades(lastOrder!!, 2)
+                                    } else {
+                                        lastOrder = lastOrder!!.prevOrder
+                                        emptyList()
+                                    }
+
+                                    val missedTrades = (missedTrades0.asSequence() + missedTrades1.asSequence()).toList()
+
+                                    scheduler.addTrades(missedTrades)
+                                }
+                                Order.Status.Pending -> throw RuntimeException("Pending status is not allowed for previous order: $lastOrder")
                             }
+                            else -> {
+                                logger.debug("Active orders not found")
+                            }
+                        }
+                    } finally {
+                        if (lastError != null) {
+                            scheduler.unregisterAll(lastError)
+                            stopSelf()
+                            lastError = null
                         }
                     }
                 }
             }
-        } finally {
-            withContext(NonCancellable) {
-                tradeMonitoringJob.cancelAndJoin()
-            }
         }
+    }
+
+    private suspend fun fetchMissedTrades(order: Order, processedTrades: Set<Long>): Collection<PoloniexTrade> {
+        return if (order.orderId != null) {
+            logger.debug { "Trying to fetch missed trades for order ${order.orderId} and processed trades $processedTrades" }
+            poloniexApi.missedTrades(order.orderId!!, processedTrades)
+        } else {
+            logger.debug {
+                "Trying to fetch missed trades using workaround for order ${order.clientOrderId} " +
+                    "with time ${order.createTime}, " +
+                    "price ${order.price}, " +
+                    "processed trades $processedTrades"
+            }
+            poloniexApi.missedTrades(market, orderType, TradeCategory.Exchange, order.createTime, order.price, false, processedTrades)
+        }
+    }
+
+    private suspend fun getMissedTrades(order: Order, ordersCount: Int = 1): Collection<PoloniexTrade> {
+        val processedTrades = order.asSequence()
+            .take(ordersCount)
+            .flatMap { it.trades.asSequence() }
+            .filter { it.value.processed }
+            .map { it.key }
+            .toHashSet()
+        val missedTrades = fetchMissedTrades(order, processedTrades)
+        if (missedTrades.isEmpty()) return emptyList()
+        order.trades.putAll(missedTrades.asSequence().map { Pair(it.tradeId, Order.Trade(it.tradeId, true)) })
+        return missedTrades
+    }
+
+    private suspend fun cancelOrderAndGetMissedTrades(order: Order, ordersCount: Int = 1): Collection<PoloniexTrade> {
+        cancelOrderAndUpdateStatus(order)
+        return getMissedTrades(order, ordersCount)
+    }
+
+    private suspend fun cancelOrderAndUpdateStatus(order: Order): OrderCancelStatus {
+        val status = cancelOrder(order.clientOrderId, CancelOrderIdType.Client)
+        order.status.value = Order.Status.Cancelled
+        return status
     }
 
     private suspend fun calcPlaceOrderAmountPrice(fromAmountValue: BigDecimal): Tuple2<BigDecimal, Price> {
@@ -679,6 +666,10 @@ class DelayedTradeProcessor(
                         logger.debug(e.message)
                         return OrderCancelStatus.OrderNotExist
                     }
+                    is AlreadyCalledCancelOrMoveOrderException -> run {
+                        logger.warn { "Can't cancel orders because one of orders is already waiting for cancel" }
+                        delay(500)
+                    }
                     is UnknownHostException,
                     is IOException,
                     is ReadTimeoutException,
@@ -785,7 +776,7 @@ class DelayedTradeProcessor(
             var count = 0
             while (i != null) {
                 if (i.status.value == Order.Status.Cancelled) count++
-                if (count == 2) {
+                if (count == 3) {
                     i.prevOrder = null
                     return
                 }

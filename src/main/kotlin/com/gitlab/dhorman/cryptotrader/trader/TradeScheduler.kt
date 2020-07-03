@@ -117,6 +117,8 @@ class TradeScheduler(
     }
 
     suspend fun addTrades(tradeList: Collection<BareTrade>) {
+        if (tradeList.isEmpty()) return
+
         mutex.withLock {
             logger.debug {
                 val clients = ids.joinToString { "($it, ${idFromAmount[it]})" }
