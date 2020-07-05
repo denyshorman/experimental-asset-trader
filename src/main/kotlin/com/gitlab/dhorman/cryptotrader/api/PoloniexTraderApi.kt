@@ -1,9 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.api
 
-import com.gitlab.dhorman.cryptotrader.core.Market
-import com.gitlab.dhorman.cryptotrader.core.SimulatedPath
-import com.gitlab.dhorman.cryptotrader.core.marketsTinyString
-import com.gitlab.dhorman.cryptotrader.core.targetCurrency
+import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
@@ -21,6 +18,7 @@ import io.vavr.Tuple4
 import io.vavr.collection.Array
 import io.vavr.collection.Map
 import io.vavr.kotlin.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import mu.KotlinLogging
@@ -88,23 +86,32 @@ class PoloniexTraderApi(
         val allPaths = pathGenerator.generate(currentCurrency, currentAmount, primaryCurrencies)
 
         return allPaths.asFlow()
-            .simulatedPathWithAmounts(currentCurrency, currentAmount, fee, orderBooks, amountCalculator)
-            .simulatedPathWithAmountsAndProfit(initAmount)
-            .simulatedPathWithProfitAndProfitability(currentCurrency, tradeVolumeStat)
-            .map { (path, profit, profitability) ->
-                CsvGenerator.toCsvNewLine(
-                    currentCurrency,
-                    path.targetCurrency(currentCurrency)!!,
-                    path.marketsTinyString(),
-                    profit,
-                    profitability
-                )
+            .transform { path ->
+                try {
+                    val pathAmountPrediction = path.amounts(currentCurrency, currentAmount, fee, orderBooks, amountCalculator)
+                    val profit = pathAmountPrediction.last()._2 - initAmount
+                    val waitTime = path.waitTime(currentCurrency, tradeVolumeStat, pathAmountPrediction)
+                    val profitability = calcProfitability(profit, waitTime)
+
+                    val line = CsvGenerator.toCsvNewLine(
+                        currentCurrency,
+                        path.targetCurrency(currentCurrency)!!,
+                        path.marketsTinyString(),
+                        profit,
+                        profitability
+                    )
+
+                    emit(line)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                }
             }
             .flowOn(Dispatchers.IO)
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active/{id}/best-path"])
-    suspend fun findBestPathForActiveTransaction(@PathVariable id: UUID): Tuple3<SimulatedPath, BigDecimal, BigDecimal>? {
+    suspend fun findBestPathForActiveTransaction(@PathVariable id: UUID): PathGenerator.PathWithMetrics? {
         val primaryCurrencies = settingsDao.getPrimaryCurrencies()
         val activeTransaction = transactionsDao.getActive(id) ?: throw Exception("Transaction $id not found")
         val initAmount = when (val tran = activeTransaction[0]) {
@@ -118,7 +125,11 @@ class PoloniexTraderApi(
         val currentCurrency = currentMarket.fromCurrency
         val currentAmount = currentMarket.fromAmount
 
-        return pathGenerator.findBest(initAmount, currentCurrency, currentAmount, primaryCurrencies, id)
+        return try {
+            pathGenerator.findPath(initAmount, currentCurrency, currentAmount, primaryCurrencies, id)
+        } catch (e: PathCantBeFoundException) {
+            null
+        }
     }
 
     @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/completed"])
@@ -161,17 +172,26 @@ class PoloniexTraderApi(
                 val allPaths = pathGenerator.generate(fromCurrency, fromAmount, currencies)
 
                 allPaths.asFlow()
-                    .simulatedPathWithAmounts(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
-                    .simulatedPathWithAmountsAndProfit(fromAmount)
-                    .simulatedPathWithProfitAndProfitability(fromCurrency, tradeVolumeStat)
-                    .map { (path, profit, profitability) ->
-                        CsvGenerator.toCsvNewLine(
-                            fromCurrency,
-                            path.targetCurrency(fromCurrency)!!,
-                            path.marketsTinyString(),
-                            profit,
-                            profitability
-                        )
+                    .transform { path ->
+                        try {
+                            val pathAmountPrediction = path.amounts(fromCurrency, fromAmount, fee, orderBooks, amountCalculator)
+                            val profit = pathAmountPrediction.last()._2 - fromAmount
+                            val waitTime = path.waitTime(fromCurrency, tradeVolumeStat, pathAmountPrediction)
+                            val profitability = calcProfitability(profit, waitTime)
+
+                            val line = CsvGenerator.toCsvNewLine(
+                                fromCurrency,
+                                path.targetCurrency(fromCurrency)!!,
+                                path.marketsTinyString(),
+                                profit,
+                                profitability
+                            )
+
+                            emit(line)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                        }
                     }
                     .collect { emit(it) }
             }

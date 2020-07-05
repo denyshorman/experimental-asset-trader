@@ -249,7 +249,11 @@ class TransactionIntent(
 
                                         pathSeekerJob = launch pathSeeker@{
                                             val primaryCurrencies = settingsDao.getPrimaryCurrencies()
-                                            val (path, profit, _) = pathGenerator.findBetter(updatedMarkets, primaryCurrencies, id) ?: return@pathSeeker
+                                            val (path, profit, _) = try {
+                                                pathGenerator.findPath(updatedMarkets, primaryCurrencies, id) ?: return@pathSeeker
+                                            } catch (e: PathCantBeFoundException) {
+                                                return@pathSeeker
+                                            }
                                             if (updatedMarkets === modifiedMarkets) {
                                                 logger.debug { "Better path has been found $path with profit +$profit > +${targetAmount - initAmount}" }
                                                 throw NewProfitablePathFoundException(updatedMarkets, path)
@@ -393,7 +397,8 @@ class TransactionIntent(
                 }
             }
         } catch (e: NotProfitableException) {
-            TranIntentScope.launch(CoroutineName("INTENT $id PATH FINDER")) {
+            TranIntentScope.launch(CoroutineName("INTENT $id PATH FINDER")) pathFinder@{
+                val initCurrency = modifiedMarkets.first().fromCurrency
                 val initAmount = tranIntentMarketExtensions.fromAmount(modifiedMarkets.first(), modifiedMarkets, 0)
                 val currMarket = modifiedMarkets[marketIdx] as TranIntentMarketPartiallyCompleted
                 val fromCurrency = currMarket.fromCurrency
@@ -406,11 +411,24 @@ class TransactionIntent(
                     while (true) {
                         logger.debug { "Trying to find a new path..." }
 
-                        val newPath = pathGenerator.findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies(), id)
+                        val newPath = try {
+                            pathGenerator.findPath(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies(), id)
+                        } catch (e: PathCantBeFoundException) {
+                            logger.debug { "It's impossible to find a path for $id. Adding to to unfilled." }
+
+                            withContext(NonCancellable) {
+                                tranManager.defaultTran {
+                                    transactionsDao.deleteActive(id)
+                                    unfilledMarketsDao.add(initCurrency, initAmount, fromCurrency, fromCurrencyAmount)
+                                }
+                            }
+
+                            return@pathFinder
+                        }
 
                         if (newPath != null) {
-                            bestPath = newPath._1.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
-                            val profit = newPath._2
+                            bestPath = newPath.path.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
+                            val profit = newPath.profit
                             logger.debug { "A new profitable ($profit) path found ${tranIntentMarketExtensions.pathString(bestPath)}" }
                             break
                         } else {

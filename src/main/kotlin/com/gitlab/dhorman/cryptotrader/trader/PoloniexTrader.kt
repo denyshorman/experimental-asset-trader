@@ -112,8 +112,12 @@ class PoloniexTrader(
 
                 logger.debug { "Requested currency $startCurrency and amount $requestedAmount for transaction" }
 
-                val (bestPath, profit, _) = pathGenerator
-                    .findBest(requestedAmount, startCurrency, requestedAmount, settingsDao.getPrimaryCurrencies()) ?: return@collect
+                val (bestPath, profit, _) = try {
+                    pathGenerator.findPath(requestedAmount, startCurrency, requestedAmount, settingsDao.getPrimaryCurrencies()) ?: return@collect
+                } catch (e: PathCantBeFoundException) {
+                    logger.warn("Can't start new transaction because a path will not be possible to find with current amount ($startCurrency, $requestedAmount)")
+                    return@collect
+                }
 
                 logger.debug {
                     "Found an optimal path: ${bestPath.marketsTinyString()} using amount $requestedAmount with potential profit $profit"
@@ -250,6 +254,7 @@ class PoloniexTrader(
 
         for ((id, markets) in sleepingTransactions) {
             val startMarketIdx = tranIntentMarketExtensions.partiallyCompletedMarketIndex(markets)!!
+            val initCurrency = markets.first().fromCurrency
             val initAmount = tranIntentMarketExtensions.fromAmount(markets.first(), markets, 0)
             val targetAmount = tranIntentMarketExtensions.targetAmount(markets.last(), markets, markets.length() - 1)
 
@@ -263,9 +268,22 @@ class PoloniexTrader(
                     var bestPath: Array<TranIntentMarket>?
 
                     while (true) {
-                        bestPath = pathGenerator
-                            .findBest(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies(), id)?._1
-                            ?.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
+                        bestPath = try {
+                            pathGenerator
+                                .findPath(initAmount, fromCurrency, fromCurrencyAmount, settingsDao.getPrimaryCurrencies(), id)?.path
+                                ?.toTranIntentMarket(fromCurrencyAmount, fromCurrency)
+                        } catch (e: PathCantBeFoundException) {
+                            logger.debug { "It's impossible to find a path for $id. Adding to to unfilled." }
+
+                            withContext(NonCancellable) {
+                                tranManager.defaultTran {
+                                    transactionsDao.deleteActive(id)
+                                    unfilledMarketsDao.add(initCurrency, initAmount, fromCurrency, fromCurrencyAmount)
+                                }
+                            }
+
+                            return@launch
+                        }
 
                         if (bestPath != null) {
                             logger.debug { "Found optimal path ${tranIntentMarketExtensions.pathString(bestPath)} for $id" }
@@ -357,10 +375,15 @@ class PoloniexTrader(
 
         val activeMarketId = updatedMarkets.length() - 1
 
-        val bestPath = pathGenerator
-            .findBest(initCurrencyAmount, currentCurrency, currentCurrencyAmount, settingsDao.getPrimaryCurrencies())?._1
-            ?.toTranIntentMarket(currentCurrencyAmount, currentCurrency)
-            ?: return
+        val bestPath = try {
+            pathGenerator
+                .findPath(initCurrencyAmount, currentCurrency, currentCurrencyAmount, settingsDao.getPrimaryCurrencies())?.path
+                ?.toTranIntentMarket(currentCurrencyAmount, currentCurrency)
+                ?: return
+        } catch (e: PathCantBeFoundException) {
+            logger.debug { "Path can't be found for current amount (${unfilledData.currency}, ${unfilledData.amount})" }
+            return
+        }
 
         val changedMarkets = updatedMarkets.concat(activeMarketId, bestPath)
         val tranId = UUID.randomUUID()
