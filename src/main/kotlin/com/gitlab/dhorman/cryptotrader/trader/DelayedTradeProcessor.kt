@@ -376,7 +376,9 @@ class DelayedTradeProcessor(
 
                                     scheduler.addTrades(missedTrades)
                                 }
-                                Order.Status.Pending -> throw RuntimeException("Pending status is not allowed for previous order: $lastOrder")
+                                Order.Status.Pending -> {
+                                    logger.error("Pending status is not allowed for previous order: $lastOrder")
+                                }
                             }
                             else -> {
                                 logger.debug("Active orders not found")
@@ -553,12 +555,22 @@ class DelayedTradeProcessor(
 
                 if (quoteAmount.compareTo(BigDecimal.ZERO) == 0) throw AmountIsZeroException
 
+                val lastCancelledOrder = if (lastOrder == null) {
+                    null
+                } else {
+                    val order = lastOrder.lastOrderWith(Order.Status.Cancelled)
+                    if (order == null) {
+                        logger.error("Previous order must be Cancelled or null during placeOrder phase. Orders dump: $lastOrder")
+                    }
+                    order
+                }
+
                 val order = Order(
                     clientOrderId = poloniexApi.generateOrderId(),
                     quoteAmount = quoteAmount,
                     price = price,
                     createTime = Instant.now(clock),
-                    prevOrder = lastOrder
+                    prevOrder = lastCancelledOrder
                 )
 
                 lastOrder = order
