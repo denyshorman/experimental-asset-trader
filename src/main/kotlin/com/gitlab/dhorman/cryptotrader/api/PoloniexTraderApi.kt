@@ -5,7 +5,10 @@ import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Amount
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Currency
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.Ticker
-import com.gitlab.dhorman.cryptotrader.trader.*
+import com.gitlab.dhorman.cryptotrader.trader.PathCantBeFoundException
+import com.gitlab.dhorman.cryptotrader.trader.PathGenerator
+import com.gitlab.dhorman.cryptotrader.trader.PoloniexTrader
+import com.gitlab.dhorman.cryptotrader.trader.calcProfitability
 import com.gitlab.dhorman.cryptotrader.trader.core.AdjustedPoloniexBuySellAmountCalculator
 import com.gitlab.dhorman.cryptotrader.trader.dao.SettingsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
@@ -25,14 +28,17 @@ import mu.KotlinLogging
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.http.server.reactive.ServerHttpResponse
-import org.springframework.web.bind.annotation.*
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestMethod
+import org.springframework.web.bind.annotation.RequestParam
+import org.springframework.web.bind.annotation.RestController
 import java.math.BigDecimal
 import java.time.Duration
 import java.time.Instant
 import java.util.*
 
 @RestController
-@RequestMapping(value = ["/api/traders/poloniex"], produces = [MediaType.APPLICATION_JSON_VALUE])
+@RequestMapping(value = ["/api"], produces = [MediaType.APPLICATION_JSON_VALUE])
 class PoloniexTraderApi(
     private val poloniexTrader: PoloniexTrader,
     private val transactionsDao: TransactionsDao,
@@ -44,38 +50,38 @@ class PoloniexTraderApi(
     private val logger = KotlinLogging.logger {}
     private val tranIntentMarketExtensions = TranIntentMarketExtensions(amountCalculator, poloniexApi)
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/tickers"])
-    suspend fun tickersSnapshot(): Map<Market, Ticker> {
+    @RequestMapping(method = [RequestMethod.GET], value = ["/getPoloniexTicketsSnapshot"])
+    suspend fun getTicketsSnapshot(): Map<Market, Ticker> {
         return poloniexApi.marketTickerStream.first()
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/balances"])
-    suspend fun balancesSnapshot(): Map<Currency, Tuple2<Amount, Amount>> {
+    @RequestMapping(method = [RequestMethod.GET], value = ["/getPoloniexBalancesSnapshot"])
+    suspend fun getBalancesSnapshot(): Map<Currency, Tuple2<Amount, Amount>> {
         return poloniexApi.balanceStream.first()
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/unfilled/{id}/execute"])
-    suspend fun executeFullTransaction(@PathVariable id: Long) {
+    @RequestMapping(method = [RequestMethod.GET], value = ["/executePoloniexUnfilledTransaction"])
+    suspend fun executeUnfilledTransaction(@RequestParam id: Long) {
         poloniexTrader.startPathTranFromUnfilledTrans(id)
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active"])
+    @RequestMapping(method = [RequestMethod.GET], value = ["/getPoloniexActiveTransactions"])
     suspend fun getActiveTransactions(): List<Tuple2<UUID, Array<TranIntentMarket>>> {
         return transactionsDao.getActive()
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active/{id}"])
-    suspend fun getPathsForActiveTransaction(@PathVariable id: UUID, serverHttpResponse: ServerHttpResponse): Flow<String> {
+    @RequestMapping(method = [RequestMethod.GET], value = ["/getPathsForActivePoloniexTransaction"])
+    suspend fun getPathsForActiveTransaction(@RequestParam tranId: UUID, serverHttpResponse: ServerHttpResponse): Flow<String> {
         serverHttpResponse.headers.set(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=paths.csv")
         val fee = poloniexApi.feeStream.first()
         val orderBooks = poloniexApi.orderBooksPollingStream.first()
         val tradeVolumeStat = poloniexApi.tradeVolumeStat.first()
         val primaryCurrencies = settingsDao.getPrimaryCurrencies()
-        val activeTransaction = transactionsDao.getActive(id) ?: throw Exception("Transaction $id not found")
+        val activeTransaction = transactionsDao.getActive(tranId) ?: throw Exception("Transaction $tranId not found")
         val initAmount = when (val tran = activeTransaction[0]) {
             is TranIntentMarketCompleted -> tranIntentMarketExtensions.fromAmount(tran)
             is TranIntentMarketPartiallyCompleted -> tran.fromAmount
-            is TranIntentMarketPredicted -> throw Exception("Transaction $id does not have from amount")
+            is TranIntentMarketPredicted -> throw Exception("Transaction $tranId does not have from amount")
         }
         val idx = tranIntentMarketExtensions.partiallyCompletedMarketIndex(activeTransaction)
             ?: throw Exception("Partially completed market not found")
@@ -110,14 +116,14 @@ class PoloniexTraderApi(
             .flowOn(Dispatchers.IO)
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/active/{id}/best-path"])
-    suspend fun findBestPathForActiveTransaction(@PathVariable id: UUID): PathGenerator.PathWithMetrics? {
+    @RequestMapping(method = [RequestMethod.GET], value = ["/getBestPathForActivePoloniexTransaction"])
+    suspend fun getBestPathForActiveTransaction(@RequestParam tranId: UUID): PathGenerator.PathWithMetrics? {
         val primaryCurrencies = settingsDao.getPrimaryCurrencies()
-        val activeTransaction = transactionsDao.getActive(id) ?: throw Exception("Transaction $id not found")
+        val activeTransaction = transactionsDao.getActive(tranId) ?: throw Exception("Transaction $tranId not found")
         val initAmount = when (val tran = activeTransaction[0]) {
             is TranIntentMarketCompleted -> tranIntentMarketExtensions.fromAmount(tran)
             is TranIntentMarketPartiallyCompleted -> tran.fromAmount
-            is TranIntentMarketPredicted -> throw Exception("Transaction $id does not have from amount")
+            is TranIntentMarketPredicted -> throw Exception("Transaction $tranId does not have from amount")
         }
         val idx = tranIntentMarketExtensions.partiallyCompletedMarketIndex(activeTransaction)
             ?: throw Exception("Partially completed market not found")
@@ -126,18 +132,18 @@ class PoloniexTraderApi(
         val currentAmount = currentMarket.fromAmount
 
         return try {
-            pathGenerator.findPath(initAmount, currentCurrency, currentAmount, primaryCurrencies, id)
+            pathGenerator.findPath(initAmount, currentCurrency, currentAmount, primaryCurrencies, tranId)
         } catch (e: PathCantBeFoundException) {
             null
         }
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/completed"])
+    @RequestMapping(method = [RequestMethod.GET], value = ["/getPoloniexCompletedTransactions"])
     suspend fun getCompletedTransactions(): List<Tuple4<Long, Array<TranIntentMarket>, Instant, Instant>> {
         return transactionsDao.getCompleted()
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/completed-short"])
+    @RequestMapping(method = [RequestMethod.GET], value = ["/getPoloniexCompletedShortTransactions"])
     suspend fun getCompletedShortTransactions(): List<Tuple3<Amount, Amount, Long>> {
         return transactionsDao.getCompleted().map { (_, markets, created, completed) ->
             val fromAmount = tranIntentMarketExtensions.fromAmount(markets[0] as TranIntentMarketCompleted)
@@ -147,20 +153,20 @@ class PoloniexTraderApi(
         }
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/transactions/balances-in-use"])
+    @RequestMapping(method = [RequestMethod.GET], value = ["/getPoloniexInUseBalances"])
     suspend fun getBalancesInUse(@RequestParam primaryCurrencies: List<Currency>): List<Tuple2<Currency, BigDecimal>> {
         return transactionsDao.balancesInUse(primaryCurrencies)
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/tickers"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
+    @RequestMapping(method = [RequestMethod.GET], value = ["/getPoloniexTickerStream"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun tickers() = run {
         poloniexApi.marketTickerStream.sample(Duration.ofSeconds(1).toMillis())
     }
 
-    @RequestMapping(method = [RequestMethod.GET], value = ["/snapshots/paths"], produces = [MediaType.APPLICATION_OCTET_STREAM_VALUE])
+    @RequestMapping(method = [RequestMethod.GET], value = ["/generatePoloniexPaths"], produces = [MediaType.APPLICATION_OCTET_STREAM_VALUE])
     suspend fun generatePaths(
         @RequestParam(defaultValue = "100") fromAmount: Amount,
-        @RequestParam(defaultValue = "USDT, USDC, USDJ, PAX, DAI") currencies: List<Currency>,
+        @RequestParam(defaultValue = "USDT, USDC") currencies: List<Currency>,
         serverHttpResponse: ServerHttpResponse
     ): Flow<String> {
         serverHttpResponse.headers.set(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=paths.csv")
