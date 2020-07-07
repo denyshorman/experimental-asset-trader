@@ -272,6 +272,10 @@ class DelayedTradeProcessor(
                                     logger.debug(e.originalMsg)
                                     delay(1000)
                                     return@moveOrderLoopBegin
+                                } catch (e: MaintenanceModeException) {
+                                    logger.debug(e.originalMsg)
+                                    delay(5000)
+                                    return@moveOrderLoopBegin
                                 } catch (e: MaxOrdersExceededException) {
                                     logger.debug(e.originalMsg)
                                     delay(1500)
@@ -602,6 +606,11 @@ class DelayedTradeProcessor(
                         delay(1000)
                     }
 
+                    is MaintenanceModeException -> run {
+                        logger.debug(e.message)
+                        delay(5000)
+                    }
+
                     is UnknownHostException,
                     is IOException,
                     is ReadTimeoutException,
@@ -690,6 +699,10 @@ class DelayedTradeProcessor(
                     is SocketException -> run {
                         logger.debug { "Cancel order $orderId: ${e.message}" }
                         delay(2000)
+                    }
+                    is MaintenanceModeException -> run {
+                        logger.debug("Can't cancel right now: ${e.message}")
+                        delay(5000)
                     }
                     else -> run {
                         logger.error(e.message)

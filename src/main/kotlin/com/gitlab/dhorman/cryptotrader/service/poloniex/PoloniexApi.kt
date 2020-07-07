@@ -514,6 +514,10 @@ open class PoloniexApi(
             return PoloniexInternalErrorException
         }
 
+        if (MaintenanceModeMsg == msg) {
+            return MaintenanceModeException
+        }
+
         return e
     }
 
