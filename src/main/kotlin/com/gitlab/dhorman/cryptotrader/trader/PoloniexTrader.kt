@@ -22,10 +22,7 @@ import io.vavr.collection.Array
 import io.vavr.kotlin.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.asFlow
-import kotlinx.coroutines.flow.flatMapMerge
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.collect
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
@@ -243,7 +240,7 @@ class PoloniexTrader(
                 flow<Unit> {
                     startPathTranFromUnfilledTrans(it)
                 }
-            }
+            }.collect()
         }
     }
 
