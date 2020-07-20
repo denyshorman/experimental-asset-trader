@@ -10,6 +10,7 @@ java.sourceCompatibility = JavaVersion.VERSION_11
 plugins {
     kotlin("jvm") version "1.3.72"
     kotlin("plugin.spring") version "1.3.72"
+    kotlin("plugin.serialization") version "1.3.72"
     id("org.springframework.boot") version "2.3.1.RELEASE"
     id("io.spring.dependency-management") version "1.0.9.RELEASE"
     id("net.nemerosa.versioning") version "2.8.2"
@@ -27,6 +28,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactive")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk9")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-runtime:0.20.0")
     implementation("io.projectreactor.addons:reactor-adapter")
     implementation("io.projectreactor.addons:reactor-extra")
     implementation("io.projectreactor.kotlin:reactor-kotlin-extensions")
@@ -42,9 +46,6 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-webflux")
     implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
     implementation("io.r2dbc:r2dbc-postgresql")
-    implementation("net.openhft:chronicle-map:3.19.40")
-    implementation("net.openhft:chronicle-queue:5.19.48")
-    implementation("net.openhft:chronicle-wire:2.19.48")
     testImplementation("org.junit.jupiter:junit-jupiter:5.6.1")
     testImplementation("org.mockito:mockito-core:3.3.3")
     testImplementation("com.nhaarman.mockitokotlin2:mockito-kotlin:2.2.0")
@@ -65,7 +66,10 @@ tasks {
                 "-Xuse-experimental=kotlinx.coroutines.ExperimentalCoroutinesApi",
                 "-Xuse-experimental=kotlinx.coroutines.ObsoleteCoroutinesApi",
                 "-Xuse-experimental=kotlinx.coroutines.FlowPreview",
-                "-Xuse-experimental=kotlin.time.ExperimentalTime"
+                "-Xuse-experimental=kotlinx.serialization.ImplicitReflectionSerializer",
+                "-Xuse-experimental=kotlinx.serialization.UnstableDefault",
+                "-Xuse-experimental=kotlin.time.ExperimentalTime",
+                "-Xuse-experimental=kotlin.ExperimentalStdlibApi"
             )
         }
     }
