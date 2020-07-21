@@ -90,6 +90,7 @@ open class BinanceApi(
 
     private val exchangeInfoFileChannel: AsynchronousFileChannel?
     private val wsListenKeyFileChannel: AsynchronousFileChannel?
+    private val feeInfoFileChannel: AsynchronousFileChannel?
 
     init {
         when (apiNet) {
@@ -132,12 +133,16 @@ open class BinanceApi(
 
                 val wsListenKeyFilePath = Paths.get("$fileCachePath${File.separator}ws_listen_key.json")
                 wsListenKeyFileChannel = AsynchronousFileChannel.open(wsListenKeyFilePath, *FILE_OPTIONS)
+
+                val feeInfoFilePath = Paths.get("$fileCachePath${File.separator}fee.json")
+                feeInfoFileChannel = AsynchronousFileChannel.open(feeInfoFilePath, *FILE_OPTIONS)
             } catch (e: Throwable) {
                 throw e
             }
         } else {
             exchangeInfoFileChannel = null
             wsListenKeyFileChannel = null
+            feeInfoFileChannel = null
         }
 
         Runtime.getRuntime().addShutdownHook(Thread { runBlocking { close() } })
@@ -163,6 +168,71 @@ open class BinanceApi(
         params["timestamp"] = timestamp.toEpochMilli().toString()
         if (recvWindow != null) params["recvWindow"] = recvWindow.toString()
         return callApi("/sapi/v1/capital/config/getall", HttpMethod.GET, params, true, true, UserCoin.serializer().list)
+    }
+
+    suspend fun tradeFee(timestamp: Instant, recvWindow: Long? = null, symbol: String? = null): TradeFee {
+        val params = buildMap<String, String> {
+            put("timestamp", timestamp.toEpochMilli().toString())
+            if (recvWindow != null) put("recvWindow", recvWindow.toString())
+            if (symbol != null) put("symbol", symbol)
+        }
+        return callApi("/wapi/v3/tradeFee.html", HttpMethod.GET, params, true, true, type())
+    }
+    //endregion
+
+    //region Wallet API Cached
+    val tradeFeeCache: Flow<Map<String, CachedFee>> = run {
+        val dataFetchInterval = 6.hours
+        val flowCloseIntervalWhenNoSubscribers = dataFetchInterval.minus(1.hours)
+
+        channelFlow {
+            var cachedFeeInfo = if (feeInfoFileChannel != null) {
+                try {
+                    val feeInfoJsonString = feeInfoFileChannel.readString()
+                    json.parse<CachedFeeInfo>(feeInfoJsonString)
+                } catch (e: Throwable) {
+                    null
+                }
+            } else {
+                null
+            }
+
+            if (cachedFeeInfo != null) {
+                send(cachedFeeInfo.fee)
+                logger.info("Fee info extracted from cache")
+                val expireTime = cachedFeeInfo.createTime.plusMillis(dataFetchInterval.toLongMilliseconds()).toEpochMilli()
+                val now = Instant.now().toEpochMilli()
+                val diffMs = expireTime - now
+                if (diffMs > 0) delay(diffMs)
+            }
+
+            while (isActive) {
+                try {
+                    logger.info("Fetching fee info...")
+                    val feeInfo = tradeFee(Instant.now())
+                    logger.info("Fee info fetched successfully")
+
+                    val symbolFeeMap = feeInfo.tradeFee.groupBy { it.symbol }.mapValues { it.value.first().toCachedFee() }
+                    cachedFeeInfo = CachedFeeInfo(symbolFeeMap)
+                    send(symbolFeeMap)
+
+                    if (feeInfoFileChannel != null) {
+                        ignoreErrors {
+                            val feeInfoJsonString = json.stringify(cachedFeeInfo)
+                            feeInfoFileChannel.writeString(feeInfoJsonString)
+                        }
+                    }
+
+                    delay(dataFetchInterval)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    logger.warn("Can't fetch fee info: ${e.message}")
+                    delay(1000)
+                }
+            }
+        }
+            .share(1, flowCloseIntervalWhenNoSubscribers.toJavaDuration(), scope)
     }
     //endregion
 
@@ -651,6 +721,25 @@ open class BinanceApi(
             val unLockConfirm: Long? = null
         )
     }
+
+    @Serializable
+    data class TradeFee(
+        val tradeFee: List<Fee>,
+        val success: Boolean
+    ) {
+        @Serializable
+        data class Fee(
+            val symbol: String,
+            @Serializable(BigDecimalDoubleSerializer::class) val maker: BigDecimal,
+            @Serializable(BigDecimalDoubleSerializer::class) val taker: BigDecimal
+        )
+    }
+
+    @Serializable
+    data class CachedFee(
+        @Serializable(BigDecimalStringSerializer::class) val maker: BigDecimal,
+        @Serializable(BigDecimalStringSerializer::class) val taker: BigDecimal
+    )
 
     @Serializable
     data class ExchangeInfo(
@@ -1302,6 +1391,12 @@ open class BinanceApi(
     )
 
     @Serializable
+    private data class CachedFeeInfo(
+        val fee: Map<String, CachedFee>,
+        @Serializable(InstantLongSerializer::class) val createTime: Instant = Instant.now()
+    )
+
+    @Serializable
     private data class ErrorMsg(
         val code: Long,
         val msg: String
@@ -1499,6 +1594,8 @@ open class BinanceApi(
     private fun <T> EventData<T>.setPayload(payload: T?) = EventData(payload, subscribed, null)
     private fun <T> EventData<T>.setSubscribed(subscribed: Boolean) = EventData(payload, subscribed, null)
     private fun <T> EventData<T>.setError(error: Throwable?) = EventData<T>(null, false, error)
+
+    private fun TradeFee.Fee.toCachedFee() = CachedFee(maker, taker)
     //endregion
 
     //region Private HTTP Logic
@@ -2164,6 +2261,19 @@ open class BinanceApi(
 
             override fun serialize(encoder: Encoder, value: BigDecimal) {
                 encoder.encodeString(value.toPlainString())
+            }
+        }
+
+        @Serializer(BigDecimal::class)
+        private object BigDecimalDoubleSerializer : KSerializer<BigDecimal> {
+            override val descriptor: SerialDescriptor = PrimitiveDescriptor("BinanceBigDecimalDoubleSerializer", PrimitiveKind.DOUBLE)
+
+            override fun deserialize(decoder: Decoder): BigDecimal {
+                return BigDecimal(decoder.decodeDouble().toString())
+            }
+
+            override fun serialize(encoder: Encoder, value: BigDecimal) {
+                encoder.encodeDouble(value.toDouble())
             }
         }
 

@@ -1,16 +1,13 @@
 package com.gitlab.dhorman.cryptotrader.service.binance
 
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.stringify
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.SpringBootTest
-import java.nio.file.Files
-import java.nio.file.Paths
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
@@ -32,6 +29,20 @@ class BinanceApiMainNetTest {
     fun callGetUserCoins() = runBlocking {
         val resp = binanceApi.getUserCoins(Instant.now())
         println(resp)
+    }
+
+    @Test
+    fun callTradeFee() = runBlocking {
+        val tradeFee = binanceApi.tradeFee(Instant.now())
+        println(tradeFee)
+    }
+    //endregion
+
+    //region Wallet Api Cached
+    @Test
+    fun callTradeFeeCache() = runBlocking {
+        val feeMap = binanceApi.tradeFeeCache.first()
+        println(feeMap)
     }
     //endregion
 
@@ -62,8 +73,7 @@ class BinanceApiMainNetTest {
     @Test
     fun callExchangeInfo() = runBlocking {
         val resp = binanceApi.getExchangeInfo()
-        Files.writeString(Paths.get("./ExchangeInfo.json"), Json.stringify(resp))
-        Unit
+        println(resp)
     }
     //endregion
 
