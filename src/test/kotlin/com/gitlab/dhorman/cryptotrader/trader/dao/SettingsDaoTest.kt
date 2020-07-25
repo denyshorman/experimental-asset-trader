@@ -1,6 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.trader.dao
 
-import com.gitlab.dhorman.cryptotrader.util.first
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.MethodOrderer
 import org.junit.jupiter.api.Order

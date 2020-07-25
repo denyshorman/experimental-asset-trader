@@ -15,7 +15,6 @@ import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
 import com.gitlab.dhorman.cryptotrader.util.defaultTran
-import com.gitlab.dhorman.cryptotrader.util.first
 import com.gitlab.dhorman.cryptotrader.util.repeatableReadTran
 import io.vavr.Tuple2
 import io.vavr.collection.Array

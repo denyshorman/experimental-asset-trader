@@ -14,7 +14,6 @@ import com.gitlab.dhorman.cryptotrader.trader.dao.SettingsDao
 import com.gitlab.dhorman.cryptotrader.trader.dao.TransactionsDao
 import com.gitlab.dhorman.cryptotrader.trader.model.*
 import com.gitlab.dhorman.cryptotrader.util.CsvGenerator
-import com.gitlab.dhorman.cryptotrader.util.first
 import io.vavr.Tuple2
 import io.vavr.Tuple3
 import io.vavr.Tuple4

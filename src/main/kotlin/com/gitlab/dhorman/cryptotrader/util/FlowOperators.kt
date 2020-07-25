@@ -193,38 +193,6 @@ fun <T> Channel<T>.buffer(scope: CoroutineScope, timespan: Duration): Channel<Li
     return upstream
 }
 
-private object AbortException : Throwable("", null, true, false)
-
-suspend fun <T> Flow<T>.first(): T {
-    var result: T? = null
-    try {
-        collect { value ->
-            result = value
-            throw AbortException
-        }
-    } catch (e: AbortException) {
-        // Do nothing
-    }
-
-    if (result == null) throw NoSuchElementException("Expected at least one element")
-    return result!!
-}
-
-suspend fun <T> Flow<T>.firstOrNull(): T? {
-    var result: T? = null
-
-    try {
-        collect {
-            result = it
-            throw AbortException
-        }
-    } catch (e: AbortException) {
-        // Ignore
-    }
-
-    return result
-}
-
 fun <T> Channel<T>.asFlow(): Flow<T> = flow {
     consumeEach { emit(it) }
 }

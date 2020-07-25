@@ -2,12 +2,12 @@ package com.gitlab.dhorman.cryptotrader.service.poloniex
 
 import com.gitlab.dhorman.cryptotrader.core.toMarket
 import com.gitlab.dhorman.cryptotrader.util.TestClock
-import com.gitlab.dhorman.cryptotrader.util.first
-import com.gitlab.dhorman.cryptotrader.util.firstOrNull
 import io.vavr.kotlin.getOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking

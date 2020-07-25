@@ -3,9 +3,9 @@ package com.gitlab.dhorman.cryptotrader.trader
 import com.gitlab.dhorman.cryptotrader.core.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.ExtendedPoloniexApi
 import com.gitlab.dhorman.cryptotrader.service.poloniex.core.PoloniexBuySellAmountCalculator
-import com.gitlab.dhorman.cryptotrader.util.first
 import io.vavr.collection.Array
 import io.vavr.kotlin.tuple
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.jupiter.api.Test

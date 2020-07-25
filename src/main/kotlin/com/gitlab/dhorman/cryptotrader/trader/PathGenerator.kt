@@ -10,7 +10,6 @@ import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarket
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketCompleted
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketExtensions
 import com.gitlab.dhorman.cryptotrader.trader.model.TranIntentMarketPartiallyCompleted
-import com.gitlab.dhorman.cryptotrader.util.first
 import io.vavr.Tuple2
 import io.vavr.kotlin.component1
 import io.vavr.kotlin.component2
@@ -21,6 +20,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import mu.KotlinLogging
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
