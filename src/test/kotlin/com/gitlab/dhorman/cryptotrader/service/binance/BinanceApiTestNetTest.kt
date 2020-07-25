@@ -1,16 +1,15 @@
 package com.gitlab.dhorman.cryptotrader.service.binance
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.stringify
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.SpringBootTest
-import java.nio.file.Files
-import java.nio.file.Paths
+import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
@@ -32,6 +31,12 @@ class BinanceApiTestNetTest {
     fun callGetUserCoins() = runBlocking {
         val resp = binanceApi.getUserCoins(Instant.now())
         println(resp)
+    }
+
+    @Test
+    fun callTradeFee() = runBlocking {
+        val fee = binanceApi.tradeFee()
+        println(fee)
     }
     //endregion
 
@@ -62,8 +67,7 @@ class BinanceApiTestNetTest {
     @Test
     fun callExchangeInfo() = runBlocking {
         val resp = binanceApi.getExchangeInfo()
-        Files.writeString(Paths.get("./ExchangeInfo.json"), Json.stringify(resp))
-        Unit
+        println(resp)
     }
     //endregion
 
@@ -72,6 +76,36 @@ class BinanceApiTestNetTest {
     fun callGetAccountInfo() = runBlocking {
         val resp = binanceApi.getAccountInfo(Instant.now())
         println(resp)
+    }
+
+    @Test
+    fun callMarketPlaceOrder() {
+        runBlocking {
+            val startOrder = CompletableDeferred<Unit>()
+
+            launch(start = CoroutineStart.UNDISPATCHED) {
+                binanceApi.accountStream.collect {
+                    if (it.subscribed) {
+                        startOrder.complete(Unit)
+                    }
+
+                    if (it.payload != null) println(it.payload)
+                }
+            }
+
+            startOrder.await()
+
+            val order = binanceApi.placeOrder(
+                symbol = "BTCUSDT",
+                side = BinanceApi.OrderSide.BUY,
+                type = BinanceApi.OrderType.MARKET,
+                timestamp = Instant.now(),
+                quoteOrderQty = BigDecimal("11111"),
+                newOrderRespType = BinanceApi.OrderRespType.FULL
+            )
+
+            println(order)
+        }
     }
     //endregion
 

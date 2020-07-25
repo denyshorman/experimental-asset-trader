@@ -170,7 +170,7 @@ open class BinanceApi(
         return callApi("/sapi/v1/capital/config/getall", HttpMethod.GET, params, true, true, UserCoin.serializer().list)
     }
 
-    suspend fun tradeFee(timestamp: Instant, recvWindow: Long? = null, symbol: String? = null): TradeFee {
+    suspend fun tradeFee(timestamp: Instant = Instant.now(), recvWindow: Long? = null, symbol: String? = null): TradeFee {
         val params = buildMap<String, String> {
             put("timestamp", timestamp.toEpochMilli().toString())
             if (recvWindow != null) put("recvWindow", recvWindow.toString())
@@ -209,7 +209,7 @@ open class BinanceApi(
             while (isActive) {
                 try {
                     logger.info("Fetching fee info...")
-                    val feeInfo = tradeFee(Instant.now())
+                    val feeInfo = tradeFee()
                     logger.info("Fee info fetched successfully")
 
                     val symbolFeeMap = feeInfo.tradeFee.groupBy { it.symbol }.mapValues { it.value.first().toCachedFee() }
@@ -239,6 +239,10 @@ open class BinanceApi(
     //region Market Data API
     suspend fun ping() {
         return callApi("/api/v3/ping", HttpMethod.GET, emptyMap(), false, false, type())
+    }
+
+    suspend fun serverTime(): Instant {
+        return callApi("/api/v3/time", HttpMethod.GET, emptyMap(), false, false, ServerTime.serializer()).serverTime
     }
 
     suspend fun getExchangeInfo(): ExchangeInfo {
@@ -664,6 +668,15 @@ open class BinanceApi(
         OCO
     }
 
+    enum class ExecutionType {
+        NEW,
+        CANCELED,
+        REPLACED,
+        REJECTED,
+        TRADE,
+        EXPIRED,
+    }
+
     enum class OCOStatus {
         RESPONSE,
         EXEC_STARTED,
@@ -680,6 +693,11 @@ open class BinanceApi(
     data class SystemStatus(
         val status: Int,
         val msg: String
+    )
+
+    @Serializable
+    data class ServerTime(
+        @Serializable(InstantLongSerializer::class) val serverTime: Instant
     )
 
     @Serializable
@@ -739,7 +757,13 @@ open class BinanceApi(
     data class CachedFee(
         @Serializable(BigDecimalStringSerializer::class) val maker: BigDecimal,
         @Serializable(BigDecimalStringSerializer::class) val taker: BigDecimal
-    )
+    ) {
+        @Transient
+        val makerMultiplier = BigDecimal.ONE - maker
+
+        @Transient
+        val takerMultiplier = BigDecimal.ONE - taker
+    }
 
     @Serializable
     data class ExchangeInfo(
@@ -749,6 +773,14 @@ open class BinanceApi(
         val exchangeFilters: List<ExchangeFilter>,
         val symbols: List<Symbol>
     ) {
+        val symbolsIndexed: Map<String, Symbol> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+            val map = HashMap<String, Symbol>(symbols.size, 1.0F)
+            for (symbol in symbols) {
+                map[symbol.symbol] = symbol
+            }
+            map
+        }
+
         enum class ExchangeFilter {
             EXCHANGE_MAX_NUM_ORDERS,
             EXCHANGE_MAX_NUM_ALGO_ORDERS,
@@ -783,21 +815,26 @@ open class BinanceApi(
             val symbol: String,
             val status: Status,
             val baseAsset: String,
-            val baseAssetPrecision: Int,
             val quoteAsset: String,
-            val quotePrecision: Int,
+            val baseAssetPrecision: Int,
             val quoteAssetPrecision: Int,
             val baseCommissionPrecision: Int,
             val quoteCommissionPrecision: Int,
-            val orderTypes: List<OrderType>,
             val icebergAllowed: Boolean,
             val ocoAllowed: Boolean,
             val quoteOrderQtyMarketAllowed: Boolean,
             val isSpotTradingAllowed: Boolean,
             val isMarginTradingAllowed: Boolean,
+            val orderTypes: List<OrderType>,
             val filters: List<Filter>,
             val permissions: List<TradingPermission>
         ) {
+            val filtersIndexed: Map<Filter.Type, Filter> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+                val map = EnumMap<Filter.Type, Filter>(Filter.Type::class.java)
+                for (filter in filters) map[filter.filterType] = filter
+                map
+            }
+
             @Serializable
             enum class Status {
                 PRE_TRADING,
@@ -1204,6 +1241,7 @@ open class BinanceApi(
     data class AccountUpdateEvent(
         @SerialName("e") val eventType: String,
         @SerialName("E") @Serializable(InstantLongSerializer::class) val eventTime: Instant,
+        @SerialName("u") @Serializable(InstantLongSerializer::class) val lastAccountUpdateTime: Instant,
         @SerialName("m") val makerCommissionRate: Long,
         @SerialName("t") val takerCommissionRate: Long,
         @SerialName("b") val buyerCommissionRate: Long,
@@ -1211,7 +1249,6 @@ open class BinanceApi(
         @SerialName("T") val canTrade: Boolean,
         @SerialName("W") val canWithdraw: Boolean,
         @SerialName("D") val canDeposit: Boolean,
-        @SerialName("u") @Serializable(InstantLongSerializer::class) val lastAccountUpdateTime: Instant,
         @SerialName("B") val balances: List<Balance>
     ) : AccountEvent {
         @Serializable
@@ -1241,59 +1278,59 @@ open class BinanceApi(
     data class BalanceUpdateEvent(
         @SerialName("e") val eventType: String,
         @SerialName("E") @Serializable(InstantLongSerializer::class) val eventTime: Instant,
+        @SerialName("T") @Serializable(InstantLongSerializer::class) val clearTime: Instant,
         @SerialName("a") val asset: String,
-        @SerialName("d") @Serializable(BigDecimalStringSerializer::class) val balanceDelta: BigDecimal,
-        @SerialName("T") @Serializable(InstantLongSerializer::class) val clearTime: Instant
+        @SerialName("d") @Serializable(BigDecimalStringSerializer::class) val balanceDelta: BigDecimal
     ) : AccountEvent
 
     @Serializable
     data class OrderUpdateEvent(
         @SerialName("e") val eventType: String,
         @SerialName("E") @Serializable(InstantLongSerializer::class) val eventTime: Instant,
+        @SerialName("O") @Serializable(InstantLongSerializer::class) val orderCreationTime: Instant,
+        @SerialName("T") @Serializable(InstantLongSerializer::class) val transactionTime: Instant,
         @SerialName("s") val symbol: String,
+        @SerialName("i") val orderId: Long,
+        @SerialName("t") val tradeId: Long,
+        @SerialName("g") val orderListId: Long,
         @SerialName("c") val clientOrderId: String,
+        @SerialName("C") val originalClientOrderId: String,
         @SerialName("S") val side: OrderSide,
         @SerialName("o") val orderType: OrderType,
         @SerialName("f") val timeInForce: TimeInForce,
-        @SerialName("q") @Serializable(BigDecimalStringSerializer::class) val orderQuantity: BigDecimal,
-        @SerialName("p") @Serializable(BigDecimalStringSerializer::class) val orderPrice: BigDecimal,
-        @SerialName("P") @Serializable(BigDecimalStringSerializer::class) val stopPrice: BigDecimal,
-        @SerialName("F") @Serializable(BigDecimalStringSerializer::class) val icebergQuantity: BigDecimal,
-        @SerialName("g") val orderListId: Long,
-        @SerialName("C") val originalClientOrderId: String,
-        @SerialName("x") val currentExecutionType: OrderStatus,
+        @SerialName("x") val currentExecutionType: ExecutionType,
         @SerialName("X") val currentOrderStatus: OrderStatus,
         @SerialName("r") val orderRejectReason: String,
-        @SerialName("i") val orderId: Long,
-        @SerialName("l") @Serializable(BigDecimalStringSerializer::class) val lastExecutedQuantity: BigDecimal,
-        @SerialName("z") @Serializable(BigDecimalStringSerializer::class) val cumulativeFilledQuantity: BigDecimal,
-        @SerialName("L") @Serializable(BigDecimalStringSerializer::class) val lastExecutedPrice: BigDecimal,
-        @SerialName("n") @Serializable(BigDecimalStringSerializer::class) val commissionAmount: BigDecimal,
-        @SerialName("N") val commissionAsset: String? = null,
-        @SerialName("T") @Serializable(InstantLongSerializer::class) val transactionTime: Instant,
-        @SerialName("t") val tradeId: Long,
-        @SerialName("I") val ignore0: Long,
         @SerialName("w") val inBook: Boolean,
         @SerialName("m") val makerSide: Boolean,
-        @SerialName("M") val ignore1: Boolean,
-        @SerialName("O") @Serializable(InstantLongSerializer::class) val orderCreationTime: Instant,
-        @SerialName("Z") @Serializable(BigDecimalStringSerializer::class) val cumulativeQuoteAssetTransactedQuantity: BigDecimal,
+        @SerialName("q") @Serializable(BigDecimalStringSerializer::class) val orderQuantity: BigDecimal,
+        @SerialName("Q") @Serializable(BigDecimalStringSerializer::class) val quoteOrderQty: BigDecimal,
+        @SerialName("F") @Serializable(BigDecimalStringSerializer::class) val icebergQuantity: BigDecimal,
+        @SerialName("p") @Serializable(BigDecimalStringSerializer::class) val orderPrice: BigDecimal,
+        @SerialName("P") @Serializable(BigDecimalStringSerializer::class) val stopPrice: BigDecimal,
+        @SerialName("L") @Serializable(BigDecimalStringSerializer::class) val lastExecutedPrice: BigDecimal,
+        @SerialName("l") @Serializable(BigDecimalStringSerializer::class) val lastExecutedQuantity: BigDecimal,
         @SerialName("Y") @Serializable(BigDecimalStringSerializer::class) val lastQuoteAssetTransactedQuantity: BigDecimal,
-        @SerialName("Q") @Serializable(BigDecimalStringSerializer::class) val quoteOrderQty: BigDecimal
+        @SerialName("z") @Serializable(BigDecimalStringSerializer::class) val cumulativeFilledQuantity: BigDecimal,
+        @SerialName("Z") @Serializable(BigDecimalStringSerializer::class) val cumulativeQuoteAssetTransactedQuantity: BigDecimal,
+        @SerialName("n") @Serializable(BigDecimalStringSerializer::class) val commissionAmount: BigDecimal,
+        @SerialName("N") val commissionAsset: String? = null,
+        @SerialName("I") val ignore0: Long,
+        @SerialName("M") val ignore1: Boolean
     ) : AccountEvent
 
     @Serializable
     data class ListStatusEvent(
         @SerialName("e") val eventType: String,
         @SerialName("E") @Serializable(InstantLongSerializer::class) val eventTime: Instant,
+        @SerialName("T") @Serializable(InstantLongSerializer::class) val transactionTime: Instant,
         @SerialName("s") val symbol: String,
+        @SerialName("C") val listClientOrderId: String,
         @SerialName("g") val orderListId: Long,
         @SerialName("c") val contingencyType: ContingencyType,
         @SerialName("l") val listStatusType: OCOStatus,
         @SerialName("L") val listOrderStatus: OCOOrderStatus,
         @SerialName("r") val listRejectReason: String,
-        @SerialName("C") val listClientOrderId: String,
-        @SerialName("T") @Serializable(InstantLongSerializer::class) val transactionTime: Instant,
         @SerialName("O") val orders: List<Order>
     ) : AccountEvent {
         @Serializable
@@ -2225,7 +2262,7 @@ open class BinanceApi(
     }
 
     private fun createWebsocketClient(): WebSocketClient {
-        val webSocketClient = ReactorNettyWebSocketClient(defaultHttpClient())
+        val webSocketClient = ReactorNettyWebSocketClient(defaultHttpClient(readTimeoutMs = 10000))
         webSocketClient.maxFramePayloadLength = 65536 * 4
         return webSocketClient
     }

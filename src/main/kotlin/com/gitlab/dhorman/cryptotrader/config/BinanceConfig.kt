@@ -4,6 +4,7 @@ import com.gitlab.dhorman.cryptotrader.service.binance.BinanceApi
 import com.gitlab.dhorman.cryptotrader.util.Secrets
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.context.annotation.Primary
 import org.springframework.context.annotation.Profile
 
 @Configuration
@@ -37,6 +38,7 @@ class BinanceConfig {
     }
 
     @Bean
+    @Primary
     fun binanceMainNetApi(): BinanceApi {
         return BinanceApi(
             apiKey = binanceApiKey(),
