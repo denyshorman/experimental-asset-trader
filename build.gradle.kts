@@ -1,5 +1,4 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-import org.springframework.boot.gradle.tasks.bundling.BootJar
 
 versioning.noWarningOnDirty = true
 
@@ -8,12 +7,12 @@ version = versioning.info.build
 java.sourceCompatibility = JavaVersion.VERSION_11
 
 plugins {
-    kotlin("jvm") version "1.3.72"
-    kotlin("plugin.spring") version "1.3.72"
-    kotlin("plugin.serialization") version "1.3.72"
-    id("org.springframework.boot") version "2.3.2.RELEASE"
-    id("io.spring.dependency-management") version "1.0.9.RELEASE"
-    id("net.nemerosa.versioning") version "2.8.2"
+    kotlin("jvm") version "1.4.20"
+    kotlin("plugin.spring") version "1.4.20"
+    kotlin("plugin.serialization") version "1.4.20"
+    id("org.springframework.boot") version "2.4.0"
+    id("io.spring.dependency-management") version "1.0.10.RELEASE"
+    id("net.nemerosa.versioning") version "2.14.0"
 }
 
 repositories {
@@ -31,16 +30,16 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk9")
-    implementation("org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.3.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-runtime:0.20.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.3.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.0.1")
     implementation("io.projectreactor.addons:reactor-adapter")
     implementation("io.projectreactor.addons:reactor-extra")
     implementation("io.projectreactor.kotlin:reactor-kotlin-extensions")
-    implementation("org.slf4j:slf4j-api:1.7.26")
+    implementation("org.slf4j:slf4j-api:1.7.30")
     implementation("ch.qos.logback:logback-classic:1.2.3")
-    implementation("io.github.microutils:kotlin-logging:1.7.9")
+    implementation("io.github.microutils:kotlin-logging:2.0.3")
     implementation("io.vavr:vavr-kotlin:0.10.2")
-    implementation("io.vavr:vavr-jackson:0.10.2")
+    implementation("io.vavr:vavr-jackson:0.10.3")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     implementation("com.fasterxml.jackson.module:jackson-module-parameter-names")
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8")
@@ -68,8 +67,8 @@ tasks {
                 "-Xuse-experimental=kotlinx.coroutines.ExperimentalCoroutinesApi",
                 "-Xuse-experimental=kotlinx.coroutines.ObsoleteCoroutinesApi",
                 "-Xuse-experimental=kotlinx.coroutines.FlowPreview",
-                "-Xuse-experimental=kotlinx.serialization.ImplicitReflectionSerializer",
-                "-Xuse-experimental=kotlinx.serialization.UnstableDefault",
+                "-Xuse-experimental=kotlinx.serialization.ExperimentalSerializationApi",
+                "-Xuse-experimental=kotlinx.serialization.InternalSerializationApi",
                 "-Xuse-experimental=kotlin.time.ExperimentalTime",
                 "-Xuse-experimental=kotlin.ExperimentalStdlibApi"
             )
@@ -78,10 +77,6 @@ tasks {
 
     withType<Test> {
         useJUnitPlatform()
-    }
-
-    withType<BootJar> {
-        layered()
     }
 }
 

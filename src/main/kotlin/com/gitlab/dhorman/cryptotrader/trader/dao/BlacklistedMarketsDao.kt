@@ -24,7 +24,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
-import org.springframework.data.r2dbc.core.DatabaseClient
+import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import org.springframework.stereotype.Repository
 import java.time.Clock
 import java.time.Instant
@@ -144,7 +144,7 @@ class BlacklistedMarketsCachedDao(
 
 @Repository
 class BlacklistedMarketsDbDao(
-    @Qualifier("pg_client") private val databaseClient: DatabaseClient,
+    @Qualifier("pg_client") private val entityTemplate: R2dbcEntityTemplate,
     @Qualifier("pg_conn_factory") private val connectionFactory: ConnectionFactory
 ) {
     private val logger = KotlinLogging.logger {}
@@ -172,7 +172,7 @@ class BlacklistedMarketsDbDao(
     }
 
     suspend fun getAll(): List<Tuple3<Market, Instant, Int>> {
-        return databaseClient.execute("SELECT market, added_ts, ttl_sec FROM poloniex_blacklisted_markets ")
+        return entityTemplate.databaseClient.sql("SELECT market, added_ts, ttl_sec FROM poloniex_blacklisted_markets ")
             .fetch().all()
             .map {
                 tuple(
@@ -186,7 +186,7 @@ class BlacklistedMarketsDbDao(
     }
 
     suspend fun upsert(market: Market, upsertTimestamp: Instant, ttlSec: Int) {
-        databaseClient.execute("INSERT INTO poloniex_blacklisted_markets(market) VALUES ($1) ON CONFLICT (market) DO UPDATE SET added_ts = $2, ttl_sec = $3 ")
+        entityTemplate.databaseClient.sql("INSERT INTO poloniex_blacklisted_markets(market) VALUES ($1) ON CONFLICT (market) DO UPDATE SET added_ts = $2, ttl_sec = $3 ")
             .bind(0, market.toString())
             .bind(1, upsertTimestamp)
             .bind(2, ttlSec)
@@ -197,7 +197,7 @@ class BlacklistedMarketsDbDao(
     suspend fun remove(markets: Iterable<Market>) {
         val marketsSqlString = markets.joinToString(",") { "'$it'" } // TODO: Remove when r2dbc postgres adds support from IN stmt
 
-        databaseClient.execute("DELETE FROM poloniex_blacklisted_markets WHERE market IN ($marketsSqlString)")
+        entityTemplate.databaseClient.sql("DELETE FROM poloniex_blacklisted_markets WHERE market IN ($marketsSqlString)")
             .then()
             .awaitFirstOrNull()
     }

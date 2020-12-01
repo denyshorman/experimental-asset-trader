@@ -7,15 +7,15 @@ import io.r2dbc.spi.ConnectionFactoryOptions.*
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.data.r2dbc.config.AbstractR2dbcConfiguration
-import org.springframework.data.r2dbc.connectionfactory.R2dbcTransactionManager
-import org.springframework.data.r2dbc.core.DatabaseClient
+import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
+import org.springframework.r2dbc.connection.R2dbcTransactionManager
 import org.springframework.transaction.ReactiveTransactionManager
 
 @Configuration
 class PostgresConfig : AbstractR2dbcConfiguration() {
     @Bean("pg_client")
-    fun databaseClient(): DatabaseClient {
-        return DatabaseClient.create(connectionFactory())
+    fun r2dbcEntityTemplate(): R2dbcEntityTemplate {
+        return R2dbcEntityTemplate(connectionFactory())
     }
 
     @Bean("pg_tran_manager")

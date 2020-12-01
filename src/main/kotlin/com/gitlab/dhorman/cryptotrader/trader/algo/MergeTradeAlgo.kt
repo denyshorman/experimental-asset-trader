@@ -66,14 +66,14 @@ class MergeTradeAlgo(
 
             val trade = when (market.orderType) {
                 OrderType.Buy -> run {
-                    val price = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.price }.max() ?: BigDecimal.ONE
-                    val fee = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.feeMultiplier }.max() ?: BigDecimal.ONE
+                    val price = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.price }.maxOrNull() ?: BigDecimal.ONE
+                    val fee = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.feeMultiplier }.maxOrNull() ?: BigDecimal.ONE
                     val quoteAmount = targetAmountDelta.divide(fee, 8, RoundingMode.DOWN)
                     BareTrade(quoteAmount, price, fee)
                 }
                 OrderType.Sell -> run {
-                    val price = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.price }.min() ?: BigDecimal.ONE
-                    val fee = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.feeMultiplier }.min() ?: BigDecimal.ONE
+                    val price = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.price }.minOrNull() ?: BigDecimal.ONE
+                    val fee = market.trades.asSequence().filter { !tradeAdjuster.isAdjustmentTrade(it) }.map { it.feeMultiplier }.minOrNull() ?: BigDecimal.ONE
                     val quoteAmount = targetAmountDelta.divide(price, 8, RoundingMode.UP).divide(fee, 8, RoundingMode.UP)
                     BareTrade(quoteAmount, price, fee)
                 }

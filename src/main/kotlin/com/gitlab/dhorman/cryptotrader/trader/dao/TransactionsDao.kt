@@ -15,7 +15,7 @@ import io.vavr.kotlin.tuple
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.beans.factory.annotation.Qualifier
-import org.springframework.data.r2dbc.core.DatabaseClient
+import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
 import java.time.Instant
@@ -25,11 +25,11 @@ import java.util.*
 
 @Repository
 class TransactionsDao(
-    @Qualifier("pg_client") private val databaseClient: DatabaseClient,
+    @Qualifier("pg_client") private val entityTemplate: R2dbcEntityTemplate,
     private val mapper: ObjectMapper
 ) {
     suspend fun getActive(): List<Tuple2<UUID, Array<TranIntentMarket>>> {
-        return databaseClient.execute("SELECT id, markets FROM poloniex_active_transactions")
+        return entityTemplate.databaseClient.sql("SELECT id, markets FROM poloniex_active_transactions")
             .fetch().all()
             .map {
                 tuple(
@@ -42,7 +42,7 @@ class TransactionsDao(
     }
 
     suspend fun getActive(id: UUID): Array<TranIntentMarket>? {
-        return databaseClient.execute("SELECT markets FROM poloniex_active_transactions where id = $1")
+        return entityTemplate.databaseClient.sql("SELECT markets FROM poloniex_active_transactions where id = $1")
             .bind(0, id)
             .fetch().one()
             .map { mapper.readValue<Array<TranIntentMarket>>(it["markets"] as String) }
@@ -59,7 +59,7 @@ class TransactionsDao(
         val fromCurrency = markets[activeMarketId].fromCurrency
         val fromAmount = (markets[activeMarketId] as TranIntentMarketPartiallyCompleted).fromAmount
 
-        databaseClient.execute("INSERT INTO poloniex_active_transactions(id, markets, from_currency, from_amount) VALUES ($1, $2, $3, $4)")
+        entityTemplate.databaseClient.sql("INSERT INTO poloniex_active_transactions(id, markets, from_currency, from_amount) VALUES ($1, $2, $3, $4)")
             .bind(0, id)
             .bind(1, marketsJson)
             .bind(2, fromCurrency)
@@ -69,7 +69,7 @@ class TransactionsDao(
     }
 
     suspend fun deleteActive(id: UUID) {
-        databaseClient.execute("DELETE FROM poloniex_active_transactions WHERE id = $1")
+        entityTemplate.databaseClient.sql("DELETE FROM poloniex_active_transactions WHERE id = $1")
             .bind(0, id)
             .then()
             .awaitFirstOrNull()
@@ -85,7 +85,7 @@ class TransactionsDao(
         val fromCurrency = markets[activeMarketId].fromCurrency
         val fromAmount = (markets[activeMarketId] as TranIntentMarketPartiallyCompleted).fromAmount
 
-        databaseClient.execute("UPDATE poloniex_active_transactions SET markets = $1, from_currency = $2, from_amount = $3 WHERE id = $4")
+        entityTemplate.databaseClient.sql("UPDATE poloniex_active_transactions SET markets = $1, from_currency = $2, from_amount = $3 WHERE id = $4")
             .bind(0, marketsJson)
             .bind(1, fromCurrency)
             .bind(2, fromAmount)
@@ -95,7 +95,7 @@ class TransactionsDao(
     }
 
     suspend fun getCompleted(): List<Tuple4<Long, Array<TranIntentMarket>, Instant, Instant>> {
-        return databaseClient.execute("SELECT * FROM poloniex_completed_transactions ORDER BY completed_ts DESC")
+        return entityTemplate.databaseClient.sql("SELECT * FROM poloniex_completed_transactions ORDER BY completed_ts DESC")
             .fetch().all()
             .map {
                 tuple(
@@ -116,7 +116,7 @@ class TransactionsDao(
             .withView(Views.DB::class.java)
             .writeValueAsString(markets)
 
-        databaseClient.execute("INSERT INTO poloniex_completed_transactions(created_ts, markets) VALUES ((SELECT created_ts FROM poloniex_active_transactions WHERE id = $1), $2)")
+        entityTemplate.databaseClient.sql("INSERT INTO poloniex_completed_transactions(created_ts, markets) VALUES ((SELECT created_ts FROM poloniex_active_transactions WHERE id = $1), $2)")
             .bind(0, activeTranId)
             .bind(1, marketsJson)
             .then()
@@ -124,7 +124,7 @@ class TransactionsDao(
     }
 
     suspend fun balanceInUse(currency: Currency): Tuple2<Currency, BigDecimal>? {
-        return databaseClient.execute("SELECT from_currency, SUM(from_amount) amount FROM poloniex_active_transactions WHERE from_currency = $1 GROUP BY from_currency")
+        return entityTemplate.databaseClient.sql("SELECT from_currency, SUM(from_amount) amount FROM poloniex_active_transactions WHERE from_currency = $1 GROUP BY from_currency")
             .bind(0, currency)
             .fetch().one()
             .map {
@@ -140,7 +140,7 @@ class TransactionsDao(
         // TODO: Escape input and wait until driver will support List input
         val currencyList = currencies.joinToString(",") { "'$it'" }
 
-        return databaseClient.execute("SELECT from_currency, SUM(from_amount) amount FROM poloniex_active_transactions WHERE from_currency IN ($currencyList) GROUP BY from_currency")
+        return entityTemplate.databaseClient.sql("SELECT from_currency, SUM(from_amount) amount FROM poloniex_active_transactions WHERE from_currency IN ($currencyList) GROUP BY from_currency")
             .fetch().all()
             .map {
                 tuple(

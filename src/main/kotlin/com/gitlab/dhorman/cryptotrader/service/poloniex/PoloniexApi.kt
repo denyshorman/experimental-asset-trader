@@ -32,7 +32,6 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirstOrNull
-import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.reactor.flux
 import kotlinx.coroutines.reactor.mono
 import mu.KotlinLogging
@@ -40,6 +39,7 @@ import org.springframework.http.MediaType
 import org.springframework.web.reactive.function.BodyInserters
 import org.springframework.web.reactive.function.client.ClientResponse
 import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.reactive.function.client.awaitExchange
 import org.springframework.web.reactive.socket.client.WebSocketClient
 import reactor.core.publisher.Mono
 import java.math.BigDecimal
@@ -625,7 +625,7 @@ open class PoloniexApi(
         queryParams: Map<String, String> = HashMap.empty(),
         limitRate: Boolean = true
     ): T {
-        return convertBodyToJsonAndHandleKnownErrors(type, limitRate) {
+        return handleKnownErrors(limitRate) {
             val qParams = hashMap("command" to command)
                 .merge(queryParams)
                 .iterator()
@@ -633,8 +633,7 @@ open class PoloniexApi(
 
             webClient.get()
                 .uri("$PoloniexPrivatePublicHttpApiUrl/public?$qParams")
-                .exchange()
-                .awaitSingle()
+                .awaitExchange { bodyToJson(it, type) }
         }
     }
 
@@ -644,7 +643,7 @@ open class PoloniexApi(
         postArgs: Map<String, String> = HashMap.empty(),
         limitRate: Boolean = true
     ): T {
-        return convertBodyToJsonAndHandleKnownErrors(type, limitRate) {
+        return handleKnownErrors(limitRate) {
             val postParamsPrivate = hashMap(
                 "command" to methodName,
                 "nonce" to System.currentTimeMillis().toString()
@@ -659,23 +658,20 @@ open class PoloniexApi(
                 .header("Sign", sign)
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .body(BodyInserters.fromPublisher(Mono.just(body), String::class.java))
-                .exchange()
-                .awaitSingle()
+                .awaitExchange { bodyToJson(it, type) }
         }
     }
 
-    private suspend fun <T : Any> convertBodyToJsonAndHandleKnownErrors(
-        type: TypeReference<T>,
+    private suspend fun <T : Any> handleKnownErrors(
         limitRate: Boolean = true,
-        block: suspend () -> ClientResponse
+        block: suspend () -> T
     ): T {
         var data: T?
 
         while (true) {
             try {
                 if (limitRate) delay(reqLimiter.get().toMillis())
-                val resp = block()
-                data = bodyToJson(resp, type)
+                data = block()
                 break
             } catch (e: IncorrectNonceException) {
                 if (logger.isTraceEnabled) logger.trace(e.message)

@@ -21,7 +21,7 @@ object SoundUtil {
         sdl.start()
         for (i in 0 until msecs * 8) {
             val angle = (i / (SAMPLE_RATE / hz)).toDouble() * 2.0 * PI
-            buf[0] = (sin(angle) * 127.0 * vol).toByte()
+            buf[0] = (sin(angle) * 127.0 * vol).toInt().toByte()
             sdl.write(buf, 0, buf.size)
         }
         sdl.drain()

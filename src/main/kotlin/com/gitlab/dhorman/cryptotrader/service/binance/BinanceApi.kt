@@ -20,10 +20,13 @@ import kotlinx.coroutines.reactor.mono
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.*
-import kotlinx.serialization.builtins.list
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.descriptors.*
+import kotlinx.serialization.encoding.CompositeDecoder
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.encoding.decodeStructure
+import kotlinx.serialization.json.*
 import mu.KotlinLogging
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpMethod
@@ -37,7 +40,8 @@ import org.springframework.web.reactive.socket.WebSocketMessage
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient
 import org.springframework.web.reactive.socket.client.WebSocketClient
 import reactor.netty.http.client.HttpClient
-import reactor.netty.tcp.ProxyProvider
+import reactor.netty.http.client.WebsocketClientSpec
+import reactor.netty.transport.ProxyProvider
 import java.io.File
 import java.math.BigDecimal
 import java.net.URI
@@ -167,7 +171,7 @@ open class BinanceApi(
         val params = HashMap<String, String>()
         params["timestamp"] = timestamp.toEpochMilli().toString()
         if (recvWindow != null) params["recvWindow"] = recvWindow.toString()
-        return callApi("/sapi/v1/capital/config/getall", HttpMethod.GET, params, true, true, UserCoin.serializer().list)
+        return callApi("/sapi/v1/capital/config/getall", HttpMethod.GET, params, true, true, ListSerializer(UserCoin.serializer()))
     }
 
     suspend fun tradeFee(timestamp: Instant = Instant.now(), recvWindow: Long? = null, symbol: String? = null): TradeFee {
@@ -189,7 +193,7 @@ open class BinanceApi(
             var cachedFeeInfo = if (feeInfoFileChannel != null) {
                 try {
                     val feeInfoJsonString = feeInfoFileChannel.readString()
-                    json.parse<CachedFeeInfo>(feeInfoJsonString)
+                    json.decodeFromString<CachedFeeInfo>(feeInfoJsonString)
                 } catch (e: Throwable) {
                     null
                 }
@@ -218,7 +222,7 @@ open class BinanceApi(
 
                     if (feeInfoFileChannel != null) {
                         ignoreErrors {
-                            val feeInfoJsonString = json.stringify(cachedFeeInfo)
+                            val feeInfoJsonString = json.encodeToString(cachedFeeInfo)
                             feeInfoFileChannel.writeString(feeInfoJsonString)
                         }
                     }
@@ -266,7 +270,7 @@ open class BinanceApi(
         params["startTime"] = startTime.toEpochMilli().toString()
         params["endTime"] = endTime.toEpochMilli().toString()
         params["limit"] = limit.toString()
-        return callApi("/api/v3/klines", HttpMethod.GET, params, false, false, CandlestickData.CandlestickDataDeserializer.list)
+        return callApi("/api/v3/klines", HttpMethod.GET, params, false, false, ListSerializer(CandlestickData.CandlestickDataDeserializer))
     }
 
     suspend fun getOrderBook(symbol: String, limit: Int = 100): OrderBook {
@@ -287,7 +291,7 @@ open class BinanceApi(
             var cachedExchangeInfo = if (exchangeInfoFileChannel != null) {
                 try {
                     val exchangeInfoJsonString = exchangeInfoFileChannel.readString()
-                    json.parse<CachedExchangeInfo>(exchangeInfoJsonString)
+                    json.decodeFromString<CachedExchangeInfo>(exchangeInfoJsonString)
                 } catch (e: Throwable) {
                     null
                 }
@@ -315,7 +319,7 @@ open class BinanceApi(
 
                     if (exchangeInfoFileChannel != null) {
                         ignoreErrors {
-                            val exchangeInfoJsonString = json.stringify(cachedExchangeInfo)
+                            val exchangeInfoJsonString = json.encodeToString(cachedExchangeInfo)
                             exchangeInfoFileChannel.writeString(exchangeInfoJsonString)
                         }
                     }
@@ -430,7 +434,7 @@ open class BinanceApi(
             put("timestamp", timestamp.toEpochMilli().toString())
             if (recvWindow != null) put("recvWindow", recvWindow.toString())
         }
-        return callApi("/api/v3/openOrders", HttpMethod.DELETE, params, true, true, CanceledOrder.serializer().list)
+        return callApi("/api/v3/openOrders", HttpMethod.DELETE, params, true, true, ListSerializer(CanceledOrder.serializer()))
     }
 
     suspend fun getAccountInfo(timestamp: Instant, recvWindow: Long? = null): AccountInfo {
@@ -458,41 +462,41 @@ open class BinanceApi(
             if (limit != null) put("limit", limit.toString())
             if (recvWindow != null) put("recvWindow", recvWindow.toString())
         }
-        return callApi("/api/v3/myTrades", HttpMethod.GET, params, true, true, AccountTrade.serializer().list)
+        return callApi("/api/v3/myTrades", HttpMethod.GET, params, true, true, ListSerializer(AccountTrade.serializer()))
     }
     //endregion
 
     //region Market Streams API
     fun aggregateTradeStream(symbol: String): Flow<EventData<AggregateTradeEvent>> {
-        return subscribeToCached("$symbol@aggTrade") { subscribeTo(it, type<AggregateTradeEvent>()) }
+        return subscribeToCached("$symbol@aggTrade") { subscribeTo(it, type()) }
     }
 
     fun tradeStream(symbol: String): Flow<EventData<TradeEvent>> {
-        return subscribeToCached("$symbol@trade") { subscribeTo(it, type<TradeEvent>()) }
+        return subscribeToCached("$symbol@trade") { subscribeTo(it, type()) }
     }
 
     fun candlestickStream(symbol: String, interval: CandleStickInterval): Flow<EventData<CandlestickEvent>> {
-        return subscribeToCached("$symbol@kline_${interval.id}") { subscribeTo(it, type<CandlestickEvent>()) }
+        return subscribeToCached("$symbol@kline_${interval.id}") { subscribeTo(it, type()) }
     }
 
     fun individualSymbolMiniTickerStream(symbol: String): Flow<EventData<MiniTickerEvent>> {
-        return subscribeToCached("$symbol@miniTicker") { subscribeTo(it, type<MiniTickerEvent>()) }
+        return subscribeToCached("$symbol@miniTicker") { subscribeTo(it, type()) }
     }
 
     val allMarketMiniTickersStream: Flow<EventData<List<MiniTickerEvent>>> = run {
-        subscribeTo("!miniTicker@arr", MiniTickerEvent.serializer().list).share()
+        subscribeTo("!miniTicker@arr", ListSerializer(MiniTickerEvent.serializer())).share()
     }
 
     fun individualSymbolTickerStream(symbol: String): Flow<EventData<TickerEvent>> {
-        return subscribeToCached("$symbol@ticker") { subscribeTo(it, type<TickerEvent>()) }
+        return subscribeToCached("$symbol@ticker") { subscribeTo(it, type()) }
     }
 
     val allMarketTickersStream: Flow<EventData<List<TickerEvent>>> = run {
-        subscribeTo("!ticker@arr", TickerEvent.serializer().list).share()
+        subscribeTo("!ticker@arr", ListSerializer(TickerEvent.serializer())).share()
     }
 
     fun individualSymbolBookTickerStream(symbol: String): Flow<EventData<BookTickerEvent>> {
-        return subscribeToCached("$symbol@bookTicker") { subscribeTo(it, type<BookTickerEvent>()) }
+        return subscribeToCached("$symbol@bookTicker") { subscribeTo(it, type()) }
     }
 
     val allBookTickerStream: Flow<EventData<BookTickerEvent>> = run {
@@ -505,7 +509,7 @@ open class BinanceApi(
         updateSpeed: BookUpdateSpeed? = null
     ): Flow<EventData<PartialBookDepthEvent>> {
         val updateSpeedStr = if (updateSpeed == null) "" else "@${updateSpeed.timeMs}ms"
-        return subscribeToCached("$symbol@depth${level.id}$updateSpeedStr") { subscribeTo(it, type<PartialBookDepthEvent>()) }
+        return subscribeToCached("$symbol@depth${level.id}$updateSpeedStr") { subscribeTo(it, type()) }
     }
 
     fun diffDepthStream(
@@ -513,7 +517,7 @@ open class BinanceApi(
         updateSpeed: BookUpdateSpeed? = null
     ): Flow<EventData<DiffDepthEvent>> {
         val updateSpeedStr = if (updateSpeed == null) "" else "@${updateSpeed.timeMs}ms"
-        return subscribeToCached("$symbol@depth$updateSpeedStr") { subscribeTo(it, type<DiffDepthEvent>()) }
+        return subscribeToCached("$symbol@depth$updateSpeedStr") { subscribeTo(it, type()) }
     }
     //endregion
 
@@ -578,7 +582,7 @@ open class BinanceApi(
 
         companion object {
             object CandleStickIntervalSerializer : KSerializer<CandleStickInterval> {
-                override val descriptor: SerialDescriptor = PrimitiveDescriptor("BinanceCandleStickIntervalSerializer", PrimitiveKind.STRING)
+                override val descriptor: SerialDescriptor = buildSerialDescriptor("BinanceCandleStickIntervalSerializer", PrimitiveKind.STRING)
 
                 override fun deserialize(decoder: Decoder): CandleStickInterval {
                     return when (val intervalStr = decoder.decodeString()) {
@@ -895,7 +899,7 @@ open class BinanceApi(
         val ignore: BigDecimal
     ) {
         object CandlestickDataDeserializer : KSerializer<CandlestickData> {
-            override val descriptor: SerialDescriptor = SerialDescriptor("BinanceCandlestickDataDeserializer", StructureKind.LIST)
+            override val descriptor: SerialDescriptor = buildSerialDescriptor("BinanceCandlestickDataDeserializer", StructureKind.LIST)
 
             override fun deserialize(decoder: Decoder): CandlestickData {
                 return decoder.decodeStructure(descriptor) {
@@ -914,7 +918,7 @@ open class BinanceApi(
 
                     loop@ while (true) {
                         when (val index = decodeElementIndex(descriptor)) {
-                            CompositeDecoder.READ_DONE -> break@loop
+                            CompositeDecoder.DECODE_DONE -> break@loop
                             0 -> openTime = decodeSerializableElement(descriptor, index, InstantLongSerializer)
                             1 -> open = decodeSerializableElement(descriptor, index, BigDecimalStringSerializer)
                             2 -> high = decodeSerializableElement(descriptor, index, BigDecimalStringSerializer)
@@ -964,7 +968,7 @@ open class BinanceApi(
             val qty: BigDecimal
         ) {
             object RecordDeserializer : KSerializer<Record> {
-                override val descriptor: SerialDescriptor = SerialDescriptor("BinanceOrderBookRecordDeserializer", StructureKind.LIST) {
+                override val descriptor: SerialDescriptor = buildSerialDescriptor("BinanceOrderBookRecordDeserializer", StructureKind.LIST) {
                     element("price", BigDecimalStringSerializer.descriptor)
                     element("qty", BigDecimalStringSerializer.descriptor)
                 }
@@ -976,7 +980,7 @@ open class BinanceApi(
 
                         loop@ while (true) {
                             when (val index = decodeElementIndex(descriptor)) {
-                                CompositeDecoder.READ_DONE -> break@loop
+                                CompositeDecoder.DECODE_DONE -> break@loop
                                 0 -> price = decodeSerializableElement(descriptor, index, BigDecimalStringSerializer)
                                 1 -> qty = decodeSerializableElement(descriptor, index, BigDecimalStringSerializer)
                             }
@@ -1663,17 +1667,18 @@ open class BinanceApi(
             request = request.header(API_KEY_HEADER, apiKey)
         }
 
-        val response = request.awaitExchange()
-        val data = response.awaitBody<String>()
+        return request.awaitExchange { response ->
+            val data = response.awaitBody<String>()
 
-        if (!initLimits) response.extractAndCacheLimits()
+            if (!initLimits) response.extractAndCacheLimits()
 
-        if (response.statusCode().is2xxSuccessful) {
-            return json.parse(retType, data)
-        } else {
-            response.extractAndCacheRetryTime()
-            val error = json.parse<ErrorMsg>(data)
-            throw Exception(error.code, error.msg)
+            if (response.statusCode().is2xxSuccessful) {
+                json.decodeFromString(retType, data)!!
+            } else {
+                response.extractAndCacheRetryTime()
+                val error = json.decodeFromString<ErrorMsg>(data)
+                throw Exception(error.code, error.msg)
+            }
         }
     }
 
@@ -1736,12 +1741,12 @@ open class BinanceApi(
 
                                             val event = try {
                                                 try {
-                                                    json.parse<WebSocketEvent.Push>(payloadJsonString)
+                                                    json.decodeFromString<WebSocketEvent.Push>(payloadJsonString)
                                                 } catch (e: SerializationException) {
                                                     try {
-                                                        json.parse<WebSocketEvent.Response>(payloadJsonString)
+                                                        json.decodeFromString<WebSocketEvent.Response>(payloadJsonString)
                                                     } catch (e: SerializationException) {
-                                                        val error = json.parse<WebSocketEvent.Error>(payloadJsonString)
+                                                        val error = json.decodeFromString<WebSocketEvent.Error>(payloadJsonString)
                                                         if (error.id == null) {
                                                             throw error.toException()
                                                         } else {
@@ -1801,7 +1806,7 @@ open class BinanceApi(
                                             for (req in connectionData!!.requestChannel) reqQueue.add(req)
                                         }
 
-                                        val groupedRequests = reqQueue.asSequence()
+                                        val groupedRequests = reqQueue
                                             .groupBy { it.request.method }
                                             .mapValues { (method, requests) ->
                                                 when (method) {
@@ -1831,7 +1836,7 @@ open class BinanceApi(
 
                                         for ((_, requests) in groupedRequests) {
                                             for (request in requests) {
-                                                val jsonStr = json.stringify(request)
+                                                val jsonStr = json.encodeToString(request)
                                                 val webSocketMsg = session.textMessage(jsonStr)
                                                 wsMsgReceiver.send(webSocketMsg)
                                             }
@@ -1964,7 +1969,7 @@ open class BinanceApi(
                                 for (msg in connection.responseChannelRegistry.get(channel)!!) {
                                     when (msg) {
                                         is WebSocketEvent.Push -> {
-                                            eventData = eventData.setPayload(json.fromJson(payloadType, msg.data))
+                                            eventData = eventData.setPayload(json.decodeFromJsonElement(payloadType, msg.data))
                                             this@channelFlow.send(eventData)
                                         }
                                         is WebSocketEvent.Error -> {
@@ -2015,7 +2020,7 @@ open class BinanceApi(
                                         for (msg in connection.responseChannelRegistry.get(channel)!!) {
                                             when (msg) {
                                                 is WebSocketEvent.Push -> {
-                                                    eventData = eventData.setPayload(json.fromJson(payloadType, msg.data))
+                                                    eventData = eventData.setPayload(json.decodeFromJsonElement(payloadType, msg.data))
                                                     ignoreErrors { this@channelFlow.send(eventData) }
                                                 }
                                                 is WebSocketEvent.Response -> {
@@ -2066,7 +2071,7 @@ open class BinanceApi(
             val listenKeyCached = if (wsListenKeyFileChannel != null) {
                 try {
                     val wsListenKeyJsonString = wsListenKeyFileChannel.readString()
-                    json.parse<CachedListenKey>(wsListenKeyJsonString)
+                    json.decodeFromString<CachedListenKey>(wsListenKeyJsonString)
                 } catch (e: Throwable) {
                     null
                 }
@@ -2092,7 +2097,7 @@ open class BinanceApi(
 
                 if (wsListenKeyFileChannel != null) {
                     ignoreErrors {
-                        val wsListenKeyJsonString = json.stringify(CachedListenKey(listenKey))
+                        val wsListenKeyJsonString = json.encodeToString(CachedListenKey(listenKey))
                         wsListenKeyFileChannel.writeString(wsListenKeyJsonString)
                     }
                 }
@@ -2118,7 +2123,7 @@ open class BinanceApi(
 
                 if (wsListenKeyFileChannel != null) {
                     ignoreErrors {
-                        val wsListenKeyJsonString = json.stringify(CachedListenKey(listenKey))
+                        val wsListenKeyJsonString = json.encodeToString(CachedListenKey(listenKey))
                         wsListenKeyFileChannel.writeString(wsListenKeyJsonString)
                     }
                 }
@@ -2140,15 +2145,15 @@ open class BinanceApi(
                             return@collect
                         }
 
-                        val eventType = eventData.payload.jsonObject["e"]?.contentOrNull
+                        val eventType = eventData.payload.jsonObject["e"]?.jsonPrimitive?.contentOrNull
 
                         val accountEvent: AccountEvent? = try {
                             when (eventType) {
-                                "outboundAccountInfo" -> json.fromJson<AccountUpdateEvent>(eventData.payload)
-                                "outboundAccountPosition" -> json.fromJson<OutboundAccountPositionEvent>(eventData.payload)
-                                "balanceUpdate" -> json.fromJson<BalanceUpdateEvent>(eventData.payload)
-                                "executionReport" -> json.fromJson<OrderUpdateEvent>(eventData.payload)
-                                "listStatus" -> json.fromJson<ListStatusEvent>(eventData.payload)
+                                "outboundAccountInfo" -> json.decodeFromJsonElement<AccountUpdateEvent>(eventData.payload)
+                                "outboundAccountPosition" -> json.decodeFromJsonElement<OutboundAccountPositionEvent>(eventData.payload)
+                                "balanceUpdate" -> json.decodeFromJsonElement<BalanceUpdateEvent>(eventData.payload)
+                                "executionReport" -> json.decodeFromJsonElement<OrderUpdateEvent>(eventData.payload)
+                                "listStatus" -> json.decodeFromJsonElement<ListStatusEvent>(eventData.payload)
                                 null -> {
                                     logger.warn("Event type is null in private channel ${eventData.payload}")
                                     null
@@ -2213,43 +2218,44 @@ open class BinanceApi(
     private fun defaultHttpClient(
         connectTimeoutMs: Long? = 5000,
         readTimeoutMs: Long? = 5000,
-        writeTimeoutMs: Long? = 5000
+        writeTimeoutMs: Long? = 5000,
     ): HttpClient {
-        val sslContextBuilder = SslContextBuilder.forClient()
-
-        if (System.getenv("HTTP_CERT_TRUST_ALL") != null) {
-            sslContextBuilder.trustManager(InsecureTrustManagerFactory.INSTANCE)
-        }
-
-        val proxyOptions = fun(opt: ProxyProvider.TypeSpec) {
-            val tpe = when (System.getenv("HTTP_PROXY_TYPE")) {
-                "http" -> ProxyProvider.Proxy.HTTP
-                "socks5" -> ProxyProvider.Proxy.SOCKS5
-                else -> throw RuntimeException("Can't recognize HTTP_PROXY_TYPE option")
-            }
-
-            val host = System.getenv("HTTP_PROXY_HOST")
-                ?: throw Exception("Please define HTTP_PROXY_HOST env variable")
-
-            val port = System.getenv("HTTP_PROXY_PORT")?.toInt()
-                ?: throw Exception("Please define valid port number for HTTP_PROXY_PORT env variable")
-
-            opt.type(tpe).host(host).port(port)
-        }
-
-        return HttpClient.create()
+        var client = HttpClient.create()
             .headers { it[HttpHeaderNames.USER_AGENT] = "trading-robot" }
-            .secure { it.sslContext(sslContextBuilder.build()) }
-            .tcpConfiguration { tcpClient ->
-                var client = tcpClient
-                if (connectTimeoutMs != null) client = client.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs.toInt())
-                if (System.getenv("HTTP_PROXY_ENABLED") != null) client = client.proxy(proxyOptions)
-                client = client.doOnConnected { conn ->
-                    if (readTimeoutMs != null) conn.addHandlerLast(ReadTimeoutHandler(readTimeoutMs, TimeUnit.MILLISECONDS))
-                    if (writeTimeoutMs != null) conn.addHandlerLast(WriteTimeoutHandler(writeTimeoutMs, TimeUnit.MILLISECONDS))
+            .secure {
+                val sslContextBuilder = SslContextBuilder.forClient()
+
+                if (System.getenv("HTTP_CERT_TRUST_ALL") != null) {
+                    sslContextBuilder.trustManager(InsecureTrustManagerFactory.INSTANCE)
                 }
-                client
+
+                it.sslContext(sslContextBuilder.build())
             }
+            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs?.toInt())
+            .doOnConnected { conn ->
+                if (readTimeoutMs != null) conn.addHandlerLast(ReadTimeoutHandler(readTimeoutMs, TimeUnit.MILLISECONDS))
+                if (writeTimeoutMs != null) conn.addHandlerLast(WriteTimeoutHandler(writeTimeoutMs, TimeUnit.MILLISECONDS))
+            }
+
+        if (System.getenv("HTTP_PROXY_ENABLED") != null) {
+            client = client.proxy {
+                val tpe = when (System.getenv("HTTP_PROXY_TYPE")) {
+                    "http" -> ProxyProvider.Proxy.HTTP
+                    "socks5" -> ProxyProvider.Proxy.SOCKS5
+                    else -> throw RuntimeException("Can't recognize HTTP_PROXY_TYPE option")
+                }
+
+                val host = System.getenv("HTTP_PROXY_HOST")
+                    ?: throw Exception("Please define HTTP_PROXY_HOST env variable")
+
+                val port = System.getenv("HTTP_PROXY_PORT")?.toInt()
+                    ?: throw Exception("Please define valid port number for HTTP_PROXY_PORT env variable")
+
+                it.type(tpe).host(host).port(port)
+            }
+        }
+
+        return client
     }
 
     private fun createHttpClient(): WebClient {
@@ -2262,9 +2268,9 @@ open class BinanceApi(
     }
 
     private fun createWebsocketClient(): WebSocketClient {
-        val webSocketClient = ReactorNettyWebSocketClient(defaultHttpClient(readTimeoutMs = 10000))
-        webSocketClient.maxFramePayloadLength = 65536 * 4
-        return webSocketClient
+        return ReactorNettyWebSocketClient(defaultHttpClient(readTimeoutMs = 10000)) {
+            WebsocketClientSpec.builder().maxFramePayloadLength(65536 * 4)
+        }
     }
     //endregion
 
@@ -2290,7 +2296,7 @@ open class BinanceApi(
         //region Serializers
         @Serializer(BigDecimal::class)
         private object BigDecimalStringSerializer : KSerializer<BigDecimal> {
-            override val descriptor: SerialDescriptor = PrimitiveDescriptor("BinanceBigDecimalStringSerializer", PrimitiveKind.STRING)
+            override val descriptor: SerialDescriptor = buildSerialDescriptor("BinanceBigDecimalStringSerializer", PrimitiveKind.STRING)
 
             override fun deserialize(decoder: Decoder): BigDecimal {
                 return BigDecimal(decoder.decodeString())
@@ -2303,7 +2309,7 @@ open class BinanceApi(
 
         @Serializer(BigDecimal::class)
         private object BigDecimalDoubleSerializer : KSerializer<BigDecimal> {
-            override val descriptor: SerialDescriptor = PrimitiveDescriptor("BinanceBigDecimalDoubleSerializer", PrimitiveKind.DOUBLE)
+            override val descriptor: SerialDescriptor = buildSerialDescriptor("BinanceBigDecimalDoubleSerializer", PrimitiveKind.DOUBLE)
 
             override fun deserialize(decoder: Decoder): BigDecimal {
                 return BigDecimal(decoder.decodeDouble().toString())
@@ -2316,7 +2322,7 @@ open class BinanceApi(
 
         @Serializer(Instant::class)
         private object InstantLongSerializer : KSerializer<Instant> {
-            override val descriptor: SerialDescriptor = PrimitiveDescriptor("BinanceInstantLongSerializer", PrimitiveKind.LONG)
+            override val descriptor: SerialDescriptor = buildSerialDescriptor("BinanceInstantLongSerializer", PrimitiveKind.LONG)
 
             override fun deserialize(decoder: Decoder): Instant {
                 return Instant.ofEpochMilli(decoder.decodeLong())

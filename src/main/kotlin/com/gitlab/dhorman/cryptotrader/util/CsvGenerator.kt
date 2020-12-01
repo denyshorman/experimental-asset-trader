@@ -25,7 +25,7 @@ class CsvGenerator {
                 }
             }
         }
-        sb.appendln()
+        sb.appendLine()
     }
 
     fun dumpToString(): String = sb.toString()

@@ -16,7 +16,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
-import org.springframework.data.r2dbc.core.DatabaseClient
+import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
 
@@ -116,7 +116,7 @@ class MarketLimitsCachedDao(private val marketLimitsDao: MarketLimitsDbDao) {
 
 @Repository
 class MarketLimitsDbDao(
-    @Qualifier("pg_client") private val databaseClient: DatabaseClient,
+    @Qualifier("pg_client") private val entityTemplate: R2dbcEntityTemplate,
     @Qualifier("pg_conn_factory") private val connectionFactory: ConnectionFactory
 ) {
     private val logger = KotlinLogging.logger {}
@@ -144,7 +144,7 @@ class MarketLimitsDbDao(
     }
 
     suspend fun getAll(): List<MarketLimit> {
-        return databaseClient.execute("SELECT market_base_currency, market_quote_currency, price, amount, total FROM poloniex_market_limits")
+        return entityTemplate.databaseClient.sql("SELECT market_base_currency, market_quote_currency, price, amount, total FROM poloniex_market_limits")
             .fetch().all()
             .map {
                 MarketLimit(
@@ -162,7 +162,7 @@ class MarketLimitsDbDao(
     }
 
     suspend fun removeAll() {
-        databaseClient.execute("DELETE FROM poloniex_market_limits").then().awaitFirstOrNull()
+        entityTemplate.databaseClient.sql("DELETE FROM poloniex_market_limits").then().awaitFirstOrNull()
     }
 
     suspend fun setAll(marketLimits: List<MarketLimit>) {
@@ -174,7 +174,7 @@ class MarketLimitsDbDao(
 
         removeAll()
 
-        databaseClient.execute("INSERT INTO poloniex_market_limits(market_base_currency, market_quote_currency, price, amount, total) VALUES $values").then().awaitFirstOrNull()
+        entityTemplate.databaseClient.sql("INSERT INTO poloniex_market_limits(market_base_currency, market_quote_currency, price, amount, total) VALUES $values").then().awaitFirstOrNull()
     }
 }
 

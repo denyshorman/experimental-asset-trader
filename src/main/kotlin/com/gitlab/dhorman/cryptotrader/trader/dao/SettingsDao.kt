@@ -20,7 +20,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
-import org.springframework.data.r2dbc.core.DatabaseClient
+import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
 
@@ -232,7 +232,7 @@ class SettingsCachedDao(
 
 @Repository
 class SettingsDbDao(
-    @Qualifier("pg_client") private val databaseClient: DatabaseClient,
+    @Qualifier("pg_client") private val entityTemplate: R2dbcEntityTemplate,
     @Qualifier("pg_conn_factory") private val connectionFactory: ConnectionFactory
 ) {
     private val logger = KotlinLogging.logger {}
@@ -260,7 +260,7 @@ class SettingsDbDao(
     }
 
     suspend fun getAll(): List<Tuple2<String, String>> {
-        return databaseClient.execute("SELECT key,value FROM poloniex_settings")
+        return entityTemplate.databaseClient.sql("SELECT key,value FROM poloniex_settings")
             .fetch().all()
             .map { tuple(it["key"] as String, it["value"] as String) }
             .collectList()
@@ -268,7 +268,7 @@ class SettingsDbDao(
     }
 
     suspend fun get(key: String): String? {
-        return databaseClient.execute("SELECT value FROM poloniex_settings where key = $1")
+        return entityTemplate.databaseClient.sql("SELECT value FROM poloniex_settings where key = $1")
             .bind(0, key)
             .fetch().one()
             .map { it["value"] as String }
@@ -276,7 +276,7 @@ class SettingsDbDao(
     }
 
     suspend fun upsert(key: String, value: String) {
-        databaseClient.execute("INSERT INTO poloniex_settings(key,value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value = $2")
+        entityTemplate.databaseClient.sql("INSERT INTO poloniex_settings(key,value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value = $2")
             .bind(0, key)
             .bind(1, value)
             .then()
@@ -284,7 +284,7 @@ class SettingsDbDao(
     }
 
     suspend fun remove(key: String) {
-        databaseClient.execute("DELETE FROM poloniex_settings WHERE key = $1")
+        entityTemplate.databaseClient.sql("DELETE FROM poloniex_settings WHERE key = $1")
             .bind(0, key)
             .then()
             .awaitFirstOrNull()

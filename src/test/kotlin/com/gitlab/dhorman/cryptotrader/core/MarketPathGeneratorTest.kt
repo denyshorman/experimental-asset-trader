@@ -187,7 +187,7 @@ class MarketPathGeneratorTest {
         Files.newBufferedWriter(Path.of("build/reports/USDT_USDC_paths.txt")).use { writer ->
             MarketPathGenerator(allMarkets).generate(tuple("USDT", "USDC")).forEach { path ->
                 val str = path.joinToString(" | ") { it.toString() }
-                writer.appendln(str)
+                writer.appendLine(str)
             }
         }
     }
@@ -207,7 +207,7 @@ class MarketPathGeneratorTest {
             MarketPathGenerator(allMarkets).generateAll(primaryCurrencies).forEach { entry ->
                 entry.value.forEach { path ->
                     val str = path.joinToString(" | ") { it.toString() }
-                    writer.appendln(str)
+                    writer.appendLine(str)
                 }
             }
         }
@@ -222,7 +222,7 @@ class MarketPathGeneratorTest {
                     val str = path.joinToString(" | ") { (s, m) ->
                         "$m${if (s == OrderSpeed.Instant) "0" else "1"}"
                     }
-                    writer.appendln(str)
+                    writer.appendLine(str)
                 }
             }
         }

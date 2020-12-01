@@ -9,14 +9,14 @@ import io.vavr.kotlin.tuple
 import kotlinx.coroutines.reactive.awaitFirstOrNull
 import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.beans.factory.annotation.Qualifier
-import org.springframework.data.r2dbc.core.DatabaseClient
+import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import org.springframework.stereotype.Repository
 import java.math.BigDecimal
 
 @Repository
-class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: DatabaseClient) {
+class UnfilledMarketsDao(@Qualifier("pg_client") private val entityTemplate: R2dbcEntityTemplate) {
     suspend fun getAll(): List<UnfilledData> {
-        return databaseClient.execute(
+        return entityTemplate.databaseClient.sql(
             """
             SELECT init_currency, init_currency_amount, current_currency, current_currency_amount
             FROM poloniex_unfilled_markets
@@ -37,7 +37,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
     }
 
     suspend fun getAllCurrenciesWithInitAmountMoreOrEqual(threshold: BigDecimal): kotlin.collections.List<UnfilledData> {
-        return databaseClient.execute("SELECT init_currency, init_currency_amount, current_currency, current_currency_amount FROM poloniex_unfilled_markets WHERE init_currency_amount >= $1")
+        return entityTemplate.databaseClient.sql("SELECT init_currency, init_currency_amount, current_currency, current_currency_amount FROM poloniex_unfilled_markets WHERE init_currency_amount >= $1")
             .bind(0, threshold)
             .fetch().all()
             .map {
@@ -53,7 +53,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
     }
 
     suspend fun get(id: Long): UnfilledData? {
-        return databaseClient.execute(
+        return entityTemplate.databaseClient.sql(
             """
             SELECT init_currency, init_currency_amount, current_currency, current_currency_amount
             FROM poloniex_unfilled_markets
@@ -76,7 +76,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
     suspend fun get(initFromCurrencies: Iterable<Currency>, fromCurrency: Currency): List<Tuple2<Amount, Amount>> {
         val initCurrencies = initFromCurrencies.joinToString(",") { "'$it'" } // TODO: Remove when r2dbc postgres adds support from IN stmt
 
-        return databaseClient.execute(
+        return entityTemplate.databaseClient.sql(
             """
             SELECT init_currency_amount, current_currency_amount
             FROM poloniex_unfilled_markets
@@ -100,14 +100,14 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
     suspend fun remove(initFromCurrencies: Iterable<Currency>, fromCurrency: Currency) {
         val initCurrencies = initFromCurrencies.joinToString(",") { "'$it'" } // TODO: Remove when r2dbc postgres adds support from IN stmt
 
-        databaseClient.execute("DELETE FROM poloniex_unfilled_markets WHERE init_currency IN ($initCurrencies) AND current_currency = $1")
+        entityTemplate.databaseClient.sql("DELETE FROM poloniex_unfilled_markets WHERE init_currency IN ($initCurrencies) AND current_currency = $1")
             .bind(0, fromCurrency)
             .then()
             .awaitFirstOrNull()
     }
 
     suspend fun remove(id: Long) {
-        databaseClient.execute("DELETE FROM poloniex_unfilled_markets WHERE id = $1")
+        entityTemplate.databaseClient.sql("DELETE FROM poloniex_unfilled_markets WHERE id = $1")
             .bind(0, id)
             .then()
             .awaitFirstOrNull()
@@ -119,7 +119,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
         currentCurrency: Currency,
         currentCurrencyAmount: Amount
     ) {
-        databaseClient.execute(
+        entityTemplate.databaseClient.sql(
             """
             INSERT INTO poloniex_unfilled_markets(init_currency, init_currency_amount, current_currency, current_currency_amount)
             VALUES ($1, $2, $3, $4)
@@ -141,7 +141,7 @@ class UnfilledMarketsDao(@Qualifier("pg_client") private val databaseClient: Dat
 
         val values = unfilledAmounts.asSequence().map { "('$initCurrency','$initCurrencyAmount','${it._1}','${it._2}')" }.joinToString()
 
-        databaseClient.execute(
+        entityTemplate.databaseClient.sql(
             """
             INSERT INTO poloniex_unfilled_markets(init_currency, init_currency_amount, current_currency, current_currency_amount)
             VALUES $values
