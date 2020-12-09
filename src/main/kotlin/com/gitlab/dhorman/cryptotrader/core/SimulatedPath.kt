@@ -258,7 +258,9 @@ fun Array<TranIntentMarket>.concat(marketIdx: Int, other: Array<TranIntentMarket
     return this.dropRight(this.length() - marketIdx).appendAll(other)
 }
 
-fun SimulatedPath.isRiskFree(): Boolean {
+fun SimulatedPath.isRiskFree(fromCurrency: Currency, primaryCurrencies: Iterable<Currency>): Boolean {
+    if (!primaryCurrencies.contains(fromCurrency)) return false
+
     var i = 0
     while (i < orderIntents.length()) {
         if (i > 0 && orderIntents[i].orderSpeed == OrderSpeed.Delayed) {

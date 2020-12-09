@@ -62,6 +62,7 @@ class PathGenerator(
         val orderBooks = poloniexApi.orderBooksPollingStream.first()
         val tradeVolumeStat = poloniexApi.tradeVolumeStat.first()
         val baseCurrencyLimits = marketLimitsDao.getAllBaseCurrencyLimits()
+        val primaryCurrencies = settingsDao.getPrimaryCurrencies()
 
         val fromCurrency: Currency
         val fromAmount: Amount
@@ -121,6 +122,7 @@ class PathGenerator(
                 }
 
                 val currSimulatedPathDelayedCount = currPathMetrics.path.marketSpeedCount(OrderSpeed.Delayed)
+                val currPathRiskFree = currPathMetrics.path.isRiskFree(fromCurrency, primaryCurrencies)
                 val definedPriceThreshold = settingsDao.getCheckPathPriceThreshold()
 
                 filterPath = f@{ path ->
@@ -133,6 +135,12 @@ class PathGenerator(
                         val waitTime = path.waitTime(fromCurrency, tradeVolumeStat, pathAmountPrediction)
                         val profitability = calcProfitability(profit, waitTime)
                         if (profitability <= currPathMetrics.profitability) return@f tuple(null, PathFilterReturnReason.NotFitBusinessCondition)
+                        val pathRiskFree = path.isRiskFree(fromCurrency, primaryCurrencies)
+
+                        when {
+                            currPathRiskFree && !pathRiskFree -> return@f tuple(null, PathFilterReturnReason.NotFitBusinessCondition)
+                            pathRiskFree -> return@f tuple(PathWithMetrics(path, profit, profitability), PathFilterReturnReason.PathFits)
+                        }
 
                         val currPathFirstIntent = currPathMetrics.path.orderIntents.first()
                         val pathFirstIntent = path.orderIntents.first()
@@ -216,14 +224,14 @@ class PathGenerator(
             }
 
             val comparator = Comparator<PathWithMetrics> { data0, data1 ->
-                /*val riskFree0 = data0.path.isRiskFree()
-                val riskFree1 = data1.path.isRiskFree()
+                val riskFree0 = data0.path.isRiskFree(fromCurrency, primaryCurrencies)
+                val riskFree1 = data1.path.isRiskFree(fromCurrency, primaryCurrencies)
 
                 if (riskFree0 && !riskFree1) {
                     return@Comparator 1
                 } else if (!riskFree0 && riskFree1) {
                     return@Comparator -1
-                }*/
+                }
 
                 if (!currenciesToBeInvolved.isEmpty()) {
                     var amount0 = BigDecimal.ZERO
