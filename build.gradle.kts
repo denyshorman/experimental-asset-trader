@@ -4,13 +4,13 @@ versioning.noWarningOnDirty = true
 
 group = "com.gitlab.dhorman"
 version = versioning.info.build
-java.sourceCompatibility = JavaVersion.VERSION_11
+java.sourceCompatibility = JavaVersion.VERSION_15
 
 plugins {
-    kotlin("jvm") version "1.4.20"
-    kotlin("plugin.spring") version "1.4.20"
-    kotlin("plugin.serialization") version "1.4.20"
-    id("org.springframework.boot") version "2.4.0"
+    kotlin("jvm") version "1.4.21"
+    kotlin("plugin.spring") version "1.4.21"
+    kotlin("plugin.serialization") version "1.4.21"
+    id("org.springframework.boot") version "2.4.1"
     id("io.spring.dependency-management") version "1.0.10.RELEASE"
     id("net.nemerosa.versioning") version "2.14.0"
 }
@@ -60,7 +60,7 @@ dependencies {
 tasks {
     withType<KotlinCompile>().all {
         with(kotlinOptions) {
-            jvmTarget = "11"
+            jvmTarget = "15"
 
             freeCompilerArgs = freeCompilerArgs + listOf(
                 "-Xjsr305=strict",
