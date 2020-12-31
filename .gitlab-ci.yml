@@ -22,14 +22,14 @@ build:
     - master
 
 package:
-  image: docker:19.03.8
+  image: docker:20.10.1
   stage: package
   variables:
     DOCKER_CLI_EXPERIMENTAL: enabled
     BUILDX_URL: https://github.com/docker/buildx/releases/download/v0.3.1/buildx-v0.3.1.linux-amd64
-    BUILD_PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
+    BUILD_PLATFORMS: linux/amd64,linux/arm64
   services:
-    - name: docker:19.03.8-dind
+    - name: docker:20.10.1-dind
       command: ["--experimental"]
   before_script:
     - mkdir -p ~/.docker/cli-plugins/
