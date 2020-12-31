@@ -12,9 +12,8 @@ import com.gitlab.dhorman.cryptotrader.core.oneMinusAdjPoloniex
 import com.gitlab.dhorman.cryptotrader.core.toMarket
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
-import com.gitlab.dhorman.cryptotrader.util.HmacSha512Digest
-import com.gitlab.dhorman.cryptotrader.util.RequestLimiter
-import com.gitlab.dhorman.cryptotrader.util.share
+import com.gitlab.dhorman.cryptotrader.util.*
+import com.gitlab.dhorman.cryptotrader.util.signer.HmacSha512Signer
 import io.netty.handler.codec.http.websocketx.WebSocketHandshakeException
 import io.netty.handler.ssl.SslHandshakeTimeoutException
 import io.netty.handler.timeout.ReadTimeoutException
@@ -38,9 +37,7 @@ import mu.KotlinLogging
 import org.springframework.http.MediaType
 import org.springframework.web.reactive.function.BodyInserters
 import org.springframework.web.reactive.function.client.ClientResponse
-import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.awaitExchange
-import org.springframework.web.reactive.socket.client.WebSocketClient
 import reactor.core.publisher.Mono
 import java.math.BigDecimal
 import java.net.ConnectException
@@ -61,13 +58,25 @@ private const val PoloniexWebSocketApiUrl = "wss://api2.poloniex.com"
 open class PoloniexApi(
     private val poloniexApiKey: String,
     poloniexApiSecret: String,
-    private val webClient: WebClient,
-    private val webSocketClient: WebSocketClient,
-    private val objectMapper: ObjectMapper
+    private val objectMapper: ObjectMapper,
 ) {
     private val logger = KotlinLogging.logger {}
-    private val signer = HmacSha512Digest(poloniexApiSecret)
+    private val signer = HmacSha512Signer(poloniexApiSecret, toHexString)
     private val reqLimiter = RequestLimiter(allowedRequests = 7, perInterval = Duration.ofSeconds(1))
+
+    private val webClient = springWebClient(
+        connectTimeoutMs = 5000,
+        readTimeoutMs = 5000,
+        writeTimeoutMs = 5000,
+        maxInMemorySize = 5 * 1024 * 1024,
+    )
+
+    private val webSocketClient = springWebsocketClient(
+        connectTimeoutMs = 5000,
+        readTimeoutMs = 5000,
+        writeTimeoutMs = 5000,
+        maxFramePayloadLength = 65536 * 4,
+    )
 
     private val channels = ConcurrentHashMap<Int, BroadcastChannel<PushNotification>>()
     private val channelState = ConcurrentHashMap<Int, MutableStateFlow<Boolean>>()

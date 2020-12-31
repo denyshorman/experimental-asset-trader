@@ -21,8 +21,6 @@ import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
-import org.springframework.web.reactive.function.client.WebClient
-import org.springframework.web.reactive.socket.client.WebSocketClient
 import java.io.IOException
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -70,12 +68,10 @@ fun TradeVolumeStat.volume(currencyType: CurrencyType, orderType: OrderType): Bi
 class ExtendedPoloniexApi(
     @Qualifier("POLONIEX_API_KEY") poloniexApiKey: String,
     @Qualifier("POLONIEX_API_SECRET") poloniexApiSecret: String,
-    webClient: WebClient,
-    webSocketClient: WebSocketClient,
     objectMapper: ObjectMapper,
     private val amountCalculator: AdjustedPoloniexBuySellAmountCalculator,
     private val clock: Clock
-) : PoloniexApi(poloniexApiKey, poloniexApiSecret, webClient, webSocketClient, objectMapper) {
+) : PoloniexApi(poloniexApiKey, poloniexApiSecret, objectMapper) {
     private val logger = KotlinLogging.logger {}
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val streamSynchronizer = StreamSynchronizer()

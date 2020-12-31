@@ -1,11 +1,10 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniexfutures
 
-import io.netty.channel.ChannelOption
-import io.netty.handler.codec.http.HttpHeaderNames
-import io.netty.handler.ssl.SslContextBuilder
-import io.netty.handler.ssl.util.InsecureTrustManagerFactory
-import io.netty.handler.timeout.ReadTimeoutHandler
-import io.netty.handler.timeout.WriteTimeoutHandler
+import com.gitlab.dhorman.cryptotrader.util.ignoreErrors
+import com.gitlab.dhorman.cryptotrader.util.serializer.*
+import com.gitlab.dhorman.cryptotrader.util.signer.HmacSha256Signer
+import com.gitlab.dhorman.cryptotrader.util.springWebClient
+import com.gitlab.dhorman.cryptotrader.util.springWebsocketClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
@@ -24,27 +23,17 @@ import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.json.*
 import mu.KotlinLogging
 import org.springframework.http.HttpMethod
-import org.springframework.http.client.reactive.ReactorClientHttpConnector
-import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.awaitBody
 import org.springframework.web.reactive.function.client.awaitExchange
 import org.springframework.web.reactive.socket.WebSocketMessage
-import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient
-import org.springframework.web.reactive.socket.client.WebSocketClient
-import reactor.netty.http.client.HttpClient
-import reactor.netty.http.client.WebsocketClientSpec
-import reactor.netty.transport.ProxyProvider
 import java.math.BigDecimal
 import java.net.URI
 import java.nio.channels.ClosedChannelException
 import java.time.Instant
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.collections.set
@@ -52,17 +41,26 @@ import kotlin.time.minutes
 import kotlin.time.seconds
 
 open class PoloniexFuturesApi(
-    private val apiKey: String? = null,
-    apiSecret: String? = null,
-    private val apiPassphrase: String? = null,
+    private val apiKey: String,
+    apiSecret: String,
+    private val apiPassphrase: String,
 ) {
     private val logger = KotlinLogging.logger {}
-    private val signer = if (apiSecret != null) HmacSha256Signer(apiSecret) else null
+    private val signer = HmacSha256Signer(apiSecret) { Base64.getEncoder().encodeToString(this) }
 
-    private val apiUrl = "https://futures-api.poloniex.com"
+    private val webClient = springWebClient(
+        connectTimeoutMs = 5000,
+        readTimeoutMs = 5000,
+        writeTimeoutMs = 5000,
+        maxInMemorySize = 2 * 1024 * 1024,
+    )
 
-    private val webClient = createHttpClient()
-    private val webSocketClient = createWebsocketClient()
+    private val webSocketClient = springWebsocketClient(
+        connectTimeoutMs = 10000,
+        readTimeoutMs = 5000,
+        writeTimeoutMs = 5000,
+        maxFramePayloadLength = 65536 * 4,
+    )
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -104,7 +102,7 @@ open class PoloniexFuturesApi(
                     put("type", "limit")
                     put("price", req.type.price.toString())
 
-                    if (req.type.size != null) put("size", req.type.size.toString())
+                    put("size", req.type.size.toString())
                     if (req.type.quantity != null) put("quantity", req.type.quantity.toString())
                     if (req.type.postOnly != null) put("postOnly", req.type.postOnly.toString())
                     if (req.type.hidden != null) put("hidden", req.type.hidden.toString())
@@ -336,14 +334,14 @@ open class PoloniexFuturesApi(
     //region Public Models
     @Serializable
     data class AccountOverview(
-        @Serializable(BigDecimalDoubleSerializer::class) val unrealisedPNL: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val frozenFunds: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedPNL: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val frozenFunds: BigDecimal,
         val currency: String,
-        @Serializable(BigDecimalDoubleSerializer::class) val accountEquity: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val positionMargin: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val orderMargin: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val marginBalance: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val availableBalance: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val accountEquity: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val positionMargin: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val orderMargin: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val marginBalance: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val availableBalance: BigDecimal,
     )
 
     data class PlaceOrderReq(
@@ -571,14 +569,14 @@ open class PoloniexFuturesApi(
         val symbol: String,
         val sequence: Long,
         val side: Side,
-        @Serializable(BigDecimalDoubleSerializer::class) val size: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val bestBidSize: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val bestAskSize: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val price: BigDecimal,
-        @Serializable(BigDecimalStringSerializer::class) val bestBidPrice: BigDecimal,
-        @Serializable(BigDecimalStringSerializer::class) val bestAskPrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val size: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val bestBidSize: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val bestAskSize: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val price: BigDecimal,
+        @Serializable(BigDecimalAsStringSerializer::class) val bestBidPrice: BigDecimal,
+        @Serializable(BigDecimalAsStringSerializer::class) val bestAskPrice: BigDecimal,
         val tradeId: String,
-        @Serializable(InstantLongNanoSecSerializer::class) val ts: Instant,
+        @Serializable(InstantAsLongNanoSerializer::class) val ts: Instant,
     ) {
         @Serializable
         enum class Side {
@@ -594,7 +592,7 @@ open class PoloniexFuturesApi(
     data class Level2OrderBookEvent(
         val sequence: Long,
         val change: Change,
-        @Serializable(InstantLongSerializer::class) val timestamp: Instant,
+        @Serializable(InstantAsLongMillisSerializer::class) val timestamp: Instant,
     ) {
         @Serializable(Change.Serializer::class)
         data class Change(
@@ -646,13 +644,13 @@ open class PoloniexFuturesApi(
         val symbol: String,
         val sequence: Long,
         val side: Side,
-        @Serializable(BigDecimalDoubleSerializer::class) val size: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val price: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val size: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val price: BigDecimal,
         val takerOrderId: String,
         val makerOrderId: String,
         val takerUserId: String,
         val tradeId: String,
-        @Serializable(InstantLongNanoSecSerializer::class) val ts: Instant,
+        @Serializable(InstantAsLongNanoSerializer::class) val ts: Instant,
     ) {
         @Serializable
         enum class Side {
@@ -668,17 +666,17 @@ open class PoloniexFuturesApi(
     sealed class MarketDataEvent {
         @Serializable
         data class MarkIndexPriceEvent(
-            @Serializable(BigDecimalDoubleSerializer::class) val granularity: BigDecimal,
-            @Serializable(BigDecimalDoubleSerializer::class) val indexPrice: BigDecimal,
-            @Serializable(BigDecimalDoubleSerializer::class) val markPrice: BigDecimal,
-            @Serializable(InstantLongSerializer::class) val timestamp: Instant,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val granularity: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val indexPrice: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val markPrice: BigDecimal,
+            @Serializable(InstantAsLongMillisSerializer::class) val timestamp: Instant,
         ) : MarketDataEvent()
 
         @Serializable
         data class FundingRateEvent(
-            @Serializable(BigDecimalDoubleSerializer::class) val granularity: BigDecimal,
-            @Serializable(BigDecimalDoubleSerializer::class) val fundingRate: BigDecimal,
-            @Serializable(InstantLongSerializer::class) val timestamp: Instant,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val granularity: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val fundingRate: BigDecimal,
+            @Serializable(InstantAsLongMillisSerializer::class) val timestamp: Instant,
         ) : MarketDataEvent()
     }
 
@@ -686,7 +684,7 @@ open class PoloniexFuturesApi(
     data class Level2DepthEvent(
         val asks: List<@Serializable(Record.RecordDeserializer::class) Record>,
         val bids: List<@Serializable(Record.RecordDeserializer::class) Record>,
-        @Serializable(InstantLongSerializer::class) val timestamp: Instant,
+        @Serializable(InstantAsLongMillisSerializer::class) val timestamp: Instant,
     ) {
         data class Record(
             val price: BigDecimal,
@@ -694,8 +692,8 @@ open class PoloniexFuturesApi(
         ) {
             object RecordDeserializer : KSerializer<Record> {
                 override val descriptor: SerialDescriptor = buildSerialDescriptor("PoloniexFuturesOrderBookRecordDeserializer", StructureKind.LIST) {
-                    element("price", BigDecimalDoubleSerializer.descriptor)
-                    element("qty", BigDecimalDoubleSerializer.descriptor)
+                    element("price", BigDecimalAsDoubleSerializer.descriptor)
+                    element("qty", BigDecimalAsDoubleSerializer.descriptor)
                 }
 
                 override fun deserialize(decoder: Decoder): Record {
@@ -706,8 +704,8 @@ open class PoloniexFuturesApi(
                         loop@ while (true) {
                             when (val index = decodeElementIndex(descriptor)) {
                                 CompositeDecoder.DECODE_DONE -> break@loop
-                                0 -> price = decodeSerializableElement(descriptor, index, BigDecimalDoubleSerializer)
-                                1 -> qty = decodeSerializableElement(descriptor, index, BigDecimalDoubleSerializer)
+                                0 -> price = decodeSerializableElement(descriptor, index, BigDecimalAsDoubleSerializer)
+                                1 -> qty = decodeSerializableElement(descriptor, index, BigDecimalAsDoubleSerializer)
                             }
                         }
 
@@ -722,14 +720,14 @@ open class PoloniexFuturesApi(
 
     @Serializable
     data class StatsEvent(
-        @Serializable(BigDecimalDoubleSerializer::class) val volume: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val volume: BigDecimal,
         val symbol: String,
-        @Serializable(BigDecimalDoubleSerializer::class) val priceChgPct: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val lowPrice: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val highPrice: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val turnover: BigDecimal,
-        @Serializable(BigDecimalDoubleSerializer::class) val lastPrice: BigDecimal,
-        @Serializable(InstantLongNanoSecSerializer::class) val ts: Instant,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val priceChgPct: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val lowPrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val highPrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val turnover: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val lastPrice: BigDecimal,
+        @Serializable(InstantAsLongNanoSerializer::class) val ts: Instant,
     )
     //endregion
 
@@ -739,90 +737,6 @@ open class PoloniexFuturesApi(
     class DisconnectedException(override val cause: Throwable? = null) : Throwable("WebSocket connection was closed", cause, true, false)
 
     enum class Error(val code: Long, val msg: String)
-    //endregion
-
-    //region Request Signers
-    private interface Signer {
-        fun sign(msg: String): String
-    }
-
-    private class HmacSha256Signer(key: String) : Signer {
-        private val signingKey: SecretKeySpec
-        private val macInstance: Mac
-
-        init {
-            val algorithm = "HmacSHA256"
-            signingKey = SecretKeySpec(key.toByteArray(), algorithm)
-            macInstance = Mac.getInstance(algorithm)
-            macInstance.init(signingKey)
-        }
-
-        override fun sign(msg: String): String {
-            val mac = macInstance.clone() as Mac
-            return Base64.getEncoder().encodeToString(mac.doFinal(msg.toByteArray()))
-        }
-    }
-    //endregion
-
-    //region HTTP and WebSocket Clients
-    //TODO: Extract default http client implementation
-    private fun defaultHttpClient(
-        connectTimeoutMs: Long? = 5000,
-        readTimeoutMs: Long? = 5000,
-        writeTimeoutMs: Long? = 5000,
-    ): HttpClient {
-        var client = HttpClient.create()
-            .headers { it[HttpHeaderNames.USER_AGENT] = "trading-robot" }
-            .secure {
-                val sslContextBuilder = SslContextBuilder.forClient()
-
-                if (System.getenv("HTTP_CERT_TRUST_ALL") != null) {
-                    sslContextBuilder.trustManager(InsecureTrustManagerFactory.INSTANCE)
-                }
-
-                it.sslContext(sslContextBuilder.build())
-            }
-            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs?.toInt())
-            .doOnConnected { conn ->
-                if (readTimeoutMs != null) conn.addHandlerLast(ReadTimeoutHandler(readTimeoutMs, TimeUnit.MILLISECONDS))
-                if (writeTimeoutMs != null) conn.addHandlerLast(WriteTimeoutHandler(writeTimeoutMs, TimeUnit.MILLISECONDS))
-            }
-
-        if (System.getenv("HTTP_PROXY_ENABLED") != null) {
-            client = client.proxy {
-                val tpe = when (System.getenv("HTTP_PROXY_TYPE")) {
-                    "http" -> ProxyProvider.Proxy.HTTP
-                    "socks5" -> ProxyProvider.Proxy.SOCKS5
-                    else -> throw RuntimeException("Can't recognize HTTP_PROXY_TYPE option")
-                }
-
-                val host = System.getenv("HTTP_PROXY_HOST")
-                    ?: throw Exception("Please define HTTP_PROXY_HOST env variable")
-
-                val port = System.getenv("HTTP_PROXY_PORT")?.toInt()
-                    ?: throw Exception("Please define valid port number for HTTP_PROXY_PORT env variable")
-
-                it.type(tpe).host(host).port(port)
-            }
-        }
-
-        return client
-    }
-
-    private fun createHttpClient(): WebClient {
-        return WebClient.builder()
-            .clientConnector(ReactorClientHttpConnector(defaultHttpClient()))
-            .codecs {
-                it.defaultCodecs().maxInMemorySize(2 * 1024 * 1024)
-            }
-            .build()
-    }
-
-    private fun createWebsocketClient(): WebSocketClient {
-        return ReactorNettyWebSocketClient(defaultHttpClient(readTimeoutMs = 70000)) {
-            WebsocketClientSpec.builder().maxFramePayloadLength(65536 * 4)
-        }
-    }
     //endregion
 
     //region Private HTTP Logic
@@ -850,11 +764,11 @@ open class PoloniexFuturesApi(
             }
         }
 
-        var request = webClient.method(httpMethod).uri("$apiUrl$url")
+        var request = webClient.method(httpMethod).uri("$API_URL$url")
 
         if (requiresSignature) {
             val timestamp = Instant.now().toEpochMilli().toString()
-            val sign = signer?.sign("$timestamp$httpMethod$url$body")
+            val sign = signer.sign("$timestamp$httpMethod$url$body")
 
             request = request
                 .header(PF_API_KEY, apiKey)
@@ -1241,76 +1155,14 @@ open class PoloniexFuturesApi(
     private fun <T> EventData<T>.setError(error: Throwable?) = EventData<T>(null, false, error)
     //endregion
 
-    //region Utilities
-    private inline fun ignoreErrors(body: () -> Unit) {
-        try {
-            body()
-        } catch (e: Throwable) {
-            // ignore error
-        }
-    }
-    //endregion
-
     companion object {
         //region Constants
+        private const val API_URL = "https://futures-api.poloniex.com"
+
         private const val PF_API_KEY = "PF-API-KEY"
         private const val PF_API_SIGN = "PF-API-SIGN"
         private const val PF_API_TIMESTAMP = "PF-API-TIMESTAMP"
         private const val PF_API_PASSPHRASE = "PF-API-PASSPHRASE"
-        //endregion
-
-        //region Serializers
-        @Serializer(BigDecimal::class)
-        private object BigDecimalStringSerializer : KSerializer<BigDecimal> {
-            override val descriptor: SerialDescriptor = buildSerialDescriptor("PoloniexFuturesBigDecimalStringSerializer", PrimitiveKind.STRING)
-
-            override fun deserialize(decoder: Decoder): BigDecimal {
-                return BigDecimal(decoder.decodeString())
-            }
-
-            override fun serialize(encoder: Encoder, value: BigDecimal) {
-                encoder.encodeString(value.toPlainString())
-            }
-        }
-
-        @Serializer(BigDecimal::class)
-        private object BigDecimalDoubleSerializer : KSerializer<BigDecimal> {
-            override val descriptor: SerialDescriptor = buildSerialDescriptor("PoloniexFuturesBigDecimalDoubleSerializer", PrimitiveKind.DOUBLE)
-
-            override fun deserialize(decoder: Decoder): BigDecimal {
-                return BigDecimal(decoder.decodeDouble().toString())
-            }
-
-            override fun serialize(encoder: Encoder, value: BigDecimal) {
-                encoder.encodeDouble(value.toDouble())
-            }
-        }
-
-        @Serializer(Instant::class)
-        private object InstantLongSerializer : KSerializer<Instant> {
-            override val descriptor: SerialDescriptor = buildSerialDescriptor("PoloniexFuturesInstantLongSerializer", PrimitiveKind.LONG)
-
-            override fun deserialize(decoder: Decoder): Instant {
-                return Instant.ofEpochMilli(decoder.decodeLong())
-            }
-
-            override fun serialize(encoder: Encoder, value: Instant) {
-                encoder.encodeLong(value.toEpochMilli())
-            }
-        }
-
-        @Serializer(Instant::class)
-        private object InstantLongNanoSecSerializer : KSerializer<Instant> {
-            override val descriptor: SerialDescriptor = buildSerialDescriptor("PoloniexFuturesInstantLongNanoSecSerializer", PrimitiveKind.LONG)
-
-            override fun deserialize(decoder: Decoder): Instant {
-                return Instant.ofEpochSecond(0L, decoder.decodeLong())
-            }
-
-            override fun serialize(encoder: Encoder, value: Instant) {
-                TimeUnit.SECONDS.toNanos(value.epochSecond) + value.nano
-            }
-        }
         //endregion
     }
 }
