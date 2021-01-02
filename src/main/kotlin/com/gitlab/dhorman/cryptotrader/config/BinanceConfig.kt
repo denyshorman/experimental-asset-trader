@@ -1,6 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.config
 
 import com.gitlab.dhorman.cryptotrader.service.binance.BinanceApi
+import com.gitlab.dhorman.cryptotrader.service.binance.BinanceFuturesApi
 import com.gitlab.dhorman.cryptotrader.util.Secrets
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -28,6 +29,28 @@ class BinanceConfig {
         return Secrets.get("BINANCE_TEST_NET_API_SECRET")
             ?: throw RuntimeException("Please define BINANCE_TEST_NET_API_SECRET environment variable")
     }
+
+
+    private fun binanceFuturesApiKey(): String {
+        return Secrets.get("BINANCE_FUTURES_API_KEY")
+            ?: throw RuntimeException("Please define BINANCE_FUTURES_API_KEY environment variable")
+    }
+
+    private fun binanceFuturesApiSecret(): String {
+        return Secrets.get("BINANCE_FUTURES_API_SECRET")
+            ?: throw RuntimeException("Please define BINANCE_FUTURES_API_SECRET environment variable")
+    }
+
+    private fun binanceFuturesTestNetApiKey(): String {
+        return Secrets.get("BINANCE_FUTURES_TEST_NET_API_KEY")
+            ?: throw RuntimeException("Please define BINANCE_FUTURES_TEST_NET_API_KEY environment variable")
+    }
+
+    private fun binanceFuturesTestNetApiSecret(): String {
+        return Secrets.get("BINANCE_FUTURES_TEST_NET_API_SECRET")
+            ?: throw RuntimeException("Please define BINANCE_FUTURES_TEST_NET_API_SECRET environment variable")
+    }
+
 
     private fun binanceFileCachePath(): String? {
         return Secrets.get("BINANCE_FILE_CACHE_PATH")
@@ -57,5 +80,29 @@ class BinanceConfig {
             apiNet = BinanceApi.ApiNet.Test,
             fileCachePath = binanceTestNetFileCachePath()
         )
+    }
+
+    @Bean
+    @Primary
+    fun binanceFuturesMainNetApi(): BinanceFuturesApi {
+        val config = BinanceFuturesApi.Config(
+            apiKey = binanceFuturesApiKey(),
+            apiSecret = binanceFuturesApiSecret(),
+            apiNet = BinanceFuturesApi.Config.ApiNet.Main,
+        )
+
+        return BinanceFuturesApi(config)
+    }
+
+    @Bean
+    @Profile("test")
+    fun binanceFuturesTestNetApi(): BinanceFuturesApi {
+        val config = BinanceFuturesApi.Config(
+            apiKey = binanceFuturesTestNetApiKey(),
+            apiSecret = binanceFuturesTestNetApiSecret(),
+            apiNet = BinanceFuturesApi.Config.ApiNet.Test,
+        )
+
+        return BinanceFuturesApi(config)
     }
 }
