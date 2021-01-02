@@ -56,8 +56,8 @@ open class PoloniexFuturesApi(
     )
 
     private val webSocketClient = springWebsocketClient(
-        connectTimeoutMs = 10000,
-        readTimeoutMs = 5000,
+        connectTimeoutMs = 5000,
+        readTimeoutMs = 60000,
         writeTimeoutMs = 5000,
         maxFramePayloadLength = 65536 * 4,
     )
