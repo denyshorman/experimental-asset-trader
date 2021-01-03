@@ -563,12 +563,6 @@ class BinanceFuturesApi(private val config: Config) {
     //endregion
 
     //region Public Events
-    data class EventData<T>(
-        val payload: T? = null,
-        val subscribed: Boolean = false,
-        val error: Throwable? = null,
-    )
-
     @Serializable
     data class AggregateTradeEvent(
         @SerialName("e") val eventType: String,
@@ -1693,10 +1687,6 @@ class BinanceFuturesApi(private val config: Config) {
     }
     //endregion
 
-    //region Public Extension
-    fun <T, R> EventData<T>.newPayload(payload: R? = null) = EventData(payload, subscribed, error)
-    //endregion
-
     //region Private Extensions
     private fun Map<String, String>.toQueryString() = asSequence().map { "${it.key}=${it.value}" }.joinToString("&")
     private fun String.appendToQueryString(key: String, value: String) = "${if (isBlank()) "" else "$this&"}$key=$value"
@@ -1704,10 +1694,6 @@ class BinanceFuturesApi(private val config: Config) {
 
     private fun Error.toException() = Exception(code, msg)
     private fun WebSocketEvent.Error.toException() = Exception(code, msg)
-
-    private fun <T> EventData<T>.setPayload(payload: T?) = EventData(payload, subscribed, null)
-    private fun <T> EventData<T>.setSubscribed(subscribed: Boolean) = EventData(payload, subscribed, null)
-    private fun <T> EventData<T>.setError(error: Throwable?) = EventData<T>(null, false, error)
     //endregion
 
     //region Request Limiters

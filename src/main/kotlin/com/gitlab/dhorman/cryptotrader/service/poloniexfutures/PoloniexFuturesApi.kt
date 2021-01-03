@@ -1,10 +1,8 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniexfutures
 
-import com.gitlab.dhorman.cryptotrader.util.ignoreErrors
+import com.gitlab.dhorman.cryptotrader.util.*
 import com.gitlab.dhorman.cryptotrader.util.serializer.*
 import com.gitlab.dhorman.cryptotrader.util.signer.HmacSha256Signer
-import com.gitlab.dhorman.cryptotrader.util.springWebClient
-import com.gitlab.dhorman.cryptotrader.util.springWebsocketClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
@@ -558,12 +556,6 @@ open class PoloniexFuturesApi(
     //endregion
 
     //region Public Events
-    data class EventData<T>(
-        val payload: T? = null,
-        val subscribed: Boolean = false,
-        val error: Throwable? = null
-    )
-
     @Serializable
     data class TickerEvent(
         val symbol: String,
@@ -1134,10 +1126,6 @@ open class PoloniexFuturesApi(
     }
     //endregion
 
-    //region Public Extension
-    fun <T, R> EventData<T>.newPayload(payload: R? = null) = EventData(payload, subscribed, error)
-    //endregion
-
     //region Private Extensions
     private fun String.appendQueryParams(params: Map<String, String>) = if (params.isEmpty()) this else "$this${params.toQueryString()}"
 
@@ -1149,10 +1137,6 @@ open class PoloniexFuturesApi(
 
     private fun HttpErrorResp.toException() = Exception(code, msg)
     private fun WebSocketResponse.Error.toException() = Exception(code.toString(), data)
-
-    private fun <T> EventData<T>.setPayload(payload: T?) = EventData(payload, subscribed, null)
-    private fun <T> EventData<T>.setSubscribed(subscribed: Boolean) = EventData(payload, subscribed, null)
-    private fun <T> EventData<T>.setError(error: Throwable?) = EventData<T>(null, false, error)
     //endregion
 
     companion object {

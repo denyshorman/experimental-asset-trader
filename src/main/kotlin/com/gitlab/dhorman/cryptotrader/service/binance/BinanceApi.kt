@@ -2,7 +2,6 @@ package com.gitlab.dhorman.cryptotrader.service.binance
 
 import com.gitlab.dhorman.cryptotrader.util.*
 import com.gitlab.dhorman.cryptotrader.util.serializer.*
-import com.gitlab.dhorman.cryptotrader.util.share
 import com.gitlab.dhorman.cryptotrader.util.signer.HmacSha256Signer
 import com.gitlab.dhorman.cryptotrader.util.signer.RsaSigner
 import com.gitlab.dhorman.cryptotrader.util.signer.Signer
@@ -1092,12 +1091,6 @@ open class BinanceApi(
     //endregion
 
     //region Public Events
-    data class EventData<T>(
-        val payload: T? = null,
-        val subscribed: Boolean = false,
-        val error: Throwable? = null
-    )
-
     @Serializable
     data class AggregateTradeEvent(
         @SerialName("e") val eventType: String,
@@ -1571,10 +1564,6 @@ open class BinanceApi(
     }
     //endregion
 
-    //region Public Extension
-    fun <T, R> EventData<T>.newPayload(payload: R? = null) = EventData(payload, subscribed, error)
-    //endregion
-
     //region Private Extensions
     private fun Map<String, String>.toQueryString() = asSequence().map { "${it.key}=${it.value}" }.joinToString("&")
     private fun String.appendToQueryString(key: String, value: String) = "${if (isBlank()) "" else "$this&"}$key=$value"
@@ -1590,10 +1579,6 @@ open class BinanceApi(
             }
         }
     }
-
-    private fun <T> EventData<T>.setPayload(payload: T?) = EventData(payload, subscribed, null)
-    private fun <T> EventData<T>.setSubscribed(subscribed: Boolean) = EventData(payload, subscribed, null)
-    private fun <T> EventData<T>.setError(error: Throwable?) = EventData<T>(null, false, error)
 
     private fun TradeFee.Fee.toCachedFee() = CachedFee(maker, taker)
     //endregion
