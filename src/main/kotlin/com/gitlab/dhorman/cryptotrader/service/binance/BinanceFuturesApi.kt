@@ -167,7 +167,8 @@ class BinanceFuturesApi(private val config: Config) {
     }
 
     val allMarketMiniTickersStream: Flow<EventData<List<MiniTickerEvent>>> = run {
-        subscribeTo("!miniTicker@arr", ListSerializer(MiniTickerEvent.serializer())).share()
+        subscribeTo("!miniTicker@arr", ListSerializer(MiniTickerEvent.serializer()))
+            .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 0)
     }
 
     fun individualSymbolTickerStream(symbol: String): Flow<EventData<TickerEvent>> {
@@ -175,7 +176,8 @@ class BinanceFuturesApi(private val config: Config) {
     }
 
     val allMarketTickersStream: Flow<EventData<List<TickerEvent>>> = run {
-        subscribeTo("!ticker@arr", ListSerializer(TickerEvent.serializer())).share()
+        subscribeTo("!ticker@arr", ListSerializer(TickerEvent.serializer()))
+            .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 0)
     }
 
     fun individualSymbolBookTickerStream(symbol: String): Flow<EventData<BookTickerEvent>> {
@@ -183,7 +185,8 @@ class BinanceFuturesApi(private val config: Config) {
     }
 
     val allBookTickerStream: Flow<EventData<BookTickerEvent>> = run {
-        subscribeTo("!bookTicker", serializer<BookTickerEvent>()).share()
+        subscribeTo("!bookTicker", serializer<BookTickerEvent>())
+            .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 0)
     }
 
     fun liquidationOrderStream(symbol: String): Flow<EventData<LiquidationOrderEvent>> {
@@ -191,7 +194,8 @@ class BinanceFuturesApi(private val config: Config) {
     }
 
     val allMarketLiquidationOrderStream: Flow<EventData<LiquidationOrderEvent>> = run {
-        subscribeTo("!forceOrder@arr", serializer<LiquidationOrderEvent>()).share()
+        subscribeTo("!forceOrder@arr", serializer<LiquidationOrderEvent>())
+            .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 0)
     }
 
     fun partialBookDepthStream(
@@ -218,7 +222,7 @@ class BinanceFuturesApi(private val config: Config) {
 
     //region User Data Streams
     val accountStream: Flow<EventData<AccountEvent>> = run {
-        subscribeToPrivateChannel().share()
+        subscribeToPrivateChannel().shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 0)
     }
     //endregion
 
