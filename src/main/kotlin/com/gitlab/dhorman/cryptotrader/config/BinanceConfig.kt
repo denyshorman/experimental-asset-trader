@@ -85,24 +85,20 @@ class BinanceConfig {
     @Bean
     @Primary
     fun binanceFuturesMainNetApi(): BinanceFuturesApi {
-        val config = BinanceFuturesApi.Config(
+        return BinanceFuturesApi(
             apiKey = binanceFuturesApiKey(),
             apiSecret = binanceFuturesApiSecret(),
-            apiNet = BinanceFuturesApi.Config.ApiNet.Main,
+            apiNet = BinanceFuturesApi.ApiNet.Main,
         )
-
-        return BinanceFuturesApi(config)
     }
 
     @Bean
     @Profile("test")
     fun binanceFuturesTestNetApi(): BinanceFuturesApi {
-        val config = BinanceFuturesApi.Config(
+        return BinanceFuturesApi(
             apiKey = binanceFuturesTestNetApiKey(),
             apiSecret = binanceFuturesTestNetApiSecret(),
-            apiNet = BinanceFuturesApi.Config.ApiNet.Test,
+            apiNet = BinanceFuturesApi.ApiNet.Test,
         )
-
-        return BinanceFuturesApi(config)
     }
 }
