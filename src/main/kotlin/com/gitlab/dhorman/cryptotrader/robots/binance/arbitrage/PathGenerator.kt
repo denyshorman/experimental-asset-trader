@@ -2,9 +2,12 @@ package com.gitlab.dhorman.cryptotrader.robots.binance.arbitrage
 
 import com.gitlab.dhorman.cryptotrader.robots.binance.arbitrage.model.*
 import com.gitlab.dhorman.cryptotrader.service.binance.BinanceApi
+import com.gitlab.dhorman.cryptotrader.util.serializer.BigDecimalAsStringSerializer
 import com.gitlab.dhorman.cryptotrader.util.share
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import mu.KotlinLogging
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
@@ -27,6 +30,48 @@ class PathGenerator(
     suspend fun close() {
         scope.coroutineContext[Job]?.cancelAndJoin()
     }
+
+    //region Private Streams
+    fun BinanceApi.TradeFee.Fee.toCachedFee() = CachedFee(maker, taker)
+
+    @Serializable
+    data class CachedFee(
+        @Serializable(BigDecimalAsStringSerializer::class) val maker: BigDecimal,
+        @Serializable(BigDecimalAsStringSerializer::class) val taker: BigDecimal
+    ) {
+        @Transient
+        val makerMultiplier = BigDecimal.ONE - maker
+
+        @Transient
+        val takerMultiplier = BigDecimal.ONE - taker
+    }
+
+    val tradeFeeCache: Flow<Map<String, CachedFee>> = run {
+        val dataFetchInterval = 6.hours
+        val flowCloseIntervalWhenNoSubscribers = dataFetchInterval.minus(1.hours)
+
+        channelFlow {
+            while (isActive) {
+                try {
+                    logger.info("Fetching fee info...")
+                    val feeInfo = binanceApi.tradeFee()
+                    logger.info("Fee info fetched successfully")
+
+                    val symbolFeeMap = feeInfo.tradeFee.groupBy { it.symbol }.mapValues { it.value.first().toCachedFee() }
+                    send(symbolFeeMap)
+
+                    delay(dataFetchInterval)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    logger.warn("Can't fetch fee info: ${e.message}")
+                    delay(1000)
+                }
+            }
+        }
+            .share(1, flowCloseIntervalWhenNoSubscribers.toJavaDuration(), scope)
+    }
+    //endregion
 
     //region Streams
     val symbol24HourStat: Flow<Map<String, StateFlow<BinanceApi.TickerEvent>>> = run {
@@ -65,7 +110,7 @@ class PathGenerator(
     //endregion
 
     suspend fun generate(fromCurrency: Currency, toCurrencies: Iterable<Currency>): Sequence<SimulatedPath> {
-        val exchangeInfo = binanceApi.exchangeInfoCache.first()
+        val exchangeInfo = binanceApi.getExchangeInfo()
         val symbols = exchangeInfo.symbols
 
         logger.debug("Generating path ($fromCurrency -> $toCurrencies)...")
@@ -120,7 +165,7 @@ private val ALMOST_ZERO = BigDecimal("0.00000001")
 fun SimulatedPath.OrderIntent.targetAmount(
     fromCurrency: Currency,
     fromCurrencyAmount: Amount,
-    fee: BinanceApi.CachedFee,
+    fee: PathGenerator.CachedFee,
     orderBook: BinanceApi.BookTickerEvent,
     symbol: BinanceApi.ExchangeInfo.Symbol,
     amountCalculator: BuySellAmountCalculator
@@ -215,7 +260,7 @@ fun SimulatedPath.OrderIntent.targetAmount(
 fun SimulatedPath.amounts(
     fromCurrency: Currency,
     fromCurrencyAmount: Amount,
-    symbolFee: Map<String, BinanceApi.CachedFee>,
+    symbolFee: Map<String, PathGenerator.CachedFee>,
     orderBooks: Map<String, BinanceApi.BookTickerEvent>,
     symbols: Map<String, BinanceApi.ExchangeInfo.Symbol>,
     amountCalculator: BuySellAmountCalculator
@@ -257,7 +302,7 @@ fun SimulatedPath.amounts(
 fun SimulatedPath.targetAmount(
     fromCurrency: Currency,
     fromCurrencyAmount: Amount,
-    symbolFee: Map<String, BinanceApi.CachedFee>,
+    symbolFee: Map<String, PathGenerator.CachedFee>,
     orderBooks: Map<String, BinanceApi.BookTickerEvent>,
     symbols: Map<String, BinanceApi.ExchangeInfo.Symbol>,
     amountCalculator: BuySellAmountCalculator
@@ -293,7 +338,7 @@ fun SimulatedPath.targetAmount(
 fun SimulatedPath.targetAmount(
     fromCurrency: Currency,
     fromCurrencyAmount: Amount,
-    symbolFee: Map<String, BinanceApi.CachedFee>,
+    symbolFee: Map<String, PathGenerator.CachedFee>,
     orderBooks: Map<String, StateFlow<BinanceApi.BookTickerEvent>>,
     symbols: Map<String, BinanceApi.ExchangeInfo.Symbol>,
     amountCalculator: BuySellAmountCalculator

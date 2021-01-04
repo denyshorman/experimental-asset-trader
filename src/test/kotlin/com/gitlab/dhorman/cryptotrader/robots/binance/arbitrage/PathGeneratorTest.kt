@@ -62,9 +62,9 @@ class PathGeneratorTest {
             val fromCurrencyAmount = BigDecimal("50")
             val toCurrencies = listOf("USDT")
 
-            val exchangeInfo = binanceApi.exchangeInfoCache.first()
+            val exchangeInfo = binanceApi.getExchangeInfo()
 
-            val fee = binanceApi.tradeFeeCache.first()
+            val fee = pathGenerator.tradeFeeCache.first()
 
             while (true) {
                 val paths = pathGenerator.generate(fromCurrency, toCurrencies)
@@ -132,8 +132,8 @@ class PathGeneratorTest {
             val fromAmount = BigDecimal("50")
             val fromCurrency = "USDT"
 
-            val exchangeInfo = binanceApi.exchangeInfoCache.first()
-            val fee = binanceApi.tradeFeeCache.first()
+            val exchangeInfo = binanceApi.getExchangeInfo()
+            val fee = pathGenerator.tradeFeeCache.first()
 
             pathGenerator.orderBookLastTick.takeWhile { book ->
                 !path.orderIntents.asSequence().all { intent -> book.containsKey(intent.market.symbol) }

@@ -51,15 +51,6 @@ class BinanceConfig {
             ?: throw RuntimeException("Please define BINANCE_FUTURES_TEST_NET_API_SECRET environment variable")
     }
 
-
-    private fun binanceFileCachePath(): String? {
-        return Secrets.get("BINANCE_FILE_CACHE_PATH")
-    }
-
-    private fun binanceTestNetFileCachePath(): String? {
-        return Secrets.get("BINANCE_TEST_NET_FILE_CACHE_PATH")
-    }
-
     @Bean
     @Primary
     fun binanceMainNetApi(): BinanceApi {
@@ -67,7 +58,6 @@ class BinanceConfig {
             apiKey = binanceApiKey(),
             apiSecret = binanceApiSecret(),
             apiNet = BinanceApi.ApiNet.Main,
-            fileCachePath = binanceFileCachePath()
         )
     }
 
@@ -78,7 +68,6 @@ class BinanceConfig {
             apiKey = binanceTestNetApiKey(),
             apiSecret = binanceTestNetApiSecret(),
             apiNet = BinanceApi.ApiNet.Test,
-            fileCachePath = binanceTestNetFileCachePath()
         )
     }
 

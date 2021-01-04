@@ -1,7 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.service.binance
 
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
@@ -35,14 +34,6 @@ class BinanceApiMainNetTest {
     fun callTradeFee() = runBlocking {
         val tradeFee = binanceApi.tradeFee(Instant.now())
         println(tradeFee)
-    }
-    //endregion
-
-    //region Wallet Api Cached
-    @Test
-    fun callTradeFeeCache() = runBlocking {
-        val feeMap = binanceApi.tradeFeeCache.first()
-        println(feeMap)
     }
     //endregion
 

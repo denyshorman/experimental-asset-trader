@@ -4,8 +4,6 @@ import com.gitlab.dhorman.cryptotrader.util.*
 import com.gitlab.dhorman.cryptotrader.util.limiter.SimpleRequestLimiter
 import com.gitlab.dhorman.cryptotrader.util.serializer.*
 import com.gitlab.dhorman.cryptotrader.util.signer.HmacSha256Signer
-import com.gitlab.dhorman.cryptotrader.util.signer.RsaSigner
-import com.gitlab.dhorman.cryptotrader.util.signer.Signer
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
@@ -16,7 +14,6 @@ import kotlinx.coroutines.reactor.mono
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.*
-import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.descriptors.*
 import kotlinx.serialization.encoding.CompositeDecoder
 import kotlinx.serialization.encoding.Decoder
@@ -24,20 +21,13 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.json.*
 import mu.KotlinLogging
-import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpMethod
-import org.springframework.http.HttpStatus
-import org.springframework.web.reactive.function.client.ClientResponse
 import org.springframework.web.reactive.function.client.awaitBody
 import org.springframework.web.reactive.function.client.awaitExchange
 import org.springframework.web.reactive.socket.WebSocketMessage
-import java.io.File
 import java.math.BigDecimal
 import java.net.URI
-import java.nio.channels.AsynchronousFileChannel
 import java.nio.channels.ClosedChannelException
-import java.nio.file.Files
-import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
 import java.security.PrivateKey
 import java.time.Instant
@@ -45,106 +35,27 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.collections.HashMap
-import kotlin.time.hours
 import kotlin.time.minutes
 import kotlin.time.seconds
-import kotlin.time.toJavaDuration
 
-open class BinanceApi(
-    private val apiKey: String? = null,
-    apiSecret: String? = null,
+class BinanceApi(
+    apiKey: String,
+    apiSecret: String,
     privateKey: PrivateKey? = null,
     apiNet: ApiNet,
-    fileCachePath: String? = null
 ) {
-    private val logger = KotlinLogging.logger {}
-    private val signer: Signer?
-
-    private val apiUrl: String
-    private val apiUrlStream: String
-
-    private val webClient = springWebClient(
-        connectTimeoutMs = 5000,
-        readTimeoutMs = 5000,
-        writeTimeoutMs = 5000,
-        maxInMemorySize = 2 * 1024 * 1024,
-    )
-
-    private val webSocketClient = springWebsocketClient(
-        connectTimeoutMs = 10000,
-        readTimeoutMs = 5000,
-        writeTimeoutMs = 5000,
-        maxFramePayloadLength = 65536 * 4,
-    )
-
-    private val json: Json
-
-    private val streamCache = ConcurrentHashMap<String, Flow<*>>()
-    private val reqLimitsCache = ConcurrentHashMap<String, Long>()
-    private val limitViolation = AtomicReference<LimitViolation?>(null)
+    private val json = Json {
+        ignoreUnknownKeys = true
+    }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineName("BinanceApi"))
     private val closed = AtomicBoolean(false)
 
-    private val exchangeInfoFileChannel: AsynchronousFileChannel?
-    private val wsListenKeyFileChannel: AsynchronousFileChannel?
-    private val feeInfoFileChannel: AsynchronousFileChannel?
+    private val httpConnector = HttpConnector(apiNet, apiKey, apiSecret, json)
+    private val webSocketConnector = WebSocketConnector(apiNet, this, scope, json)
 
     init {
-        when (apiNet) {
-            ApiNet.Main -> {
-                apiUrl = "https://api.binance.com"
-                apiUrlStream = "wss://stream.binance.com:9443/stream"
-
-                signer = if (apiKey != null && apiSecret != null) {
-                    HmacSha256Signer(apiSecret, toHexString)
-                } else {
-                    null
-                }
-            }
-            ApiNet.Test -> {
-                apiUrl = "https://testnet.binance.vision"
-                apiUrlStream = "wss://testnet.binance.vision/stream"
-
-                signer = if (apiKey != null) {
-                    when {
-                        apiSecret != null -> HmacSha256Signer(apiSecret, toHexString)
-                        privateKey != null -> RsaSigner(privateKey) { Base64.getEncoder().encodeToString(this) }
-                        else -> null
-                    }
-                } else {
-                    null
-                }
-            }
-        }
-
-        json = Json {
-            ignoreUnknownKeys = true
-        }
-
-        if (fileCachePath != null) {
-            try {
-                Files.createDirectories(Paths.get(fileCachePath))
-
-                val exchangeInfoFilePath = Paths.get("$fileCachePath${File.separator}exchange_info.json")
-                exchangeInfoFileChannel = AsynchronousFileChannel.open(exchangeInfoFilePath, *FILE_OPTIONS)
-
-                val wsListenKeyFilePath = Paths.get("$fileCachePath${File.separator}ws_listen_key.json")
-                wsListenKeyFileChannel = AsynchronousFileChannel.open(wsListenKeyFilePath, *FILE_OPTIONS)
-
-                val feeInfoFilePath = Paths.get("$fileCachePath${File.separator}fee.json")
-                feeInfoFileChannel = AsynchronousFileChannel.open(feeInfoFilePath, *FILE_OPTIONS)
-            } catch (e: Throwable) {
-                throw e
-            }
-        } else {
-            exchangeInfoFileChannel = null
-            wsListenKeyFileChannel = null
-            feeInfoFileChannel = null
-        }
-
         Runtime.getRuntime().addShutdownHook(Thread { runBlocking { close() } })
     }
 
@@ -152,22 +63,19 @@ open class BinanceApi(
     suspend fun close() {
         if (closed.getAndSet(true)) return
         scope.coroutineContext[Job]?.cancelAndJoin()
-
-        if (exchangeInfoFileChannel != null) ignoreErrors { exchangeInfoFileChannel.close() }
-        if (wsListenKeyFileChannel != null) ignoreErrors { wsListenKeyFileChannel.close() }
     }
     //endregion
 
     //region Wallet API
     suspend fun systemStatus(): SystemStatus {
-        return callApi("/wapi/v3/systemStatus.html", HttpMethod.GET, emptyMap(), false, false, serializer())
+        return httpConnector.callApi("/wapi/v3/systemStatus.html", HttpMethod.GET, emptyMap(), false, false, serializer())
     }
 
     suspend fun getUserCoins(timestamp: Instant, recvWindow: Long? = null): List<UserCoin> {
         val params = HashMap<String, String>()
         params["timestamp"] = timestamp.toEpochMilli().toString()
         if (recvWindow != null) params["recvWindow"] = recvWindow.toString()
-        return callApi("/sapi/v1/capital/config/getall", HttpMethod.GET, params, true, true, ListSerializer(UserCoin.serializer()))
+        return httpConnector.callApi("/sapi/v1/capital/config/getall", HttpMethod.GET, params, true, true, serializer())
     }
 
     suspend fun tradeFee(timestamp: Instant = Instant.now(), recvWindow: Long? = null, symbol: String? = null): TradeFee {
@@ -176,81 +84,21 @@ open class BinanceApi(
             if (recvWindow != null) put("recvWindow", recvWindow.toString())
             if (symbol != null) put("symbol", symbol)
         }
-        return callApi("/wapi/v3/tradeFee.html", HttpMethod.GET, params, true, true, serializer())
-    }
-    //endregion
-
-    //region Wallet API Cached
-    val tradeFeeCache: Flow<Map<String, CachedFee>> = run {
-        val dataFetchInterval = 6.hours
-        val flowCloseIntervalWhenNoSubscribers = dataFetchInterval.minus(1.hours)
-
-        channelFlow {
-            var cachedFeeInfo = if (feeInfoFileChannel != null) {
-                try {
-                    val feeInfoJsonString = feeInfoFileChannel.readString()
-                    json.decodeFromString<CachedFeeInfo>(feeInfoJsonString)
-                } catch (e: Throwable) {
-                    null
-                }
-            } else {
-                null
-            }
-
-            if (cachedFeeInfo != null) {
-                send(cachedFeeInfo.fee)
-                logger.info("Fee info extracted from cache")
-                val expireTime = cachedFeeInfo.createTime.plusMillis(dataFetchInterval.toLongMilliseconds()).toEpochMilli()
-                val now = Instant.now().toEpochMilli()
-                val diffMs = expireTime - now
-                if (diffMs > 0) delay(diffMs)
-            }
-
-            while (isActive) {
-                try {
-                    logger.info("Fetching fee info...")
-                    val feeInfo = tradeFee()
-                    logger.info("Fee info fetched successfully")
-
-                    val symbolFeeMap = feeInfo.tradeFee.groupBy { it.symbol }.mapValues { it.value.first().toCachedFee() }
-                    cachedFeeInfo = CachedFeeInfo(symbolFeeMap)
-                    send(symbolFeeMap)
-
-                    if (feeInfoFileChannel != null) {
-                        ignoreErrors {
-                            val feeInfoJsonString = json.encodeToString(cachedFeeInfo)
-                            feeInfoFileChannel.writeString(feeInfoJsonString)
-                        }
-                    }
-
-                    delay(dataFetchInterval)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    logger.warn("Can't fetch fee info: ${e.message}")
-                    delay(1000)
-                }
-            }
-        }
-            .share(1, flowCloseIntervalWhenNoSubscribers.toJavaDuration(), scope)
+        return httpConnector.callApi("/wapi/v3/tradeFee.html", HttpMethod.GET, params, true, true, serializer())
     }
     //endregion
 
     //region Market Data API
     suspend fun ping() {
-        return callApi("/api/v3/ping", HttpMethod.GET, emptyMap(), false, false, serializer())
+        return httpConnector.callApi("/api/v3/ping", HttpMethod.GET, emptyMap(), false, false, serializer())
     }
 
     suspend fun serverTime(): Instant {
-        return callApi("/api/v3/time", HttpMethod.GET, emptyMap(), false, false, ServerTime.serializer()).serverTime
+        return httpConnector.callApi("/api/v3/time", HttpMethod.GET, emptyMap(), false, false, ServerTime.serializer()).serverTime
     }
 
     suspend fun getExchangeInfo(): ExchangeInfo {
-        return getExchangeInfo(false)
-    }
-
-    private suspend fun getExchangeInfo(initLimits: Boolean): ExchangeInfo {
-        return callApi("/api/v3/exchangeInfo", HttpMethod.GET, emptyMap(), false, false, serializer(), initLimits)
+        return httpConnector.callApi("/api/v3/exchangeInfo", HttpMethod.GET, emptyMap(), false, false, serializer())
     }
 
     suspend fun getCandlestickData(
@@ -266,7 +114,7 @@ open class BinanceApi(
         params["startTime"] = startTime.toEpochMilli().toString()
         params["endTime"] = endTime.toEpochMilli().toString()
         params["limit"] = limit.toString()
-        return callApi("/api/v3/klines", HttpMethod.GET, params, false, false, ListSerializer(CandlestickData.CandlestickDataDeserializer))
+        return httpConnector.callApi("/api/v3/klines", HttpMethod.GET, params, false, false, serializer())
     }
 
     suspend fun getOrderBook(symbol: String, limit: Int = 100): OrderBook {
@@ -274,62 +122,7 @@ open class BinanceApi(
             Pair("symbol", symbol),
             Pair("limit", limit.toString())
         )
-        return callApi("/api/v3/depth", HttpMethod.GET, params, false, false, serializer())
-    }
-    //endregion
-
-    //region Market Data Cached
-    val exchangeInfoCache: Flow<ExchangeInfo> = run {
-        val dataFetchInterval = 24.hours
-        val flowCloseIntervalWhenNoSubscribers = dataFetchInterval.minus(1.hours)
-
-        channelFlow {
-            var cachedExchangeInfo = if (exchangeInfoFileChannel != null) {
-                try {
-                    val exchangeInfoJsonString = exchangeInfoFileChannel.readString()
-                    json.decodeFromString<CachedExchangeInfo>(exchangeInfoJsonString)
-                } catch (e: Throwable) {
-                    null
-                }
-            } else {
-                null
-            }
-
-            if (cachedExchangeInfo != null) {
-                send(cachedExchangeInfo.exchangeInfo)
-                logger.info("Exchange info extracted from cache")
-                val expireTime = cachedExchangeInfo.createTime.plusMillis(dataFetchInterval.toLongMilliseconds()).toEpochMilli()
-                val now = Instant.now().toEpochMilli()
-                val diffMs = expireTime - now
-                if (diffMs > 0) delay(diffMs)
-            }
-
-            while (isActive) {
-                try {
-                    logger.info("Fetching exchange info...")
-                    val exchangeInfo = getExchangeInfo(cachedExchangeInfo == null)
-                    logger.info("Exchange info fetched successfully")
-
-                    cachedExchangeInfo = CachedExchangeInfo(exchangeInfo)
-                    send(exchangeInfo)
-
-                    if (exchangeInfoFileChannel != null) {
-                        ignoreErrors {
-                            val exchangeInfoJsonString = json.encodeToString(cachedExchangeInfo)
-                            exchangeInfoFileChannel.writeString(exchangeInfoJsonString)
-                        }
-                    }
-
-                    delay(dataFetchInterval)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    logger.warn("Can't fetch exchange info: ${e.message}")
-                    delay(1000)
-                }
-            }
-        }
-            .share(1, flowCloseIntervalWhenNoSubscribers.toJavaDuration(), scope)
+        return httpConnector.callApi("/api/v3/depth", HttpMethod.GET, params, false, false, serializer())
     }
     //endregion
 
@@ -364,7 +157,7 @@ open class BinanceApi(
             if (newOrderRespType != null) put("newOrderRespType", newOrderRespType.toString())
             if (recvWindow != null) put("recvWindow", recvWindow.toString())
         }
-        return callApi("/api/v3/order/test", HttpMethod.POST, params, true, true, serializer())
+        return httpConnector.callApi("/api/v3/order/test", HttpMethod.POST, params, true, true, serializer())
     }
 
     suspend fun placeOrder(
@@ -397,7 +190,7 @@ open class BinanceApi(
             if (newOrderRespType != null) put("newOrderRespType", newOrderRespType.toString())
             if (recvWindow != null) put("recvWindow", recvWindow.toString())
         }
-        return callApi("/api/v3/order", HttpMethod.POST, params, true, true, serializer())
+        return httpConnector.callApi("/api/v3/order", HttpMethod.POST, params, true, true, serializer())
     }
 
     suspend fun cancelOrder(
@@ -406,7 +199,7 @@ open class BinanceApi(
         orderId: Long? = null,
         origClientOrderId: String? = null,
         newClientOrderId: String? = null,
-        recvWindow: Long? = null
+        recvWindow: Long? = null,
     ): CancelOrder {
         val params = buildMap<String, String> {
             put("symbol", symbol)
@@ -421,7 +214,7 @@ open class BinanceApi(
             if (newClientOrderId != null) put("newClientOrderId", newClientOrderId)
             if (recvWindow != null) put("recvWindow", recvWindow.toString())
         }
-        return callApi("/api/v3/order", HttpMethod.DELETE, params, true, true, serializer())
+        return httpConnector.callApi("/api/v3/order", HttpMethod.DELETE, params, true, true, serializer())
     }
 
     suspend fun cancelAllOrders(symbol: String, timestamp: Instant, recvWindow: Long? = null): List<CanceledOrder> {
@@ -430,14 +223,14 @@ open class BinanceApi(
             put("timestamp", timestamp.toEpochMilli().toString())
             if (recvWindow != null) put("recvWindow", recvWindow.toString())
         }
-        return callApi("/api/v3/openOrders", HttpMethod.DELETE, params, true, true, ListSerializer(CanceledOrder.serializer()))
+        return httpConnector.callApi("/api/v3/openOrders", HttpMethod.DELETE, params, true, true, serializer())
     }
 
     suspend fun getAccountInfo(timestamp: Instant, recvWindow: Long? = null): AccountInfo {
         val params = HashMap<String, String>()
         params["timestamp"] = timestamp.toEpochMilli().toString()
         if (recvWindow != null) params["recvWindow"] = recvWindow.toString()
-        return callApi("/api/v3/account", HttpMethod.GET, params, true, true, serializer())
+        return httpConnector.callApi("/api/v3/account", HttpMethod.GET, params, true, true, serializer())
     }
 
     suspend fun getAccountTrades(
@@ -458,45 +251,45 @@ open class BinanceApi(
             if (limit != null) put("limit", limit.toString())
             if (recvWindow != null) put("recvWindow", recvWindow.toString())
         }
-        return callApi("/api/v3/myTrades", HttpMethod.GET, params, true, true, ListSerializer(AccountTrade.serializer()))
+        return httpConnector.callApi("/api/v3/myTrades", HttpMethod.GET, params, true, true, serializer())
     }
     //endregion
 
     //region Market Streams API
     fun aggregateTradeStream(symbol: String): Flow<EventData<AggregateTradeEvent>> {
-        return subscribeToCached("$symbol@aggTrade") { subscribeTo(it, serializer()) }
+        return webSocketConnector.subscribeTo("$symbol@aggTrade", serializer())
     }
 
     fun tradeStream(symbol: String): Flow<EventData<TradeEvent>> {
-        return subscribeToCached("$symbol@trade") { subscribeTo(it, serializer()) }
+        return webSocketConnector.subscribeTo("$symbol@trade", serializer())
     }
 
     fun candlestickStream(symbol: String, interval: CandleStickInterval): Flow<EventData<CandlestickEvent>> {
-        return subscribeToCached("$symbol@kline_${interval.id}") { subscribeTo(it, serializer()) }
+        return webSocketConnector.subscribeTo("$symbol@kline_${interval.id}", serializer())
     }
 
     fun individualSymbolMiniTickerStream(symbol: String): Flow<EventData<MiniTickerEvent>> {
-        return subscribeToCached("$symbol@miniTicker") { subscribeTo(it, serializer()) }
+        return webSocketConnector.subscribeTo("$symbol@miniTicker", serializer())
     }
 
     val allMarketMiniTickersStream: Flow<EventData<List<MiniTickerEvent>>> = run {
-        subscribeTo("!miniTicker@arr", ListSerializer(MiniTickerEvent.serializer())).share()
+        webSocketConnector.subscribeTo("!miniTicker@arr", serializer())
     }
 
     fun individualSymbolTickerStream(symbol: String): Flow<EventData<TickerEvent>> {
-        return subscribeToCached("$symbol@ticker") { subscribeTo(it, serializer()) }
+        return webSocketConnector.subscribeTo("$symbol@ticker", serializer())
     }
 
     val allMarketTickersStream: Flow<EventData<List<TickerEvent>>> = run {
-        subscribeTo("!ticker@arr", ListSerializer(TickerEvent.serializer())).share()
+        webSocketConnector.subscribeTo("!ticker@arr", serializer())
     }
 
     fun individualSymbolBookTickerStream(symbol: String): Flow<EventData<BookTickerEvent>> {
-        return subscribeToCached("$symbol@bookTicker") { subscribeTo(it, serializer()) }
+        return webSocketConnector.subscribeTo("$symbol@bookTicker", serializer())
     }
 
     val allBookTickerStream: Flow<EventData<BookTickerEvent>> = run {
-        subscribeTo("!bookTicker", serializer<BookTickerEvent>()).share()
+        webSocketConnector.subscribeTo("!bookTicker", serializer())
     }
 
     fun partialBookDepthStream(
@@ -505,7 +298,7 @@ open class BinanceApi(
         updateSpeed: BookUpdateSpeed? = null
     ): Flow<EventData<PartialBookDepthEvent>> {
         val updateSpeedStr = if (updateSpeed == null) "" else "@${updateSpeed.timeMs}ms"
-        return subscribeToCached("$symbol@depth${level.id}$updateSpeedStr") { subscribeTo(it, serializer()) }
+        return webSocketConnector.subscribeTo("$symbol@depth${level.id}$updateSpeedStr", serializer())
     }
 
     fun diffDepthStream(
@@ -513,42 +306,30 @@ open class BinanceApi(
         updateSpeed: BookUpdateSpeed? = null
     ): Flow<EventData<DiffDepthEvent>> {
         val updateSpeedStr = if (updateSpeed == null) "" else "@${updateSpeed.timeMs}ms"
-        return subscribeToCached("$symbol@depth$updateSpeedStr") { subscribeTo(it, serializer()) }
+        return webSocketConnector.subscribeTo("$symbol@depth$updateSpeedStr", serializer())
     }
     //endregion
 
     //region User Data Streams Public API
     val accountStream: Flow<EventData<AccountEvent>> = run {
-        subscribeToPrivateChannel().share()
-    }
-
-    val accountUpdatesStream: Flow<EventData<AccountUpdateEvent>> = run {
-        accountStream.filterAccountEvent()
-    }
-
-    val balanceUpdatesStream: Flow<EventData<BalanceUpdateEvent>> = run {
-        accountStream.filterAccountEvent()
-    }
-
-    val orderUpdatesStream: Flow<EventData<OrderUpdateEvent>> = run {
-        accountStream.filterAccountEvent()
+        webSocketConnector.subscribeToPrivateChannel()
     }
     //endregion
 
-    //region User Data Streams Private API
-    private suspend fun getListenKey(): String {
-        val resp = callApi("/api/v3/userDataStream", HttpMethod.POST, emptyMap(), true, false, serializer<ListenKey>())
+    //region User Data Streams API
+    suspend fun getListenKey(): String {
+        val resp = httpConnector.callApi("/api/v3/userDataStream", HttpMethod.POST, emptyMap(), true, false, serializer<ListenKey>())
         return resp.listenKey
     }
 
-    private suspend fun pingListenKey(listenKey: String) {
+    suspend fun pingListenKey(listenKey: String) {
         val params = mapOf(Pair("listenKey", listenKey))
-        callApi("/api/v3/userDataStream", HttpMethod.PUT, params, true, false, serializer<Unit>())
+        httpConnector.callApi("/api/v3/userDataStream", HttpMethod.PUT, params, true, false, serializer<Unit>())
     }
 
-    private suspend fun deleteListenKey(listenKey: String) {
+    suspend fun deleteListenKey(listenKey: String) {
         val params = mapOf(Pair("listenKey", listenKey))
-        callApi("/api/v3/userDataStream", HttpMethod.DELETE, params, true, false, serializer<Unit>())
+        httpConnector.callApi("/api/v3/userDataStream", HttpMethod.DELETE, params, true, false, serializer<Unit>())
     }
     //endregion
 
@@ -751,18 +532,6 @@ open class BinanceApi(
             @Serializable(BigDecimalAsDoubleSerializer::class) val maker: BigDecimal,
             @Serializable(BigDecimalAsDoubleSerializer::class) val taker: BigDecimal
         )
-    }
-
-    @Serializable
-    data class CachedFee(
-        @Serializable(BigDecimalAsStringSerializer::class) val maker: BigDecimal,
-        @Serializable(BigDecimalAsStringSerializer::class) val taker: BigDecimal
-    ) {
-        @Transient
-        val makerMultiplier = BigDecimal.ONE - maker
-
-        @Transient
-        val takerMultiplier = BigDecimal.ONE - taker
     }
 
     @Serializable
@@ -1089,6 +858,11 @@ open class BinanceApi(
         val isMaker: Boolean,
         val isBestMatch: Boolean
     )
+
+    @Serializable
+    data class ListenKey(
+        val listenKey: String,
+    )
     //endregion
 
     //region Public Events
@@ -1336,145 +1110,6 @@ open class BinanceApi(
     }
     //endregion
 
-    //region Private Models
-    private class ConnectionData(
-        val requestChannel: Channel<InternalWebSocketRequest> = Channel(Channel.RENDEZVOUS),
-        val responseChannelRegistry: ChannelRegistry = ChannelRegistry()
-    ) {
-        private val reqIdCounter = AtomicLong(0)
-        fun generateId(): Long = reqIdCounter.getAndIncrement()
-
-        fun isClosed(): Boolean {
-            return requestChannel.isClosedForSend
-        }
-
-        suspend fun close(error: DisconnectedException) {
-            requestChannel.close(error)
-            responseChannelRegistry.close(error)
-        }
-
-        class ChannelRegistry {
-            private val mutex = Mutex()
-            private var closed = AtomicBoolean(false)
-            private val registry = ConcurrentHashMap<String, Channel<WebSocketEvent>>()
-
-            suspend fun register(channelKey: String, channel: Channel<WebSocketEvent>): Boolean {
-                if (closed.get()) return false
-                return mutex.withLock {
-                    if (closed.get()) {
-                        false
-                    } else {
-                        registry[channelKey] = channel
-                        true
-                    }
-                }
-            }
-
-            fun get(channelKey: String): Channel<WebSocketEvent>? {
-                return registry[channelKey]
-            }
-
-            fun remove(channelKey: String): Channel<WebSocketEvent>? {
-                return registry.remove(channelKey)
-            }
-
-            suspend fun close(error: DisconnectedException) {
-                mutex.withLock {
-                    closed.set(true)
-                    registry.forEachValue(1L) { it.close(error) }
-                }
-            }
-        }
-    }
-
-    private enum class SubscribeToState {
-        INIT,
-        SUBSCRIBE,
-        CONFIRM_SUBSCRIPTION,
-        CONSUME_EVENTS,
-        UNSUBSCRIBE,
-        CONFIRM_UNSUBSCRIPTION,
-        EXIT,
-    }
-
-    private data class LimitViolation(
-        val violationTimeMs: Long,
-        val waitTimeMs: Long
-    ) {
-        val endTimeMs = violationTimeMs + waitTimeMs
-    }
-
-    @Serializable
-    private data class ListenKey(
-        val listenKey: String
-    )
-
-    @Serializable
-    private data class CachedListenKey(
-        val listenKey: String,
-        @Serializable(InstantAsLongMillisSerializer::class) val createTime: Instant = Instant.now()
-    )
-
-    @Serializable
-    private data class CachedExchangeInfo(
-        val exchangeInfo: ExchangeInfo,
-        @Serializable(InstantAsLongMillisSerializer::class) val createTime: Instant = Instant.now()
-    )
-
-    @Serializable
-    private data class CachedFeeInfo(
-        val fee: Map<String, CachedFee>,
-        @Serializable(InstantAsLongMillisSerializer::class) val createTime: Instant = Instant.now()
-    )
-
-    @Serializable
-    private data class ErrorMsg(
-        val code: Long,
-        val msg: String
-    )
-
-    private data class InternalWebSocketRequest(
-        val request: WebSocketRequest,
-        val responseChannel: Channel<WebSocketEvent>
-    )
-
-    @Serializable
-    private data class WebSocketRequest(
-        val method: Method,
-        val params: List<String>,
-        val id: Long
-    ) {
-        enum class Method {
-            SUBSCRIBE,
-            UNSUBSCRIBE,
-            LIST_SUBSCRIPTIONS,
-            GET_PROPERTY,
-            SET_PROPERTY,
-        }
-    }
-
-    private sealed class WebSocketEvent {
-        @Serializable
-        data class Push(
-            val stream: String,
-            val data: JsonElement
-        ) : WebSocketEvent()
-
-        @Serializable
-        data class Response(
-            val result: JsonElement,
-            val id: Long
-        ) : WebSocketEvent()
-
-        @Serializable
-        data class Error(
-            val code: Long,
-            val msg: String,
-            val id: Long? = null
-        ) : WebSocketEvent()
-    }
-    //endregion
-
     //region Exceptions
     class Exception(val code: Long, val description: String) : Throwable("$code: $description", null, true, false)
 
@@ -1565,472 +1200,405 @@ open class BinanceApi(
     }
     //endregion
 
-    //region Private Extensions
-    private fun Map<String, String>.toQueryString() = asSequence().map { "${it.key}=${it.value}" }.joinToString("&")
-    private fun String.appendToQueryString(key: String, value: String) = "${if (isBlank()) "" else "$this&"}$key=$value"
-    private fun String.appendToUri() = if (isBlank()) "" else "?$this"
-
+    //region Extensions
     private fun Error.toException() = Exception(code, msg)
-    private fun WebSocketEvent.Error.toException() = Exception(code, msg)
-
-    private inline fun <reified T> Flow<EventData<AccountEvent>>.filterAccountEvent(): Flow<EventData<T>> {
-        return transform<EventData<AccountEvent>, EventData<T>> { event ->
-            if (event.payload is T) {
-                emit(event.newPayload(event.payload))
-            }
-        }
-    }
-
-    private fun TradeFee.Fee.toCachedFee() = CachedFee(maker, taker)
     //endregion
 
-    //region Private HTTP Logic
-    private suspend fun <T> callApi(
-        method: String,
-        httpMethod: HttpMethod,
-        params: Map<String, String>,
-        requiresApiKey: Boolean,
-        requiresSignature: Boolean,
-        retType: DeserializationStrategy<T>,
-        initLimits: Boolean = false
-    ): T {
-        throwIfViolatesLimits()
-
-        var paramsStr = ""
-        if (params.isNotEmpty()) {
-            paramsStr = params.toQueryString()
-            if (requiresSignature) {
-                if (signer == null) throw RuntimeException("API key and secret is required to make authenticated calls")
-                val signature = signer.sign(paramsStr)
-                paramsStr = paramsStr.appendToQueryString(SIGNATURE, signature)
-            }
-            paramsStr = paramsStr.appendToUri()
-        }
-        var request = webClient.method(httpMethod).uri("$apiUrl$method$paramsStr")
-        if (requiresApiKey) {
-            if (apiKey == null) throw RuntimeException("API key is required to make authenticated calls")
-            request = request.header(API_KEY_HEADER, apiKey)
+    private class WebSocketConnector(
+        apiNet: ApiNet,
+        val binanceApi: BinanceApi,
+        val scope: CoroutineScope,
+        val json: Json,
+    ) {
+        private val apiUrlStream = when (apiNet) {
+            ApiNet.Main -> API_STREAM_URL_MAIN_NET
+            ApiNet.Test -> API_STREAM_URL_TEST_NET
         }
 
-        return request.awaitExchange { response ->
-            val data = response.awaitBody<String>()
+        private val streamCache = ConcurrentHashMap<String, Flow<EventData<*>>>()
 
-            if (!initLimits) response.extractAndCacheLimits()
+        private val webSocketClient = springWebsocketClient(
+            connectTimeoutMs = 10000,
+            readTimeoutMs = 5000,
+            writeTimeoutMs = 5000,
+            maxFramePayloadLength = 65536 * 4,
+        )
 
-            if (response.statusCode().is2xxSuccessful) {
-                json.decodeFromString(retType, data)!!
-            } else {
-                response.extractAndCacheRetryTime()
-                val error = json.decodeFromString<ErrorMsg>(data)
-                throw Exception(error.code, error.msg)
-            }
-        }
-    }
+        private val connection: Flow<ConnectionData> = run {
+            channelFlow<ConnectionData> connection@{
+                logger.debug("Starting WebSocket connection channel")
 
-    private tailrec fun throwIfViolatesLimits() {
-        val limitViolationInfo = limitViolation.get() ?: return
-        val nowMs = System.currentTimeMillis()
-        val endTimeMs = limitViolationInfo.endTimeMs
-        if (nowMs < endTimeMs) throw Error.TOO_MANY_REQUESTS.toException()
-        val set = limitViolation.compareAndSet(limitViolationInfo, null)
-        if (!set) throwIfViolatesLimits()
-    }
-
-    private suspend fun ClientResponse.extractAndCacheLimits() {
-        for (rateLimit in exchangeInfoCache.first().rateLimits) {
-            val value = headers().header(rateLimit.httpHeader).firstOrNull()?.toLongOrNull() ?: continue
-            reqLimitsCache[rateLimit.httpHeader] = value
-        }
-    }
-
-    private fun ClientResponse.extractAndCacheRetryTime() {
-        if (statusCode() != HttpStatus.TOO_MANY_REQUESTS && statusCode() != HttpStatus.I_AM_A_TEAPOT) return
-        val retryAfterSec = headers().header(HttpHeaders.RETRY_AFTER).firstOrNull()?.toLongOrNull() ?: return
-        val nowMs = System.currentTimeMillis()
-        limitViolation.set(LimitViolation(retryAfterSec * 1000, nowMs))
-        if (logger.isDebugEnabled) logger.debug("Limits have been violated. Retry after $retryAfterSec seconds")
-    }
-    //endregion
-
-    //region WebSocket Logic
-    private val connection: Flow<ConnectionData> = run {
-        channelFlow<ConnectionData> connection@{
-            logger.debug("Starting Binance connection channel")
-
-            while (isActive) {
-                logger.debug("Establishing connection with $apiUrlStream...")
-
-                try {
-                    var connectionData: ConnectionData? = null
-
-                    val session = webSocketClient.execute(URI.create(apiUrlStream)) { session ->
-                        mono(Dispatchers.Unconfined) {
-                            logger.info("Connection established with $apiUrlStream")
-
-                            coroutineScope {
-                                val wsMsgCounter = AtomicLong(0)
-                                val wsMsgReceiver = Channel<WebSocketMessage>(Channel.RENDEZVOUS)
-                                val requestResponses = ConcurrentHashMap<Long, List<Channel<WebSocketEvent>>>()
-                                connectionData = ConnectionData()
-
-                                this@connection.send(connectionData!!)
-
-                                // Messages consumer
-                                launch(start = CoroutineStart.UNDISPATCHED) {
-                                    session.receive().asFlow()
-                                        .onEach { wsMsgCounter.incrementAndGet() }
-                                        .filter { it.type == WebSocketMessage.Type.TEXT }
-                                        .collect { msg ->
-                                            val payloadJsonString = msg.payloadAsText
-                                            if (logger.isTraceEnabled) logger.trace("Received: $payloadJsonString")
-
-                                            val event = try {
-                                                try {
-                                                    json.decodeFromString<WebSocketEvent.Push>(payloadJsonString)
-                                                } catch (e: SerializationException) {
-                                                    try {
-                                                        json.decodeFromString<WebSocketEvent.Response>(payloadJsonString)
-                                                    } catch (e: SerializationException) {
-                                                        val error = json.decodeFromString<WebSocketEvent.Error>(payloadJsonString)
-                                                        if (error.id == null) {
-                                                            throw error.toException()
-                                                        } else {
-                                                            error
-                                                        }
-                                                    }
-                                                }
-                                            } catch (e: Throwable) {
-                                                logger.error("Can't handle websocket message: ${e.message}. Payload: $payloadJsonString")
-                                                return@collect
-                                            }
-
-                                            when (event) {
-                                                is WebSocketEvent.Push -> ignoreErrors { connectionData!!.responseChannelRegistry.get(event.stream)?.send(event) }
-                                                is WebSocketEvent.Response -> requestResponses.remove(event.id)?.forEach { ignoreErrors { it.send(event) } }
-                                                is WebSocketEvent.Error -> requestResponses.remove(event.id)?.forEach { ignoreErrors { it.send(event) } }
-                                            }
-                                        }
-                                    throw ClosedChannelException()
-                                }
-
-                                // Message sender
-                                launch(start = CoroutineStart.UNDISPATCHED) {
-                                    val output = flux(Dispatchers.Unconfined) {
-                                        val reqLimiter = SimpleRequestLimiter(5, 1000)
-                                        for (msg in wsMsgReceiver) {
-                                            delay(reqLimiter.waitMs())
-                                            send(msg)
-                                        }
-                                    }
-                                    session.send(output).awaitFirstOrNull()
-                                    throw ClosedChannelException()
-                                }
-
-                                // Ping requests producer
-                                launch {
-                                    var prevTs = wsMsgCounter.get()
-                                    while (isActive) {
-                                        delay(2000)
-                                        val currentTs = wsMsgCounter.get()
-                                        if (currentTs == prevTs) {
-                                            val pingMsg = session.pingMessage { it.wrap("ping".toByteArray()) }
-                                            wsMsgReceiver.send(pingMsg)
-                                        }
-                                        prevTs = currentTs
-                                    }
-                                }
-
-                                // Request messages aggregator
-                                launch {
-                                    val reqQueue = LinkedList<InternalWebSocketRequest>()
-
-                                    while (isActive) {
-                                        reqQueue.add(connectionData!!.requestChannel.receive())
-
-                                        withTimeoutOrNull(250) {
-                                            for (req in connectionData!!.requestChannel) reqQueue.add(req)
-                                        }
-
-                                        val groupedRequests = reqQueue
-                                            .groupBy { it.request.method }
-                                            .mapValues { (method, requests) ->
-                                                when (method) {
-                                                    WebSocketRequest.Method.SUBSCRIBE, WebSocketRequest.Method.UNSUBSCRIBE -> {
-                                                        val channels = LinkedList<String>()
-                                                        val reqResponses = LinkedList<Channel<WebSocketEvent>>()
-                                                        for (req in requests) {
-                                                            channels.addAll(req.request.params)
-                                                            reqResponses.add(req.responseChannel)
-                                                        }
-                                                        val newReq = WebSocketRequest(method, channels, connectionData!!.generateId())
-                                                        requestResponses[newReq.id] = reqResponses
-                                                        listOf(newReq)
-                                                    }
-                                                    else -> {
-                                                        val newRequests = LinkedList<WebSocketRequest>()
-                                                        for (request in requests) {
-                                                            newRequests.add(request.request)
-                                                            requestResponses[request.request.id] = listOf(request.responseChannel)
-                                                        }
-                                                        newRequests
-                                                    }
-                                                }
-                                            }
-
-                                        reqQueue.clear()
-
-                                        for ((_, requests) in groupedRequests) {
-                                            for (request in requests) {
-                                                val jsonStr = json.encodeToString(request)
-                                                val webSocketMsg = session.textMessage(jsonStr)
-                                                wsMsgReceiver.send(webSocketMsg)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            null
-                        }
-                    }
+                while (isActive) {
+                    logger.debug("Establishing connection...")
 
                     try {
-                        session.awaitFirstOrNull()
-                        throw ClosedChannelException()
-                    } catch (e: Throwable) {
-                        val error = DisconnectedException(e)
-                        connectionData?.close(error)
-                        throw error
-                    }
-                } catch (e: DisconnectedException) {
-                    when (e.cause) {
-                        is CancellationException -> {
-                        }
-                        else -> {
-                            logger.warn("${e.message}.${if (e.cause != null) " Cause: ${e.cause}" else ""}")
-                            delay(1000)
-                        }
-                    }
-                } finally {
-                    logger.info("Connection closed with $apiUrlStream")
-                }
-            }
+                        var connectionData: ConnectionData? = null
 
-            logger.debug("Closing Binance connection channel")
-        }
-            .share(1)
-            .filter { !it.isClosed() }
-    }
+                        val session = webSocketClient.execute(URI.create(apiUrlStream)) { session ->
+                            mono(Dispatchers.Unconfined) {
+                                logger.info("Connection established")
 
-    private fun <T : Any> subscribeTo(
-        channel: String,
-        payloadType: DeserializationStrategy<T>
-    ): Flow<EventData<T>> = channelFlow {
-        connection.conflate().collect { connection ->
-            var state = SubscribeToState.INIT
-            var eventData = EventData<T>()
+                                coroutineScope {
+                                    val wsMsgCounter = AtomicLong(0)
+                                    val wsMsgReceiver = Channel<WebSocketMessage>(Channel.RENDEZVOUS)
+                                    val requestResponses = ConcurrentHashMap<Long, List<Channel<WebSocketInboundMessage>>>()
+                                    connectionData = ConnectionData()
 
-            while (true) {
-                when (state) {
-                    SubscribeToState.INIT -> {
-                        try {
-                            withContext(NonCancellable) {
-                                val registered = connection.responseChannelRegistry.register(channel, Channel(64))
-                                state = if (registered) SubscribeToState.SUBSCRIBE else SubscribeToState.EXIT
-                            }
-                        } catch (e: CancellationException) {
-                            state = SubscribeToState.EXIT
-                        }
-                    }
-                    SubscribeToState.SUBSCRIBE -> {
-                        val request = WebSocketRequest(WebSocketRequest.Method.SUBSCRIBE, listOf(channel), connection.generateId())
-                        val internalRequest = InternalWebSocketRequest(request, connection.responseChannelRegistry.get(channel)!!)
-                        state = try {
-                            withContext(NonCancellable) {
-                                connection.requestChannel.send(internalRequest)
-                            }
-                            SubscribeToState.CONFIRM_SUBSCRIPTION
-                        } catch (e: CancellationException) {
-                            SubscribeToState.CONFIRM_SUBSCRIPTION
-                        } catch (e: DisconnectedException) {
-                            SubscribeToState.EXIT
-                        }
-                    }
-                    SubscribeToState.CONFIRM_SUBSCRIPTION -> {
-                        try {
-                            withContext(NonCancellable) {
-                                val msg = try {
-                                    withTimeout(10.seconds) {
-                                        connection.responseChannelRegistry.get(channel)!!.receive()
-                                    }
-                                } catch (e: TimeoutCancellationException) {
-                                    eventData = eventData.setError(Exception("Subscribe confirmation has not been received within specified timeout"))
-                                    state = SubscribeToState.SUBSCRIBE
-                                    this@channelFlow.send(eventData)
-                                    return@withContext
-                                } catch (e: DisconnectedException) {
-                                    eventData = eventData.setError(e)
-                                    state = SubscribeToState.EXIT
-                                    this@channelFlow.send(eventData)
-                                    return@withContext
-                                }
+                                    this@connection.send(connectionData!!)
 
-                                try {
-                                    when (msg) {
-                                        is WebSocketEvent.Response -> {
-                                            eventData = eventData.setSubscribed(true)
-                                            state = SubscribeToState.CONSUME_EVENTS
-                                            if (logger.isDebugEnabled) logger.debug("Subscribed to channel $channel")
-                                        }
-                                        is WebSocketEvent.Error -> {
-                                            eventData = eventData.setError(msg.toException())
-                                            state = SubscribeToState.SUBSCRIBE
-                                        }
-                                        is WebSocketEvent.Push -> {
-                                            eventData = eventData.setError(IllegalStateException("Push event was received before confirmation event"))
-                                            state = SubscribeToState.UNSUBSCRIBE
-                                        }
-                                    }
-                                } catch (e: Throwable) {
-                                    eventData = eventData.setError(e)
-                                    state = SubscribeToState.UNSUBSCRIBE
-                                }
+                                    // Messages consumer
+                                    launch(start = CoroutineStart.UNDISPATCHED) {
+                                        session.receive().asFlow()
+                                            .onEach { wsMsgCounter.incrementAndGet() }
+                                            .filter { it.type == WebSocketMessage.Type.TEXT }
+                                            .collect { msg ->
+                                                val payloadJsonString = msg.payloadAsText
+                                                if (logger.isTraceEnabled) logger.trace("Received: $payloadJsonString")
 
-                                this@channelFlow.send(eventData)
-                            }
-                        } catch (e: CancellationException) {
-                            state = when (state) {
-                                SubscribeToState.SUBSCRIBE -> SubscribeToState.SUBSCRIBE
-                                SubscribeToState.CONFIRM_SUBSCRIPTION -> SubscribeToState.CONFIRM_SUBSCRIPTION
-                                SubscribeToState.CONSUME_EVENTS -> SubscribeToState.UNSUBSCRIBE
-                                SubscribeToState.UNSUBSCRIBE -> SubscribeToState.UNSUBSCRIBE
-                                else -> SubscribeToState.EXIT
-                            }
-                        }
-                    }
-                    SubscribeToState.CONSUME_EVENTS -> {
-                        try {
-                            try {
-                                for (msg in connection.responseChannelRegistry.get(channel)!!) {
-                                    when (msg) {
-                                        is WebSocketEvent.Push -> {
-                                            eventData = eventData.setPayload(json.decodeFromJsonElement(payloadType, msg.data))
-                                            this@channelFlow.send(eventData)
-                                        }
-                                        is WebSocketEvent.Error -> {
-                                            throw msg.toException()
-                                        }
-                                        is WebSocketEvent.Response -> {
-                                            throw IllegalStateException("Subscribe/Unsubscribe event can't be received during events consumption")
-                                        }
-                                    }
-                                }
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: DisconnectedException) {
-                                eventData = eventData.setError(e)
-                                state = SubscribeToState.EXIT
-                                this@channelFlow.send(eventData)
-                            } catch (e: Throwable) {
-                                eventData = eventData.setError(e)
-                                state = SubscribeToState.UNSUBSCRIBE
-                                this@channelFlow.send(eventData)
-                            }
-                        } catch (e: CancellationException) {
-                            state = when (state) {
-                                SubscribeToState.EXIT -> SubscribeToState.EXIT
-                                else -> SubscribeToState.UNSUBSCRIBE
-                            }
-                        }
-                    }
-                    SubscribeToState.UNSUBSCRIBE -> {
-                        val request = WebSocketRequest(WebSocketRequest.Method.UNSUBSCRIBE, listOf(channel), connection.generateId())
-                        val internalRequest = InternalWebSocketRequest(request, connection.responseChannelRegistry.get(channel)!!)
-                        state = try {
-                            withContext(NonCancellable) {
-                                connection.requestChannel.send(internalRequest)
-                            }
-                            SubscribeToState.CONFIRM_UNSUBSCRIPTION
-                        } catch (e: CancellationException) {
-                            SubscribeToState.CONFIRM_UNSUBSCRIPTION
-                        } catch (e: DisconnectedException) {
-                            SubscribeToState.EXIT
-                        }
-                    }
-                    SubscribeToState.CONFIRM_UNSUBSCRIPTION -> {
-                        try {
-                            withContext(NonCancellable) {
-                                try {
-                                    withTimeout(1.5.minutes) {
-                                        for (msg in connection.responseChannelRegistry.get(channel)!!) {
-                                            when (msg) {
-                                                is WebSocketEvent.Push -> {
-                                                    eventData = eventData.setPayload(json.decodeFromJsonElement(payloadType, msg.data))
-                                                    ignoreErrors { this@channelFlow.send(eventData) }
+                                                val event = try {
+                                                    try {
+                                                        json.decodeFromString<WebSocketInboundMessage.Push>(payloadJsonString)
+                                                    } catch (e: SerializationException) {
+                                                        try {
+                                                            json.decodeFromString<WebSocketInboundMessage.Response>(payloadJsonString)
+                                                        } catch (e: SerializationException) {
+                                                            val error = json.decodeFromString<WebSocketInboundMessage.Error>(payloadJsonString)
+                                                            if (error.id == null) {
+                                                                throw error.toException()
+                                                            } else {
+                                                                error
+                                                            }
+                                                        }
+                                                    }
+                                                } catch (e: Throwable) {
+                                                    logger.error("Can't handle websocket message: ${e.message}. Payload: $payloadJsonString")
+                                                    return@collect
                                                 }
-                                                is WebSocketEvent.Response -> {
-                                                    eventData = eventData.setSubscribed(false)
-                                                    state = SubscribeToState.EXIT
-                                                    if (logger.isDebugEnabled) logger.debug("Unsubscribed from channel $channel")
-                                                    this@channelFlow.send(eventData)
-                                                    return@withTimeout
+
+                                                when (event) {
+                                                    is WebSocketInboundMessage.Push -> ignoreErrors { connectionData!!.inboundChannelRegistry.get(event.stream)?.send(event) }
+                                                    is WebSocketInboundMessage.Response -> requestResponses.remove(event.id)?.forEach { ignoreErrors { it.send(event) } }
+                                                    is WebSocketInboundMessage.Error -> requestResponses.remove(event.id)?.forEach { ignoreErrors { it.send(event) } }
                                                 }
-                                                is WebSocketEvent.Error -> {
-                                                    throw msg.toException()
+                                            }
+                                        throw ClosedChannelException()
+                                    }
+
+                                    // Message sender
+                                    launch(start = CoroutineStart.UNDISPATCHED) {
+                                        val output = flux(Dispatchers.Unconfined) {
+                                            val reqLimiter = SimpleRequestLimiter(5, 1000)
+                                            for (msg in wsMsgReceiver) {
+                                                delay(reqLimiter.waitMs())
+                                                send(msg)
+                                            }
+                                        }
+                                        session.send(output).awaitFirstOrNull()
+                                        throw ClosedChannelException()
+                                    }
+
+                                    // Ping requests producer
+                                    launch {
+                                        var prevTs = wsMsgCounter.get()
+                                        while (isActive) {
+                                            delay(2000)
+                                            val currentTs = wsMsgCounter.get()
+                                            if (currentTs == prevTs) {
+                                                val pingMsg = session.pingMessage { it.wrap("ping".toByteArray()) }
+                                                wsMsgReceiver.send(pingMsg)
+                                            }
+                                            prevTs = currentTs
+                                        }
+                                    }
+
+                                    // Request messages aggregator
+                                    launch {
+                                        val reqQueue = LinkedList<InternalWebSocketOutboundMessage>()
+
+                                        while (isActive) {
+                                            reqQueue.add(connectionData!!.outboundChannel.receive())
+
+                                            withTimeoutOrNull(250) {
+                                                for (req in connectionData!!.outboundChannel) reqQueue.add(req)
+                                            }
+
+                                            val groupedRequests = reqQueue
+                                                .groupBy { it.outboundMessage.method }
+                                                .mapValues { (method, requests) ->
+                                                    when (method) {
+                                                        WebSocketOutboundMessage.Method.SUBSCRIBE, WebSocketOutboundMessage.Method.UNSUBSCRIBE -> {
+                                                            val channels = LinkedList<String>()
+                                                            val reqResponses = LinkedList<Channel<WebSocketInboundMessage>>()
+                                                            for (req in requests) {
+                                                                channels.addAll(req.outboundMessage.params)
+                                                                reqResponses.add(req.inboundChannel)
+                                                            }
+                                                            val newReq = WebSocketOutboundMessage(method, channels, connectionData!!.generateId())
+                                                            requestResponses[newReq.id] = reqResponses
+                                                            listOf(newReq)
+                                                        }
+                                                        else -> {
+                                                            val newRequests = LinkedList<WebSocketOutboundMessage>()
+                                                            for (request in requests) {
+                                                                newRequests.add(request.outboundMessage)
+                                                                requestResponses[request.outboundMessage.id] = listOf(request.inboundChannel)
+                                                            }
+                                                            newRequests
+                                                        }
+                                                    }
+                                                }
+
+                                            reqQueue.clear()
+
+                                            for ((_, requests) in groupedRequests) {
+                                                for (request in requests) {
+                                                    val jsonStr = json.encodeToString(request)
+                                                    val webSocketMsg = session.textMessage(jsonStr)
+                                                    wsMsgReceiver.send(webSocketMsg)
                                                 }
                                             }
                                         }
                                     }
-                                } catch (e: TimeoutCancellationException) {
-                                    state = SubscribeToState.UNSUBSCRIBE
+                                }
+
+                                null
+                            }
+                        }
+
+                        try {
+                            session.awaitFirstOrNull()
+                            throw ClosedChannelException()
+                        } catch (e: Throwable) {
+                            val error = DisconnectedException(e)
+                            connectionData?.close(error)
+                            throw error
+                        }
+                    } catch (e: DisconnectedException) {
+                        when (e.cause) {
+                            is CancellationException -> {
+                                // ignore
+                            }
+                            else -> {
+                                logger.warn("${e.message}.${if (e.cause != null) " Cause: ${e.cause}" else ""}")
+                                delay(1000)
+                            }
+                        }
+                    } finally {
+                        logger.info("Connection closed")
+                    }
+                }
+
+                logger.debug("Closing WebSocket connection channel")
+            }
+                .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 1)
+                .filter { !it.isClosed() }
+        }
+
+        fun <T> subscribeTo(
+            channel: String,
+            payloadType: DeserializationStrategy<out T>,
+        ): Flow<EventData<T>> {
+            @Suppress("UNCHECKED_CAST")
+            return streamCache.getOrPut(channel) {
+                subscribeToImpl(channel, payloadType)
+                    .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 0)
+            } as Flow<EventData<T>>
+        }
+
+        private fun <T> subscribeToImpl(
+            channel: String,
+            payloadType: DeserializationStrategy<out T>,
+        ): Flow<EventData<T>> = channelFlow {
+            connection.conflate().collect { connection ->
+                var state = SubscriptionState.INIT
+                var eventData = EventData<T>()
+
+                while (true) {
+                    when (state) {
+                        SubscriptionState.INIT -> {
+                            try {
+                                withContext(NonCancellable) {
+                                    val registered = connection.inboundChannelRegistry.register(channel, Channel(64))
+                                    state = if (registered) SubscriptionState.SUBSCRIBE else SubscriptionState.EXIT
+                                }
+                            } catch (e: CancellationException) {
+                                state = SubscriptionState.EXIT
+                            }
+                        }
+                        SubscriptionState.SUBSCRIBE -> {
+                            val request = WebSocketOutboundMessage(WebSocketOutboundMessage.Method.SUBSCRIBE, listOf(channel), connection.generateId())
+                            val internalRequest = InternalWebSocketOutboundMessage(request, connection.inboundChannelRegistry.get(channel)!!)
+                            state = try {
+                                withContext(NonCancellable) {
+                                    connection.outboundChannel.send(internalRequest)
+                                }
+                                SubscriptionState.CONFIRM_SUBSCRIPTION
+                            } catch (e: CancellationException) {
+                                SubscriptionState.CONFIRM_SUBSCRIPTION
+                            } catch (e: DisconnectedException) {
+                                SubscriptionState.EXIT
+                            }
+                        }
+                        SubscriptionState.CONFIRM_SUBSCRIPTION -> {
+                            try {
+                                withContext(NonCancellable) {
+                                    val msg = try {
+                                        withTimeout(10.seconds) {
+                                            connection.inboundChannelRegistry.get(channel)!!.receive()
+                                        }
+                                    } catch (e: TimeoutCancellationException) {
+                                        eventData = eventData.setError(Exception("Subscribe confirmation has not been received within specified timeout"))
+                                        state = SubscriptionState.SUBSCRIBE
+                                        this@channelFlow.send(eventData)
+                                        return@withContext
+                                    } catch (e: DisconnectedException) {
+                                        eventData = eventData.setError(e)
+                                        state = SubscriptionState.EXIT
+                                        this@channelFlow.send(eventData)
+                                        return@withContext
+                                    }
+
+                                    try {
+                                        when (msg) {
+                                            is WebSocketInboundMessage.Response -> {
+                                                eventData = eventData.setSubscribed(true)
+                                                state = SubscriptionState.CONSUME_EVENTS
+                                                if (logger.isDebugEnabled) logger.debug("Subscribed to channel $channel")
+                                            }
+                                            is WebSocketInboundMessage.Error -> {
+                                                eventData = eventData.setError(msg.toException())
+                                                state = SubscriptionState.SUBSCRIBE
+                                            }
+                                            is WebSocketInboundMessage.Push -> {
+                                                eventData = eventData.setError(IllegalStateException("Push event was received before confirmation event"))
+                                                state = SubscriptionState.UNSUBSCRIBE
+                                            }
+                                        }
+                                    } catch (e: Throwable) {
+                                        eventData = eventData.setError(e)
+                                        state = SubscriptionState.UNSUBSCRIBE
+                                    }
+
+                                    this@channelFlow.send(eventData)
+                                }
+                            } catch (e: CancellationException) {
+                                state = when (state) {
+                                    SubscriptionState.SUBSCRIBE -> SubscriptionState.SUBSCRIBE
+                                    SubscriptionState.CONFIRM_SUBSCRIPTION -> SubscriptionState.CONFIRM_SUBSCRIPTION
+                                    SubscriptionState.CONSUME_EVENTS -> SubscriptionState.UNSUBSCRIBE
+                                    SubscriptionState.UNSUBSCRIBE -> SubscriptionState.UNSUBSCRIBE
+                                    else -> SubscriptionState.EXIT
+                                }
+                            }
+                        }
+                        SubscriptionState.CONSUME_EVENTS -> {
+                            try {
+                                try {
+                                    for (msg in connection.inboundChannelRegistry.get(channel)!!) {
+                                        when (msg) {
+                                            is WebSocketInboundMessage.Push -> {
+                                                eventData = eventData.setPayload(json.decodeFromJsonElement(payloadType, msg.data))
+                                                this@channelFlow.send(eventData)
+                                            }
+                                            is WebSocketInboundMessage.Error -> {
+                                                throw msg.toException()
+                                            }
+                                            is WebSocketInboundMessage.Response -> {
+                                                throw IllegalStateException("Subscribe/Unsubscribe event can't be received during events consumption")
+                                            }
+                                        }
+                                    }
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: DisconnectedException) {
                                     eventData = eventData.setError(e)
-                                    state = SubscribeToState.EXIT
+                                    state = SubscriptionState.EXIT
                                     this@channelFlow.send(eventData)
                                 } catch (e: Throwable) {
                                     eventData = eventData.setError(e)
-                                    state = SubscribeToState.UNSUBSCRIBE
+                                    state = SubscriptionState.UNSUBSCRIBE
                                     this@channelFlow.send(eventData)
                                 }
-                            }
-                        } catch (e: CancellationException) {
-                            state = when (state) {
-                                SubscribeToState.UNSUBSCRIBE -> SubscribeToState.UNSUBSCRIBE
-                                else -> SubscribeToState.EXIT
+                            } catch (e: CancellationException) {
+                                state = when (state) {
+                                    SubscriptionState.EXIT -> SubscriptionState.EXIT
+                                    else -> SubscriptionState.UNSUBSCRIBE
+                                }
                             }
                         }
-                    }
-                    SubscribeToState.EXIT -> {
-                        connection.responseChannelRegistry.remove(channel)?.close()
-                        return@collect
+                        SubscriptionState.UNSUBSCRIBE -> {
+                            val request = WebSocketOutboundMessage(WebSocketOutboundMessage.Method.UNSUBSCRIBE, listOf(channel), connection.generateId())
+                            val internalRequest = InternalWebSocketOutboundMessage(request, connection.inboundChannelRegistry.get(channel)!!)
+                            state = try {
+                                withContext(NonCancellable) {
+                                    connection.outboundChannel.send(internalRequest)
+                                }
+                                SubscriptionState.CONFIRM_UNSUBSCRIPTION
+                            } catch (e: CancellationException) {
+                                SubscriptionState.CONFIRM_UNSUBSCRIPTION
+                            } catch (e: DisconnectedException) {
+                                SubscriptionState.EXIT
+                            }
+                        }
+                        SubscriptionState.CONFIRM_UNSUBSCRIPTION -> {
+                            try {
+                                withContext(NonCancellable) {
+                                    try {
+                                        withTimeout(1.5.minutes) {
+                                            for (msg in connection.inboundChannelRegistry.get(channel)!!) {
+                                                when (msg) {
+                                                    is WebSocketInboundMessage.Push -> {
+                                                        eventData = eventData.setPayload(json.decodeFromJsonElement(payloadType, msg.data))
+                                                        ignoreErrors { this@channelFlow.send(eventData) }
+                                                    }
+                                                    is WebSocketInboundMessage.Response -> {
+                                                        eventData = eventData.setSubscribed(false)
+                                                        state = SubscriptionState.EXIT
+                                                        if (logger.isDebugEnabled) logger.debug("Unsubscribed from channel $channel")
+                                                        this@channelFlow.send(eventData)
+                                                        return@withTimeout
+                                                    }
+                                                    is WebSocketInboundMessage.Error -> {
+                                                        throw msg.toException()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch (e: TimeoutCancellationException) {
+                                        state = SubscriptionState.UNSUBSCRIBE
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: DisconnectedException) {
+                                        eventData = eventData.setError(e)
+                                        state = SubscriptionState.EXIT
+                                        this@channelFlow.send(eventData)
+                                    } catch (e: Throwable) {
+                                        eventData = eventData.setError(e)
+                                        state = SubscriptionState.UNSUBSCRIBE
+                                        this@channelFlow.send(eventData)
+                                    }
+                                }
+                            } catch (e: CancellationException) {
+                                state = when (state) {
+                                    SubscriptionState.UNSUBSCRIBE -> SubscriptionState.UNSUBSCRIBE
+                                    else -> SubscriptionState.EXIT
+                                }
+                            }
+                        }
+                        SubscriptionState.EXIT -> {
+                            connection.inboundChannelRegistry.remove(channel)?.close()
+                            return@collect
+                        }
                     }
                 }
             }
         }
-    }
 
-    private fun subscribeToPrivateChannel() = channelFlow {
-        suspend fun fetchListenKey(): Pair<String, Long> {
-            val listenKeyCached = if (wsListenKeyFileChannel != null) {
-                try {
-                    val wsListenKeyJsonString = wsListenKeyFileChannel.readString()
-                    json.decodeFromString<CachedListenKey>(wsListenKeyJsonString)
-                } catch (e: Throwable) {
-                    null
-                }
-            } else {
-                null
-            }
-
-            val now = Instant.now()
-            val pingTime = listenKeyCached?.createTime?.plusMillis(LISTEN_KEY_PING_INTERVAL.toLongMilliseconds())
-
-            if (listenKeyCached == null || pingTime!!.isBefore(now)) {
+        fun subscribeToPrivateChannel() = channelFlow {
+            suspend fun fetchListenKey(): Pair<String, Long> {
                 val listenKey = try {
                     logger.info("Trying to fetch listen key...")
-                    val key = getListenKey()
+                    val key = binanceApi.getListenKey()
                     logger.info("Listen key fetched")
                     key
                 } catch (e: CancellationException) {
@@ -2040,65 +1608,47 @@ open class BinanceApi(
                     throw e
                 }
 
-                if (wsListenKeyFileChannel != null) {
-                    ignoreErrors {
-                        val wsListenKeyJsonString = json.encodeToString(CachedListenKey(listenKey))
-                        wsListenKeyFileChannel.writeString(wsListenKeyJsonString)
-                    }
-                }
-
                 return Pair(listenKey, LISTEN_KEY_PING_INTERVAL.toLongMilliseconds())
-            } else {
-                return Pair(listenKeyCached.listenKey, pingTime.toEpochMilli() - now.toEpochMilli())
             }
-        }
 
-        suspend fun keepListenKeyAlive(listenKey: String) {
+            suspend fun keepListenKeyAlive(listenKey: String) {
+                while (isActive) {
+                    try {
+                        logger.info("Ping listen key")
+                        binanceApi.pingListenKey(listenKey)
+                        logger.info("Pong listen key")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        logger.warn("Can't ping listen key: ${e.message}")
+                        throw e
+                    }
+
+                    delay(LISTEN_KEY_PING_INTERVAL)
+                }
+            }
+
             while (isActive) {
                 try {
-                    logger.info("Ping listen key")
-                    pingListenKey(listenKey)
-                    logger.info("Pong listen key")
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    logger.warn("Can't ping listen key: ${e.message}")
-                    throw e
-                }
+                    coroutineScope {
+                        val (listenKey, waitTillNextPoll) = fetchListenKey()
 
-                if (wsListenKeyFileChannel != null) {
-                    ignoreErrors {
-                        val wsListenKeyJsonString = json.encodeToString(CachedListenKey(listenKey))
-                        wsListenKeyFileChannel.writeString(wsListenKeyJsonString)
-                    }
-                }
+                        launch(start = CoroutineStart.UNDISPATCHED) { delay(waitTillNextPoll); keepListenKeyAlive(listenKey) }
 
-                delay(LISTEN_KEY_PING_INTERVAL)
-            }
-        }
+                        subscribeTo(listenKey, JsonElement.serializer()).collect { eventData ->
+                            if (eventData.payload == null) {
+                                send(eventData.newPayload())
+                                return@collect
+                            }
 
-        while (isActive) {
-            try {
-                coroutineScope {
-                    val (listenKey, waitTillNextPoll) = fetchListenKey()
+                            val eventType = eventData.payload.jsonObject["e"]?.jsonPrimitive?.contentOrNull
 
-                    launch(start = CoroutineStart.UNDISPATCHED) { delay(waitTillNextPoll); keepListenKeyAlive(listenKey) }
-
-                    subscribeTo(listenKey, JsonElement.serializer()).collect { eventData ->
-                        if (eventData.payload == null) {
-                            send(eventData.newPayload())
-                            return@collect
-                        }
-
-                        val eventType = eventData.payload.jsonObject["e"]?.jsonPrimitive?.contentOrNull
-
-                        val accountEvent: AccountEvent? = try {
-                            when (eventType) {
-                                "outboundAccountInfo" -> json.decodeFromJsonElement<AccountUpdateEvent>(eventData.payload)
-                                "outboundAccountPosition" -> json.decodeFromJsonElement<OutboundAccountPositionEvent>(eventData.payload)
-                                "balanceUpdate" -> json.decodeFromJsonElement<BalanceUpdateEvent>(eventData.payload)
-                                "executionReport" -> json.decodeFromJsonElement<OrderUpdateEvent>(eventData.payload)
-                                "listStatus" -> json.decodeFromJsonElement<ListStatusEvent>(eventData.payload)
+                            val accountEventSerializer = when (eventType) {
+                                "outboundAccountInfo" -> AccountUpdateEvent.serializer()
+                                "outboundAccountPosition" -> OutboundAccountPositionEvent.serializer()
+                                "balanceUpdate" -> BalanceUpdateEvent.serializer()
+                                "executionReport" -> OrderUpdateEvent.serializer()
+                                "listStatus" -> ListStatusEvent.serializer()
                                 null -> {
                                     logger.warn("Event type is null in private channel ${eventData.payload}")
                                     null
@@ -2107,29 +1657,214 @@ open class BinanceApi(
                                     logger.debug("Not recognized event received in private channel ${eventData.payload}")
                                     null
                                 }
-                            }
-                        } catch (e: Throwable) {
-                            logger.error("Can't parse json: ${e.message} ${eventData.payload}")
-                            null
-                        }
+                            } ?: return@collect
 
-                        if (accountEvent != null) send(eventData.newPayload(accountEvent))
+                            val accountEvent = try {
+                                json.decodeFromJsonElement(accountEventSerializer, eventData.payload)
+                            } catch (e: Throwable) {
+                                logger.error("Can't parse json: ${e.message} ${eventData.payload}")
+                                return@collect
+                            }
+
+                            send(eventData.newPayload(accountEvent))
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    logger.warn("Subscription to private channel was interrupted: ${e.message}")
+                }
+            }
+        }
+
+        //region Support Models
+        private class ConnectionData(
+            val outboundChannel: Channel<InternalWebSocketOutboundMessage> = Channel(Channel.RENDEZVOUS),
+            val inboundChannelRegistry: ChannelRegistry = ChannelRegistry(),
+        ) {
+            private val reqIdCounter = AtomicLong(0)
+            fun generateId(): Long = reqIdCounter.getAndIncrement()
+
+            fun isClosed(): Boolean {
+                return outboundChannel.isClosedForSend
+            }
+
+            suspend fun close(error: DisconnectedException) {
+                outboundChannel.close(error)
+                inboundChannelRegistry.close(error)
+            }
+
+            class ChannelRegistry {
+                private val mutex = Mutex()
+                private var closed = AtomicBoolean(false)
+                private val registry = ConcurrentHashMap<String, Channel<WebSocketInboundMessage>>()
+
+                suspend fun register(channelKey: String, channel: Channel<WebSocketInboundMessage>): Boolean {
+                    if (closed.get()) return false
+                    return mutex.withLock {
+                        if (closed.get()) {
+                            false
+                        } else {
+                            registry[channelKey] = channel
+                            true
+                        }
                     }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                logger.warn("Subscription to private channel was interrupted: ${e.message}")
+
+                fun get(channelKey: String): Channel<WebSocketInboundMessage>? {
+                    return registry[channelKey]
+                }
+
+                fun remove(channelKey: String): Channel<WebSocketInboundMessage>? {
+                    return registry.remove(channelKey)
+                }
+
+                suspend fun close(error: DisconnectedException) {
+                    mutex.withLock {
+                        closed.set(true)
+                        registry.forEachValue(1L) { it.close(error) }
+                    }
+                }
             }
+        }
+
+        private enum class SubscriptionState {
+            INIT,
+            SUBSCRIBE,
+            CONFIRM_SUBSCRIPTION,
+            CONSUME_EVENTS,
+            UNSUBSCRIBE,
+            CONFIRM_UNSUBSCRIPTION,
+            EXIT,
+        }
+
+        private data class InternalWebSocketOutboundMessage(
+            val outboundMessage: WebSocketOutboundMessage,
+            val inboundChannel: Channel<WebSocketInboundMessage>,
+        )
+        //endregion
+
+        @Serializable
+        private data class WebSocketOutboundMessage(
+            val method: Method,
+            val params: List<String>,
+            val id: Long,
+        ) {
+            enum class Method {
+                SUBSCRIBE,
+                UNSUBSCRIBE,
+                LIST_SUBSCRIPTIONS,
+                GET_PROPERTY,
+                SET_PROPERTY,
+            }
+        }
+
+        @Serializable
+        private sealed class WebSocketInboundMessage {
+            @Serializable
+            data class Push(
+                val stream: String,
+                val data: JsonElement,
+            ) : WebSocketInboundMessage()
+
+            @Serializable
+            data class Response(
+                val result: JsonElement,
+                val id: Long,
+            ) : WebSocketInboundMessage()
+
+            @Serializable
+            data class Error(
+                val code: Long,
+                val msg: String,
+                val id: Long? = null,
+            ) : WebSocketInboundMessage()
+        }
+
+        companion object {
+            private val logger = KotlinLogging.logger {}
+
+            private const val API_STREAM_URL_MAIN_NET = "wss://stream.binance.com:9443/stream"
+            private const val API_STREAM_URL_TEST_NET = "wss://testnet.binance.vision/stream"
+
+            private val LISTEN_KEY_PING_INTERVAL = 45.minutes
+
+            private fun WebSocketInboundMessage.Error.toException() = Exception(code, msg)
         }
     }
 
-    private fun <T> subscribeToCached(channel: String, subscribe: (String) -> Flow<T>): Flow<T> {
-        // TODO: streamCache is a concurrentMap. We add values to streamCache but don't remove them. Need to remove them when are not used.
-        @Suppress("UNCHECKED_CAST")
-        return streamCache.getOrPut(channel) { subscribe(channel).share() } as Flow<T>
+    private class HttpConnector(
+        apiNet: ApiNet,
+        val apiKey: String,
+        apiSecret: String,
+        val json: Json,
+    ) {
+        private val apiUrl = when (apiNet) {
+            ApiNet.Main -> API_URL_MAIN_NET
+            ApiNet.Test -> API_URL_TEST_NET
+        }
+
+        private val signer = HmacSha256Signer(apiSecret, toHexString)
+
+        private val webClient = springWebClient(
+            connectTimeoutMs = 5000,
+            readTimeoutMs = 5000,
+            writeTimeoutMs = 5000,
+            maxInMemorySize = 2 * 1024 * 1024,
+        )
+
+        suspend fun <T> callApi(
+            method: String,
+            httpMethod: HttpMethod,
+            params: Map<String, String>,
+            requiresApiKey: Boolean,
+            requiresSignature: Boolean,
+            retType: DeserializationStrategy<T>,
+        ): T {
+            var paramsStr = ""
+            if (params.isNotEmpty()) {
+                paramsStr = params.toQueryString()
+                if (requiresSignature) {
+                    val signature = signer.sign(paramsStr)
+                    paramsStr = paramsStr.appendToQueryString(SIGNATURE, signature)
+                }
+                paramsStr = paramsStr.appendToUri()
+            }
+            var request = webClient.method(httpMethod).uri("$apiUrl$method$paramsStr")
+            if (requiresApiKey) {
+                request = request.header(API_KEY_HEADER, apiKey)
+            }
+
+            return request.awaitExchange { response ->
+                val data = response.awaitBody<String>()
+
+                if (response.statusCode().is2xxSuccessful) {
+                    json.decodeFromString(retType, data)!!
+                } else {
+                    val error = json.decodeFromString<ErrorMsg>(data)
+                    throw Exception(error.code, error.msg)
+                }
+            }
+        }
+
+        @Serializable
+        private data class ErrorMsg(
+            val code: Long,
+            val msg: String,
+        )
+
+        companion object {
+            private const val API_URL_MAIN_NET = "https://api.binance.com"
+            private const val API_URL_TEST_NET = "https://testnet.binance.vision"
+
+            private const val API_KEY_HEADER = "X-MBX-APIKEY"
+            private const val SIGNATURE = "signature"
+
+            private fun Map<String, String>.toQueryString() = asSequence().map { "${it.key}=${it.value}" }.joinToString("&")
+            private fun String.appendToQueryString(key: String, value: String) = "${if (isBlank()) "" else "$this&"}$key=$value"
+            private fun String.appendToUri() = if (isBlank()) "" else "?$this"
+        }
     }
-    //endregion
 
     companion object {
         //region Constants
