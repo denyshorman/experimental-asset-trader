@@ -24,7 +24,6 @@ import org.springframework.http.HttpMethod
 import org.springframework.web.reactive.function.client.awaitBody
 import org.springframework.web.reactive.function.client.awaitExchange
 import org.springframework.web.reactive.socket.WebSocketMessage
-import org.springframework.web.reactive.socket.client.WebSocketClient
 import java.math.BigDecimal
 import java.net.URI
 import java.nio.channels.ClosedChannelException
@@ -40,26 +39,10 @@ import kotlin.time.minutes
 import kotlin.time.seconds
 
 class PoloniexFuturesApi(
-    private val apiKey: String,
+    apiKey: String,
     apiSecret: String,
-    private val apiPassphrase: String,
+    apiPassphrase: String,
 ) {
-    private val signer = HmacSha256Signer(apiSecret) { Base64.getEncoder().encodeToString(this) }
-
-    private val webClient = springWebClient(
-        connectTimeoutMs = 5000,
-        readTimeoutMs = 5000,
-        writeTimeoutMs = 5000,
-        maxInMemorySize = 2 * 1024 * 1024,
-    )
-
-    private val webSocketClient = springWebsocketClient(
-        connectTimeoutMs = 5000,
-        readTimeoutMs = 60000,
-        writeTimeoutMs = 5000,
-        maxFramePayloadLength = 65536 * 4,
-    )
-
     private val json = Json {
         ignoreUnknownKeys = true
     }
@@ -67,7 +50,8 @@ class PoloniexFuturesApi(
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineName("PoloniexFuturesApi"))
     private val closed = AtomicBoolean(false)
 
-    private val webSocketConnector = WebSocketConnector(this, scope, webSocketClient, json)
+    private val webSocketConnector = WebSocketConnector(this, scope, json)
+    private val httpConnector = HttpConnector(apiKey, apiSecret, apiPassphrase, json)
 
     init {
         Runtime.getRuntime().addShutdownHook(Thread { runBlocking { close() } })
@@ -85,7 +69,7 @@ class PoloniexFuturesApi(
         val params = buildMap<String, String> {
             if (currency != null) put("currency", currency)
         }
-        return callApi("/api/v1/account-overview", HttpMethod.GET, params, true, serializer())
+        return httpConnector.callApi("/api/v1/account-overview", HttpMethod.GET, params, true, serializer())
     }
     //endregion
 
@@ -162,23 +146,23 @@ class PoloniexFuturesApi(
             if (req.forceHold != null) put("forceHold", req.forceHold.toString())
         }
 
-        return callApi("/api/v1/orders", HttpMethod.POST, params, true, serializer())
+        return httpConnector.callApi("/api/v1/orders", HttpMethod.POST, params, true, serializer())
     }
     //endregion
 
     //region Market Data API
     suspend fun getOpenContracts(): JsonObject {
-        return callApi("/api/v1/contracts/active", HttpMethod.GET, emptyMap(), false, serializer())
+        return httpConnector.callApi("/api/v1/contracts/active", HttpMethod.GET, emptyMap(), false, serializer())
     }
     //endregion
 
     //region WebSocket Token API
     suspend fun getPublicToken(): PublicPrivateWsChannelInfo {
-        return callApi("/api/v1/bullet-public", HttpMethod.POST, emptyMap(), false, serializer())
+        return httpConnector.callApi("/api/v1/bullet-public", HttpMethod.POST, emptyMap(), false, serializer())
     }
 
     suspend fun getPrivateToken(): PublicPrivateWsChannelInfo {
-        return callApi("/api/v1/bullet-private", HttpMethod.POST, emptyMap(), true, serializer())
+        return httpConnector.callApi("/api/v1/bullet-private", HttpMethod.POST, emptyMap(), true, serializer())
     }
     //endregion
 
@@ -397,15 +381,6 @@ class PoloniexFuturesApi(
     }
     //endregion
 
-    //region Private Models
-    @Serializable
-    private data class HttpResp<T>(val code: String, val data: T)
-
-    @Serializable
-    data class HttpErrorResp(val code: String, val msg: String)
-
-    //endregion
-
     //region Public Events
     @Serializable
     data class TickerEvent(
@@ -582,77 +557,19 @@ class PoloniexFuturesApi(
     enum class Error(val code: Long, val msg: String)
     //endregion
 
-    //region Private HTTP Logic
-    private suspend fun <T> callApi(
-        urlPath: String,
-        httpMethod: HttpMethod,
-        params: Map<String, String>,
-        requiresSignature: Boolean,
-        retType: KSerializer<T>,
-    ): T {
-        val body: String
-        val url: String
-
-        when (httpMethod) {
-            HttpMethod.GET, HttpMethod.DELETE -> {
-                body = ""
-                url = urlPath.appendQueryParams(params)
-            }
-            HttpMethod.PUT, HttpMethod.POST -> {
-                body = if (params.isEmpty()) "" else json.encodeToString(params)
-                url = urlPath
-            }
-            else -> {
-                throw IllegalArgumentException("HTTP method $httpMethod is not supported")
-            }
-        }
-
-        var request = webClient.method(httpMethod).uri("$API_URL$url")
-
-        if (requiresSignature) {
-            val timestamp = Instant.now().toEpochMilli().toString()
-            val sign = signer.sign("$timestamp$httpMethod$url$body")
-
-            request = request
-                .header(PF_API_KEY, apiKey)
-                .header(PF_API_SIGN, sign)
-                .header(PF_API_TIMESTAMP, timestamp)
-                .header(PF_API_PASSPHRASE, apiPassphrase)
-        }
-
-        return request.awaitExchange { response ->
-            val data = response.awaitBody<String>()
-
-            if (response.statusCode().is2xxSuccessful) {
-                val resp = json.decodeFromString(HttpResp.serializer(retType), data)
-                resp.data!!
-            } else {
-                val error = json.decodeFromString<HttpErrorResp>(data)
-                throw error.toException()
-            }
-        }
-    }
-    //endregion
-
-    //region Private Extensions
-    private fun String.appendQueryParams(params: Map<String, String>) = if (params.isEmpty()) this else "$this${params.toQueryString()}"
-
-    private fun Map<String, String>.toQueryString(): String {
-        return asSequence()
-            .map { (k, v) -> "$k=$v" }
-            .joinToString(separator = "&", prefix = "?")
-    }
-
-    private fun HttpErrorResp.toException() = Exception(code, msg)
-    //endregion
-
     private class WebSocketConnector(
         val poloniexFuturesApi: PoloniexFuturesApi,
         val scope: CoroutineScope,
-        val webSocketClient: WebSocketClient,
         val json: Json,
     ) {
         private val streamCache = ConcurrentHashMap<String, Flow<EventData<*>>>()
+
+        private val webSocketClient = springWebsocketClient(
+            connectTimeoutMs = 5000,
+            readTimeoutMs = 60000,
+            writeTimeoutMs = 5000,
+            maxFramePayloadLength = 65536 * 4,
+        )
 
         private val connection: Flow<ConnectionData> = run {
             channelFlow<ConnectionData> connection@{
@@ -1135,20 +1052,104 @@ class PoloniexFuturesApi(
         //endregion
 
         companion object {
-            val logger = KotlinLogging.logger {}
+            private val logger = KotlinLogging.logger {}
 
-            fun WebSocketInboundMessage.Error.toException() = Exception(code.toString(), data)
+            private fun WebSocketInboundMessage.Error.toException() = Exception(code.toString(), data)
         }
     }
 
-    companion object {
-        //region Constants
-        private const val API_URL = "https://futures-api.poloniex.com"
+    private class HttpConnector(
+        private val apiKey: String,
+        apiSecret: String,
+        private val apiPassphrase: String,
+        private val json: Json,
+    ) {
+        private val signer = HmacSha256Signer(apiSecret) { Base64.getEncoder().encodeToString(this) }
 
-        private const val PF_API_KEY = "PF-API-KEY"
-        private const val PF_API_SIGN = "PF-API-SIGN"
-        private const val PF_API_TIMESTAMP = "PF-API-TIMESTAMP"
-        private const val PF_API_PASSPHRASE = "PF-API-PASSPHRASE"
-        //endregion
+        private val webClient = springWebClient(
+            connectTimeoutMs = 5000,
+            readTimeoutMs = 5000,
+            writeTimeoutMs = 5000,
+            maxInMemorySize = 2 * 1024 * 1024,
+        )
+
+        suspend fun <T> callApi(
+            urlPath: String,
+            httpMethod: HttpMethod,
+            params: Map<String, String>,
+            requiresSignature: Boolean,
+            retType: KSerializer<T>,
+        ): T {
+            val body: String
+            val url: String
+
+            when (httpMethod) {
+                HttpMethod.GET, HttpMethod.DELETE -> {
+                    body = ""
+                    url = urlPath.appendQueryParams(params)
+                }
+                HttpMethod.PUT, HttpMethod.POST -> {
+                    body = if (params.isEmpty()) "" else json.encodeToString(params)
+                    url = urlPath
+                }
+                else -> {
+                    throw IllegalArgumentException("HTTP method $httpMethod is not supported")
+                }
+            }
+
+            var request = webClient.method(httpMethod).uri("$API_URL$url")
+
+            if (requiresSignature) {
+                val timestamp = Instant.now().toEpochMilli().toString()
+                val sign = signer.sign("$timestamp$httpMethod$url$body")
+
+                request = request
+                    .header(PF_API_KEY, apiKey)
+                    .header(PF_API_SIGN, sign)
+                    .header(PF_API_TIMESTAMP, timestamp)
+                    .header(PF_API_PASSPHRASE, apiPassphrase)
+            }
+
+            return request.awaitExchange { response ->
+                val data = response.awaitBody<String>()
+
+                if (response.statusCode().is2xxSuccessful) {
+                    val resp = json.decodeFromString(HttpResp.serializer(retType), data)
+                    resp.data!!
+                } else {
+                    val error = json.decodeFromString<HttpErrorResp>(data)
+                    throw error.toException()
+                }
+            }
+        }
+
+        @Serializable
+        private data class HttpResp<T>(val code: String, val data: T)
+
+        @Serializable
+        private data class HttpErrorResp(val code: String, val msg: String)
+
+        companion object {
+            //region Constants
+            private const val API_URL = "https://futures-api.poloniex.com"
+
+            private const val PF_API_KEY = "PF-API-KEY"
+            private const val PF_API_SIGN = "PF-API-SIGN"
+            private const val PF_API_TIMESTAMP = "PF-API-TIMESTAMP"
+            private const val PF_API_PASSPHRASE = "PF-API-PASSPHRASE"
+            //endregion
+
+            //region Extension
+            private fun String.appendQueryParams(params: Map<String, String>) = if (params.isEmpty()) this else "$this${params.toQueryString()}"
+
+            private fun Map<String, String>.toQueryString(): String {
+                return asSequence()
+                    .map { (k, v) -> "$k=$v" }
+                    .joinToString(separator = "&", prefix = "?")
+            }
+
+            private fun HttpErrorResp.toException() = Exception(code, msg)
+            //endregion
+        }
     }
 }
