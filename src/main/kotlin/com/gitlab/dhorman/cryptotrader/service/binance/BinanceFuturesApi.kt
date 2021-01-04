@@ -1,6 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.service.binance
 
 import com.gitlab.dhorman.cryptotrader.util.*
+import com.gitlab.dhorman.cryptotrader.util.limiter.SimpleRequestLimiter
 import com.gitlab.dhorman.cryptotrader.util.serializer.*
 import com.gitlab.dhorman.cryptotrader.util.signer.HmacSha256Signer
 import com.gitlab.dhorman.cryptotrader.util.signer.Signer
@@ -1698,34 +1699,6 @@ class BinanceFuturesApi(private val config: Config) {
 
     private fun Error.toException() = Exception(code, msg)
     private fun WebSocketEvent.Error.toException() = Exception(code, msg)
-    //endregion
-
-    //region Request Limiters
-    private class SimpleRequestLimiter(private val allowedRequests: Int, private val perIntervalMs: Long) {
-        private var reqCountFromFirst = 0L
-        private var firstReqExecTime = 0L
-        private var lastReqExecTime = 0L
-
-        fun waitMs(): Long {
-            val currReqTime = System.currentTimeMillis()
-
-            if (currReqTime - lastReqExecTime > perIntervalMs) {
-                reqCountFromFirst = 0
-                firstReqExecTime = currReqTime
-                lastReqExecTime = currReqTime
-            } else {
-                val offset = perIntervalMs * (reqCountFromFirst / allowedRequests)
-                lastReqExecTime = firstReqExecTime + offset
-            }
-
-            reqCountFromFirst += 1
-
-            return run {
-                val d = lastReqExecTime - currReqTime
-                if (d <= 0) 0 else d
-            }
-        }
-    }
     //endregion
 
     companion object {

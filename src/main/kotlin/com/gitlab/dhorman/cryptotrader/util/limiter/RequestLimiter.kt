@@ -1,4 +1,4 @@
-package com.gitlab.dhorman.cryptotrader.util
+package com.gitlab.dhorman.cryptotrader.util.limiter
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock

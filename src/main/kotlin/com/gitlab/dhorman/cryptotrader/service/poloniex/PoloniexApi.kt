@@ -13,6 +13,7 @@ import com.gitlab.dhorman.cryptotrader.core.toMarket
 import com.gitlab.dhorman.cryptotrader.service.poloniex.exception.*
 import com.gitlab.dhorman.cryptotrader.service.poloniex.model.*
 import com.gitlab.dhorman.cryptotrader.util.*
+import com.gitlab.dhorman.cryptotrader.util.limiter.RequestLimiter
 import com.gitlab.dhorman.cryptotrader.util.signer.HmacSha512Signer
 import io.netty.handler.codec.http.websocketx.WebSocketHandshakeException
 import io.netty.handler.ssl.SslHandshakeTimeoutException
