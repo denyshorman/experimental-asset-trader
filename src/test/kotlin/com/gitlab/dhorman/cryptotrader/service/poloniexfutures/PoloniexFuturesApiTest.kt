@@ -1,10 +1,13 @@
 package com.gitlab.dhorman.cryptotrader.service.poloniexfutures
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import java.math.BigDecimal
 
 @SpringBootTest
 class PoloniexFuturesApiTest {
@@ -24,6 +27,61 @@ class PoloniexFuturesApiTest {
     fun getAccountOverview() = runBlocking {
         val resp = poloniexFuturesApi.getAccountOverview()
         println(resp)
+    }
+    //endregion
+
+    //region Trade API
+    @Test
+    fun placeOrder() {
+        runBlocking {
+            val resp = poloniexFuturesApi.placeOrder(
+                PoloniexFuturesApi.PlaceOrderReq(
+                    symbol = "XRPUSDTPERP",
+                    clientOid = "x000",
+                    remark = "test_order",
+                    type = PoloniexFuturesApi.PlaceOrderReq.Type.Limit(
+                        price = BigDecimal("0.29"),
+                        amount = PoloniexFuturesApi.PlaceOrderReq.Type.Amount.Contract(size = 1),
+                        timeInForce = PoloniexFuturesApi.TimeInForce.GoodTillCancel,
+                        postOnly = true,
+                        hidden = false,
+                    ),
+                    openClose = PoloniexFuturesApi.PlaceOrderReq.OpenClose.Open(
+                        side = PoloniexFuturesApi.OrderSide.Buy,
+                        leverage = BigDecimal.ONE,
+                    ),
+                )
+            )
+
+            println(resp)
+        }
+    }
+
+    @Test
+    fun cancelOrder() {
+        runBlocking {
+            val resp = poloniexFuturesApi.cancelOrder("5ff8985535af810006ea0f39")
+
+            println(resp)
+        }
+    }
+
+    @Test
+    fun getOrders() {
+        runBlocking {
+            val resp = poloniexFuturesApi.getOrders()
+
+            println(resp)
+        }
+    }
+
+    @Test
+    fun getPositions() {
+        runBlocking {
+            val resp = poloniexFuturesApi.getPositions()
+
+            println(resp)
+        }
     }
     //endregion
 
@@ -107,6 +165,37 @@ class PoloniexFuturesApiTest {
     //endregion
 
     //region User Stream API
-    // TODO: Add tests
+
+
+    @Test
+    fun privateMessagesStream() {
+        runBlocking(Dispatchers.Default) {
+            val symbol = "XRPUSDTPERP"
+
+            launch {
+                poloniexFuturesApi.privateMessagesStream.collect {
+                    println("privateMessagesStream: $it")
+                }
+            }
+
+            launch {
+                poloniexFuturesApi.advancedOrdersStream.collect {
+                    println("advancedOrdersStream: $it")
+                }
+            }
+
+            launch {
+                poloniexFuturesApi.walletStream.collect {
+                    println("walletStream: $it")
+                }
+            }
+
+            launch {
+                poloniexFuturesApi.positionChangesStream(symbol).collect {
+                    println("positionChangesStream: $it")
+                }
+            }
+        }
+    }
     //endregion
 }

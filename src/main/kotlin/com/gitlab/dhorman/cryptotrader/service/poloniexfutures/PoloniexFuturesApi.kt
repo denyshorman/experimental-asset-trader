@@ -21,6 +21,8 @@ import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.json.*
 import mu.KotlinLogging
 import org.springframework.http.HttpMethod
+import org.springframework.http.MediaType
+import org.springframework.web.reactive.function.BodyInserters
 import org.springframework.web.reactive.function.client.awaitBody
 import org.springframework.web.reactive.function.client.awaitExchange
 import org.springframework.web.reactive.socket.WebSocketMessage
@@ -66,7 +68,7 @@ class PoloniexFuturesApi(
 
     //region User API
     suspend fun getAccountOverview(currency: String? = null): AccountOverview {
-        val params = buildMap<String, String> {
+        val params = buildJsonObject {
             if (currency != null) put("currency", currency)
         }
         return httpConnector.callApi("/api/v1/account-overview", HttpMethod.GET, params, true, serializer())
@@ -74,9 +76,8 @@ class PoloniexFuturesApi(
     //endregion
 
     //region Trade API
-    //TODO: Implement place order method; Investigate and fix request model
     suspend fun placeOrder(req: PlaceOrderReq): PlaceOrderResp {
-        val params = buildMap<String, String> {
+        val params = buildJsonObject {
             put("clientOid", req.clientOid)
             put("symbol", req.symbol)
 
@@ -85,25 +86,23 @@ class PoloniexFuturesApi(
                     put("type", "limit")
                     put("price", req.type.price.toString())
 
-                    put("size", req.type.size.toString())
-                    if (req.type.quantity != null) put("quantity", req.type.quantity.toString())
-                    if (req.type.postOnly != null) put("postOnly", req.type.postOnly.toString())
-                    if (req.type.hidden != null) put("hidden", req.type.hidden.toString())
-                    if (req.type.iceberg != null) put("iceberg", req.type.iceberg.toString())
-                    if (req.type.visibleSize != null) put("visibleSize", req.type.visibleSize.toString())
-
-                    val timeInForce = when (req.type.timeInForce) {
-                        PlaceOrderReq.Type.Limit.TimeInForce.GTC -> "GTC"
-                        PlaceOrderReq.Type.Limit.TimeInForce.IOC -> "IOC"
-                        null -> null
+                    when (req.type.amount) {
+                        is PlaceOrderReq.Type.Amount.Contract -> put("size", req.type.amount.size)
+                        is PlaceOrderReq.Type.Amount.Currency -> put("quantity", req.type.amount.quantity.toString())
                     }
 
-                    if (timeInForce != null) put("timeInForce", timeInForce.toString())
+                    if (req.type.postOnly != null) put("postOnly", req.type.postOnly)
+                    if (req.type.hidden != null) put("hidden", req.type.hidden)
+                    if (req.type.iceberg != null) put("iceberg", req.type.iceberg)
+                    if (req.type.visibleSize != null) put("visibleSize", req.type.visibleSize)
+                    if (req.type.timeInForce != null) put("timeInForce", req.type.timeInForce.id)
                 }
                 is PlaceOrderReq.Type.Market -> {
                     put("type", "market")
-                    if (req.type.size != null) put("size", req.type.size.toString())
-                    if (req.type.quantity != null) put("quantity", req.type.quantity.toString())
+                    when (req.type.amount) {
+                        is PlaceOrderReq.Type.Amount.Contract -> put("size", req.type.amount.size)
+                        is PlaceOrderReq.Type.Amount.Currency -> put("quantity", req.type.amount.quantity.toString())
+                    }
                 }
             }
 
@@ -126,43 +125,60 @@ class PoloniexFuturesApi(
 
             when (req.openClose) {
                 is PlaceOrderReq.OpenClose.Open -> {
-                    put("closeOrder", "false")
-                    put("leverage", req.openClose.toString())
-
-                    val side = when (req.openClose.side) {
-                        PlaceOrderReq.Side.Buy -> "buy"
-                        PlaceOrderReq.Side.Sell -> "sell"
-                    }
-
-                    put("side", side)
+                    put("leverage", req.openClose.leverage.toString())
+                    put("side", req.openClose.side.id)
                 }
                 PlaceOrderReq.OpenClose.Close -> {
-                    put("closeOrder", "true")
+                    put("closeOrder", true)
                 }
             }
 
             if (req.remark != null) put("remark", req.remark)
-            if (req.reduceOnly != null) put("reduceOnly", req.reduceOnly.toString())
-            if (req.forceHold != null) put("forceHold", req.forceHold.toString())
+            if (req.reduceOnly != null) put("reduceOnly", req.reduceOnly)
+            if (req.forceHold != null) put("forceHold", req.forceHold)
         }
 
         return httpConnector.callApi("/api/v1/orders", HttpMethod.POST, params, true, serializer())
+    }
+
+    suspend fun cancelOrder(orderId: String): CancelOrderResp {
+        return httpConnector.callApi("/api/v1/orders/$orderId", HttpMethod.DELETE, emptyJsonObject, true, serializer())
+    }
+
+    suspend fun getOrders(req: GetOrdersReq? = null): OrdersResp {
+        val params = if (req != null) {
+            buildJsonObject {
+                if (req.symbol != null) put("symbol", req.symbol)
+                if (req.side != null) put("side", req.side.id)
+                if (req.type != null) put("type", req.type.id)
+                if (req.status != null) put("status", req.status.id)
+                if (req.startAt != null) put("startAt", req.startAt.toEpochMilli().toString())
+                if (req.endAt != null) put("endtAt", req.endAt.toEpochMilli().toString())
+            }
+        } else {
+            emptyJsonObject
+        }
+        return httpConnector.callApi("/api/v1/orders", HttpMethod.GET, params, true, serializer())
+    }
+
+    suspend fun getPositions(): List<Position> {
+        return httpConnector.callApi("/api/v1/positions", HttpMethod.GET, emptyJsonObject, true, serializer())
     }
     //endregion
 
     //region Market Data API
     suspend fun getOpenContracts(): JsonObject {
-        return httpConnector.callApi("/api/v1/contracts/active", HttpMethod.GET, emptyMap(), false, serializer())
+        return httpConnector.callApi("/api/v1/contracts/active", HttpMethod.GET, emptyJsonObject, false, serializer())
     }
     //endregion
 
     //region WebSocket Token API
     suspend fun getPublicToken(): PublicPrivateWsChannelInfo {
-        return httpConnector.callApi("/api/v1/bullet-public", HttpMethod.POST, emptyMap(), false, serializer())
+        return httpConnector.callApi("/api/v1/bullet-public", HttpMethod.POST, emptyJsonObject, false, serializer())
     }
 
     suspend fun getPrivateToken(): PublicPrivateWsChannelInfo {
-        return httpConnector.callApi("/api/v1/bullet-private", HttpMethod.POST, emptyMap(), true, serializer())
+        return httpConnector.callApi("/api/v1/bullet-private", HttpMethod.POST, emptyJsonObject, true, serializer())
     }
     //endregion
 
@@ -256,11 +272,11 @@ class PoloniexFuturesApi(
     //endregion
 
     //region User Stream API
-    val privateMessagesStream: Flow<EventData<JsonElement>> = run {
+    val privateMessagesStream: Flow<EventData<PrivateMessageEvent>> = run {
         webSocketConnector.subscribeTo(
             "/contractMarket/tradeOrders",
             mapOf(
-                "orderChange" to JsonElement.serializer(),
+                "orderChange" to PrivateMessageEvent.OrderChange.serializer(),
             ),
         )
     }
@@ -274,29 +290,72 @@ class PoloniexFuturesApi(
         )
     }
 
-    val walletStream: Flow<EventData<JsonElement>> = run {
+    val walletStream: Flow<EventData<AccountBalanceEvent>> = run {
         webSocketConnector.subscribeTo(
             "/contractAccount/wallet",
             mapOf(
-                "orderMargin.change" to JsonElement.serializer(),
-                "availableBalance.change" to JsonElement.serializer(),
+                "orderMargin.change" to AccountBalanceEvent.OrderMarginChangeEvent.serializer(),
+                "availableBalance.change" to AccountBalanceEvent.AvailableBalanceChangeEvent.serializer(),
             ),
         )
     }
 
-    fun positionChangesStream(symbol: String): Flow<EventData<JsonElement>> {
+    fun positionChangesStream(symbol: String): Flow<EventData<Any>> {
         return webSocketConnector.subscribeTo(
             "/contract/position:$symbol",
             mapOf(
                 "position.change" to JsonElement.serializer(),
                 "position.change" to JsonElement.serializer(), //TODO: Looks like 2 data sets in one subject
                 "position.settlement" to JsonElement.serializer(),
+                "openPositionSum.change" to PositionEvent.OpenPositionSumChangeEvent.serializer(),
             ),
         )
     }
     //endregion
 
     //region Public Models
+    @Serializable
+    enum class OrderStatus(val id: String) {
+        @SerialName("active")
+        Active("active"),
+
+        @SerialName("done")
+        Done("done"),
+    }
+
+    @Serializable
+    enum class OrderSide(val id: String) {
+        @SerialName("buy")
+        Buy("buy"),
+
+        @SerialName("sell")
+        Sell("sell"),
+    }
+
+    @Serializable
+    enum class TimeInForce(val id: String) {
+        @SerialName("GTC")
+        GoodTillCancel("GTC"),
+
+        @SerialName("IOC")
+        ImmediateOrCancel("IOC"),
+    }
+
+    @Serializable
+    enum class OrderType(val id: String) {
+        @SerialName("limit")
+        Limit("limit"),
+
+        @SerialName("market")
+        Market("market"),
+
+        @SerialName("limit_stop")
+        LimitStop("limit_stop"),
+
+        @SerialName("market_stop")
+        MarketStop("market_stop"),
+    }
+
     @Serializable
     data class AccountOverview(
         @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedPNL: BigDecimal,
@@ -310,17 +369,15 @@ class PoloniexFuturesApi(
     )
 
     data class PlaceOrderReq(
+        val symbol: String,
         val clientOid: String,
         val type: Type,
         val openClose: OpenClose,
-        val symbol: String,
         val remark: String? = null,
         val stop: Stop? = null,
         val reduceOnly: Boolean? = null,
         val forceHold: Boolean? = null,
     ) {
-        enum class Side { Buy, Sell }
-
         data class Stop(
             val type: Type,
             val price: BigDecimal,
@@ -332,7 +389,7 @@ class PoloniexFuturesApi(
 
         sealed class OpenClose {
             data class Open(
-                val side: Side,
+                val side: OrderSide,
                 val leverage: BigDecimal,
             ) : OpenClose()
 
@@ -342,27 +399,126 @@ class PoloniexFuturesApi(
         sealed class Type {
             data class Limit(
                 val price: BigDecimal,
-                val size: Int,
-                val quantity: BigDecimal? = null,
+                val amount: Amount,
                 val timeInForce: TimeInForce? = null,
                 val postOnly: Boolean? = null,
                 val hidden: Boolean? = null,
                 val iceberg: Boolean? = null,
                 val visibleSize: Int? = null,
-            ) : Type() {
-                enum class TimeInForce { GTC, IOC }
-            }
+            ) : Type()
 
             data class Market(
-                val size: Int? = null,
-                val quantity: Int? = null,
+                val amount: Amount,
             ) : Type()
+
+            sealed class Amount {
+                data class Contract(val size: Long) : Amount()
+                data class Currency(val quantity: BigDecimal) : Amount()
+            }
         }
     }
 
     @Serializable
     data class PlaceOrderResp(
         val orderId: String,
+    )
+
+    @Serializable
+    data class CancelOrderResp(
+        val cancelFailedOrders: List<FailedOrder>,
+        val cancelledOrderIds: List<String>,
+    ) {
+        @Serializable
+        data class FailedOrder(
+            @SerialName("orderId") val id: String,
+            @SerialName("orderState") val state: Int,
+        )
+    }
+
+    @Serializable
+    data class OrdersResp(
+        val totalNum: Int,
+        val totalPage: Int,
+        val pageSize: Int,
+        val currentPage: Int,
+        val items: List<Order>,
+    ) {
+        @Serializable
+        data class Order(
+            val id: String,
+            val clientOid: String,
+            val symbol: String,
+            val settleCurrency: String,
+            val type: OrderType,
+            val side: OrderSide,
+            val status: OrderStatus,
+            val timeInForce: TimeInForce,
+            val remark: String,
+            @Serializable(BigDecimalAsStringSerializer::class) val leverage: BigDecimal,
+            @Serializable(InstantAsLongMillisSerializer::class) val createdAt: Instant,
+            @Serializable(InstantAsLongMillisSerializer::class) val updatedAt: Instant,
+            @Serializable(InstantAsLongMillisSerializer::class) val endAt: Instant,
+            @Serializable(InstantAsLongNanoSerializer::class) val orderTime: Instant,
+            @Serializable(BigDecimalAsStringSerializer::class) val price: BigDecimal,
+            @Serializable(BigDecimalAsStringSerializer::class) val value: BigDecimal,
+            @Serializable(BigDecimalAsStringSerializer::class) val dealValue: BigDecimal,
+            @Serializable(BigDecimalAsStringSerializer::class) val filledValue: BigDecimal,
+            val size: Long,
+            val dealSize: Long,
+            val filledSize: Long,
+            // val stp: "",
+            // val stop: "",
+            // val stopPriceType: "",
+            val isActive: Boolean,
+            val postOnly: Boolean,
+            val hidden: Boolean,
+            val reduceOnly: Boolean,
+            val forceHold: Boolean,
+            val closeOrder: Boolean,
+            val iceberg: Boolean,
+            val stopTriggered: Boolean,
+            val cancelExist: Boolean,
+        )
+    }
+
+    @Serializable
+    data class Position(
+        val id: String,
+        val symbol: String,
+        val settleCurrency: String,
+        val isOpen: Boolean,
+        val autoDeposit: Boolean,
+        val crossMode: Boolean,
+        // @Serializable(InstantAsLongMillisSerializer::class) val openingTimestamp: Instant,
+        @Serializable(InstantAsLongMillisSerializer::class) val currentTimestamp: Instant,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val maintMarginReq: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val riskLimit: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val realLeverage: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val delevPercentage: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val currentQty: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val currentCost: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val currentComm: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedCost: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val realisedGrossCost: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val realisedCost: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val markPrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val markValue: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val posCost: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val posCross: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val posInit: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val posComm: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val posLoss: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val posMargin: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val posMaint: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val maintMargin: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val realisedGrossPnl: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val realisedPnl: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedPnl: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedPnlPcnt: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedRoePcnt: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val avgEntryPrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val liquidationPrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val bankruptPrice: BigDecimal,
     )
 
     @Serializable
@@ -379,6 +535,16 @@ class PoloniexFuturesApi(
             val protocol: String,
         )
     }
+
+    @Serializable
+    data class GetOrdersReq(
+        val symbol: String? = null,
+        val side: OrderSide? = null,
+        val type: OrderType? = null,
+        val status: OrderStatus? = null,
+        @Serializable(InstantAsLongMillisSerializer::class) val startAt: Instant? = null,
+        @Serializable(InstantAsLongMillisSerializer::class) val endAt: Instant? = null,
+    )
     //endregion
 
     //region Public Events
@@ -547,6 +713,85 @@ class PoloniexFuturesApi(
         @Serializable(BigDecimalAsDoubleSerializer::class) val lastPrice: BigDecimal,
         @Serializable(InstantAsLongNanoSerializer::class) val ts: Instant,
     )
+
+    @Serializable
+    sealed class PrivateMessageEvent {
+        @Serializable
+        data class OrderChange(
+            val orderId: String,
+            val clientOid: String? = null,
+            val tradeId: String? = null,
+            val symbol: String,
+            val side: OrderSide,
+            val orderType: OrderType? = null,
+            val status: Status? = null,
+            val type: Type,
+            val size: Long,
+            val matchSize: Long? = null,
+            val remainSize: Long? = null,
+            val oldSize: Long? = null,
+            val canceledSize: Long? = null,
+            @Serializable(BigDecimalAsStringSerializer::class) val matchPrice: BigDecimal? = null,
+            @Serializable(BigDecimalAsStringSerializer::class) val price: BigDecimal,
+            @Serializable(InstantAsLongNanoSerializer::class) val ts: Instant,
+            @Serializable(InstantAsLongNanoSerializer::class) val orderTime: Instant,
+        ) : PrivateMessageEvent() {
+            @Serializable
+            enum class Type {
+                @SerialName("open")
+                Open,
+
+                @SerialName("match")
+                Match,
+
+                @SerialName("filled")
+                Filled,
+
+                @SerialName("canceled")
+                Canceled,
+
+                @SerialName("update")
+                Update,
+            }
+
+            @Serializable
+            enum class Status {
+                @SerialName("match")
+                Match,
+
+                @SerialName("open")
+                Open,
+
+                @SerialName("done")
+                Done,
+            }
+        }
+    }
+
+    @Serializable
+    sealed class AccountBalanceEvent {
+        @Serializable
+        data class AvailableBalanceChangeEvent(
+            val currency: String,
+            @Serializable(BigDecimalAsStringSerializer::class) val availableBalance: BigDecimal,
+            @Serializable(InstantAsLongStringMillisSerializer::class) val timestamp: Instant,
+        ) : AccountBalanceEvent()
+
+        @Serializable
+        data class OrderMarginChangeEvent(
+            val currency: String,
+            @Serializable(BigDecimalAsStringSerializer::class) val orderMargin: BigDecimal,
+            @Serializable(InstantAsLongStringMillisSerializer::class) val timestamp: Instant,
+        ) : AccountBalanceEvent()
+    }
+
+    @Serializable
+    sealed class PositionEvent {
+        @Serializable
+        data class OpenPositionSumChangeEvent(
+            val sum: Long,
+        ) : PositionEvent()
+    }
     //endregion
 
     //region Exceptions
@@ -620,6 +865,7 @@ class PoloniexFuturesApi(
 
                                                 when (event) {
                                                     is WebSocketInboundMessage.Message -> ignoreErrors { connectionData!!.inboundChannelRegistry.get(event.topic)?.send(event) }
+                                                    is WebSocketInboundMessage.Notice -> ignoreErrors { connectionData!!.inboundChannelRegistry.get(event.topic)?.send(event) }
                                                     is WebSocketInboundMessage.Ack -> ignoreErrors { requestResponses.remove(event.id)?.send(event) }
                                                     is WebSocketInboundMessage.Pong -> ignoreErrors { requestResponses.remove(event.id)?.send(event) }
                                                     is WebSocketInboundMessage.Error -> ignoreErrors { requestResponses.remove(event.id)?.send(event) }
@@ -771,7 +1017,7 @@ class PoloniexFuturesApi(
                                                 eventData = eventData.setError(msg.toException())
                                                 state = SubscriptionState.SUBSCRIBE
                                             }
-                                            is WebSocketInboundMessage.Message -> {
+                                            is WebSocketInboundMessage.Message, is WebSocketInboundMessage.Notice -> {
                                                 eventData = eventData.setError(IllegalStateException("Push event was received before confirmation event"))
                                                 state = SubscriptionState.UNSUBSCRIBE
                                             }
@@ -805,7 +1051,17 @@ class PoloniexFuturesApi(
                                             is WebSocketInboundMessage.Message -> {
                                                 val msgDeserializer = subjectDeserializers[msg.subject]
                                                 if (msgDeserializer == null) {
-                                                    logger.debug("No deserializer found for subject ${msg.subject}")
+                                                    logger.debug("No deserializer found for subject ${msg.subject} in channel $channel: $msg")
+                                                    continue
+                                                }
+                                                val decodedMsg = json.decodeFromJsonElement(msgDeserializer, msg.data)
+                                                eventData = eventData.setPayload(decodedMsg)
+                                                this@channelFlow.send(eventData)
+                                            }
+                                            is WebSocketInboundMessage.Notice -> {
+                                                val msgDeserializer = subjectDeserializers[msg.subject]
+                                                if (msgDeserializer == null) {
+                                                    logger.debug("No deserializer found for subject ${msg.subject} in channel $channel: $msg")
                                                     continue
                                                 }
                                                 val decodedMsg = json.decodeFromJsonElement(msgDeserializer, msg.data)
@@ -862,7 +1118,17 @@ class PoloniexFuturesApi(
                                                     is WebSocketInboundMessage.Message -> {
                                                         val msgDeserializer = subjectDeserializers[msg.subject]
                                                         if (msgDeserializer == null) {
-                                                            logger.debug("No deserializer found for subject ${msg.subject}")
+                                                            logger.debug("No deserializer found for subject ${msg.subject} in channel $channel: $msg")
+                                                            continue
+                                                        }
+                                                        val decodedMsg = json.decodeFromJsonElement(msgDeserializer, msg.data)
+                                                        eventData = eventData.setPayload(decodedMsg)
+                                                        ignoreErrors { this@channelFlow.send(eventData) }
+                                                    }
+                                                    is WebSocketInboundMessage.Notice -> {
+                                                        val msgDeserializer = subjectDeserializers[msg.subject]
+                                                        if (msgDeserializer == null) {
+                                                            logger.debug("No deserializer found for subject ${msg.subject} in channel $channel: $msg")
                                                             continue
                                                         }
                                                         val decodedMsg = json.decodeFromJsonElement(msgDeserializer, msg.data)
@@ -1046,6 +1312,17 @@ class PoloniexFuturesApi(
                 val subject: String,
                 val topic: String,
                 val channelType: String? = null,
+                val userId: String? = null,
+                val data: JsonElement,
+            ) : WebSocketInboundMessage()
+
+            @Serializable
+            @SerialName("notice")
+            data class Notice(
+                val subject: String,
+                val topic: String,
+                val channelType: String? = null,
+                val userId: String? = null,
                 val data: JsonElement,
             ) : WebSocketInboundMessage()
         }
@@ -1076,7 +1353,7 @@ class PoloniexFuturesApi(
         suspend fun <T> callApi(
             urlPath: String,
             httpMethod: HttpMethod,
-            params: Map<String, String>,
+            params: JsonObject,
             requiresSignature: Boolean,
             retType: KSerializer<T>,
         ): T {
@@ -1097,30 +1374,44 @@ class PoloniexFuturesApi(
                 }
             }
 
-            var request = webClient.method(httpMethod).uri("$API_URL$url")
-
-            if (requiresSignature) {
-                val timestamp = Instant.now().toEpochMilli().toString()
-                val sign = signer.sign("$timestamp$httpMethod$url$body")
-
-                request = request
-                    .header(PF_API_KEY, apiKey)
-                    .header(PF_API_SIGN, sign)
-                    .header(PF_API_TIMESTAMP, timestamp)
-                    .header(PF_API_PASSPHRASE, apiPassphrase)
-            }
-
-            return request.awaitExchange { response ->
-                val data = response.awaitBody<String>()
-
-                if (response.statusCode().is2xxSuccessful) {
-                    val resp = json.decodeFromString(HttpResp.serializer(retType), data)
-                    resp.data!!
-                } else {
-                    val error = json.decodeFromString<HttpErrorResp>(data)
-                    throw error.toException()
+            return webClient
+                .method(httpMethod)
+                .uri("$API_URL$url")
+                .accept(MediaType.APPLICATION_JSON)
+                .run {
+                    if (httpMethod == HttpMethod.PUT || httpMethod == HttpMethod.POST) {
+                        this
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(BodyInserters.fromValue(body))
+                    } else {
+                        this
+                    }
                 }
-            }
+                .run {
+                    if (requiresSignature) {
+                        val timestamp = Instant.now().toEpochMilli().toString()
+                        val sign = signer.sign("$timestamp$httpMethod$url$body")
+
+                        this
+                            .header(PF_API_KEY, apiKey)
+                            .header(PF_API_SIGN, sign)
+                            .header(PF_API_TIMESTAMP, timestamp)
+                            .header(PF_API_PASSPHRASE, apiPassphrase)
+                    } else {
+                        this
+                    }
+                }
+                .awaitExchange { response ->
+                    val data = response.awaitBody<String>()
+
+                    if (response.statusCode().is2xxSuccessful) {
+                        val resp = json.decodeFromString(HttpResp.serializer(retType), data)
+                        resp.data!!
+                    } else {
+                        val error = json.decodeFromString<HttpErrorResp>(data)
+                        throw error.toException()
+                    }
+                }
         }
 
         @Serializable
@@ -1140,11 +1431,17 @@ class PoloniexFuturesApi(
             //endregion
 
             //region Extension
-            private fun String.appendQueryParams(params: Map<String, String>) = if (params.isEmpty()) this else "$this${params.toQueryString()}"
+            private fun String.appendQueryParams(params: JsonObject) = if (params.isEmpty()) this else "$this${params.toQueryString()}"
 
-            private fun Map<String, String>.toQueryString(): String {
+            private fun JsonObject.toQueryString(): String {
                 return asSequence()
-                    .map { (k, v) -> "$k=$v" }
+                    .map { (key, v) ->
+                        val value = when (v) {
+                            is JsonPrimitive -> (v.contentOrNull ?: v.booleanOrNull ?: v.intOrNull ?: v.longOrNull ?: v.doubleOrNull ?: v.floatOrNull).toString()
+                            else -> throw RuntimeException("Nested parameters are not supported")
+                        }
+                        "$key=$value"
+                    }
                     .joinToString(separator = "&", prefix = "?")
             }
 
