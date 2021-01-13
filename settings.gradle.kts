@@ -1,1 +1,3 @@
-rootProject.name = "trading-robot"
+rootProject.name = "crypto-trader"
+
+include("trading-robot")

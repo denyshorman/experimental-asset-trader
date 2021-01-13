@@ -14,7 +14,7 @@ build:
     - ./gradlew bootJar
   artifacts:
     paths:
-      - build/libs/*.jar
+      - trading-robot/build/libs/*.jar
     expire_in: 1 day
   interruptible: true
   retry: 1
@@ -38,7 +38,7 @@ package:
   script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - docker buildx create --use --name mybuilder
-    - docker buildx build --platform $BUILD_PLATFORMS --push -t $CI_REGISTRY_IMAGE .
+    - docker buildx build --platform $BUILD_PLATFORMS --push -t $CI_REGISTRY_IMAGE trading-robot
   interruptible: true
   retry: 1
   only:
