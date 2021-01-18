@@ -1,6 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.service
 
-import com.gitlab.dhorman.cryptotrader.service.binance.BinanceFuturesApi
+import com.gitlab.dhorman.cryptotrader.exchangesdk.binancefutures.BinanceFuturesApi
 import com.gitlab.dhorman.cryptotrader.util.infiniteRetry
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow

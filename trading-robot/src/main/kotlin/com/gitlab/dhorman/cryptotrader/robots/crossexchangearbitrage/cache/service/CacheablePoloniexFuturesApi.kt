@@ -1,6 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.service
 
-import com.gitlab.dhorman.cryptotrader.service.poloniexfutures.PoloniexFuturesApi
+import com.gitlab.dhorman.cryptotrader.exchangesdk.poloniexfutures.PoloniexFuturesApi
 import com.gitlab.dhorman.cryptotrader.util.infiniteRetry
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow

@@ -1,6 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage
 
-import com.gitlab.dhorman.cryptotrader.service.binance.BinanceFuturesApi
+import com.gitlab.dhorman.cryptotrader.exchangesdk.binancefutures.BinanceFuturesApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope

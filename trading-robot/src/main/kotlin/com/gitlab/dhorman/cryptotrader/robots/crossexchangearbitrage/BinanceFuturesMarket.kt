@@ -1,7 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage
 
 import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.service.CacheableBinanceFuturesApi
-import com.gitlab.dhorman.cryptotrader.service.binance.BinanceFuturesApi
+import com.gitlab.dhorman.cryptotrader.exchangesdk.binancefutures.BinanceFuturesApi
 import com.gitlab.dhorman.cryptotrader.util.EventData
 import com.gitlab.dhorman.cryptotrader.util.newPayload
 import io.vavr.collection.TreeMap
@@ -9,8 +9,6 @@ import io.vavr.kotlin.tuple
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.math.BigDecimal
-import kotlin.time.Duration
-import kotlin.time.minutes
 
 class BinanceFuturesMarket(
     private val cacheableBinanceFuturesApi: CacheableBinanceFuturesApi,

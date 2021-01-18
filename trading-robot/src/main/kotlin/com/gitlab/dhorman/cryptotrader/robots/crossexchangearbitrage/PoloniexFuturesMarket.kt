@@ -1,7 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage
 
 import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.service.CacheablePoloniexFuturesApi
-import com.gitlab.dhorman.cryptotrader.service.poloniexfutures.PoloniexFuturesApi
+import com.gitlab.dhorman.cryptotrader.exchangesdk.poloniexfutures.PoloniexFuturesApi
 import com.gitlab.dhorman.cryptotrader.util.EventData
 import com.gitlab.dhorman.cryptotrader.util.newPayload
 import io.vavr.collection.TreeMap

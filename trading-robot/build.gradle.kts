@@ -101,6 +101,17 @@ tasks {
     withType<Test> {
         useJUnitPlatform()
     }
+
+    val integrationTest = create<Test>("integrationTest") {
+        description = "Runs integration tests."
+        group = "verification"
+
+        testClassesDirs = sourceSets["integrationTest"].output.classesDirs
+        classpath = sourceSets["integrationTest"].runtimeClasspath
+        shouldRunAfter("test")
+    }
+
+    check { dependsOn(integrationTest) }
 }
 
 springBoot {
