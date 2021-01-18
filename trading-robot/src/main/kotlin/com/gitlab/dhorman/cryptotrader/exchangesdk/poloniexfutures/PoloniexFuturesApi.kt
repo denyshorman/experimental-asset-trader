@@ -290,7 +290,7 @@ class PoloniexFuturesApi(
         )
     }
 
-    fun positionChangesStream(symbol: String): Flow<EventData<Any>> {
+    fun positionChangesStream(symbol: String): Flow<EventData<PositionEvent>> {
         return webSocketConnector.subscribeTo(
             "/contract/position:$symbol",
             mapOf(
@@ -871,7 +871,7 @@ class PoloniexFuturesApi(
             @Serializable(BigDecimalAsDoubleSerializer::class) val currentCost: BigDecimal? = null,
             @Serializable(BigDecimalAsDoubleSerializer::class) val currentQty: BigDecimal? = null,
             @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("currentComm") val currentCommission: BigDecimal? = null,
-        )
+        ) : PositionEvent()
 
         @Serializable
         data class FundingSettlement(
@@ -882,7 +882,7 @@ class PoloniexFuturesApi(
             @Serializable(BigDecimalAsDoubleSerializer::class) val fundingFee: BigDecimal,
             @Serializable(InstantAsLongNanoSerializer::class) val ts: Instant,
             @Serializable(InstantAsLongMillisSerializer::class) val fundingTime: Instant,
-        )
+        ) : PositionEvent()
 
         @Serializable
         data class OpenPositionSumChangeEvent(
