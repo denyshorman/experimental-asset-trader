@@ -1,5 +1,8 @@
 package com.gitlab.dhorman.cryptotrader.util
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.transform
+
 data class EventData<out T>(
     val payload: T? = null,
     val subscribed: Boolean = false,
@@ -10,3 +13,5 @@ fun <T, R> EventData<T>.newPayload(payload: R? = null) = EventData(payload, subs
 fun <T> EventData<T>.setPayload(payload: T?) = EventData(payload, subscribed, null)
 fun <T> EventData<T>.setSubscribed(subscribed: Boolean) = EventData(payload, subscribed, null)
 fun <T> EventData<T>.setError(error: Throwable?) = EventData<T>(null, false, error)
+
+fun <T> Flow<EventData<T>>.onlyPayload() = transform { event -> if (event.payload != null) emit(event.payload) }
