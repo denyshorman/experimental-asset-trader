@@ -7,12 +7,13 @@ version = versioning.info.build
 java.sourceCompatibility = JavaVersion.VERSION_15
 
 plugins {
-    kotlin("jvm") version "1.4.21"
+    kotlin("jvm")
     kotlin("plugin.spring") version "1.4.21"
     kotlin("plugin.serialization") version "1.4.21"
     id("org.springframework.boot") version "2.4.1"
     id("io.spring.dependency-management") version "1.0.10.RELEASE"
     id("net.nemerosa.versioning") version "2.14.0"
+    id("org.openjfx.javafxplugin") version "0.0.9"
 }
 
 repositories {
@@ -36,6 +37,11 @@ val integrationTestRuntimeOnly: Configuration by configurations.getting {
     extendsFrom(configurations.runtimeOnly.get())
 }
 
+javafx {
+    version = "15.0.1"
+    modules = listOf("javafx.base", "javafx.controls", "javafx.fxml", "javafx.graphics")
+}
+
 dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
@@ -46,6 +52,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-rx2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk9")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-javafx")
     implementation("org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.3.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.0.1")
     implementation("io.projectreactor.addons:reactor-adapter")
