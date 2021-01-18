@@ -35,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.collections.HashMap
+import kotlin.reflect.KClass
 import kotlin.time.minutes
 import kotlin.time.seconds
 
@@ -48,21 +49,9 @@ class BinanceFuturesApi(
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineName("BinanceFuturesApi"))
-    private val closed = AtomicBoolean(false)
 
     private val webSocketConnector = WebSocketConnector(apiNet, this, scope, json)
     private val httpConnector = HttpConnector(apiNet, apiKey, apiSecret, json)
-
-    init {
-        Runtime.getRuntime().addShutdownHook(Thread { runBlocking { close() } })
-    }
-
-    //region Maintenance
-    suspend fun close() {
-        if (closed.getAndSet(true)) return
-        scope.coroutineContext[Job]?.cancelAndJoin()
-    }
-    //endregion
 
     //region Market Data API
     suspend fun ping() {
@@ -79,7 +68,7 @@ class BinanceFuturesApi(
     //endregion
 
     //region Account/Trades API
-    suspend fun getCommissionRate(symbol: String, timestamp: Instant = Instant.now(), recvWindow: Long? = null): JsonElement {
+    suspend fun getCommissionRate(symbol: String, timestamp: Instant = Instant.now(), recvWindow: Long? = null): CommissionRate {
         val params = buildMap<String, String> {
             put("symbol", symbol)
             put("timestamp", timestamp.toEpochMilli().toString())
@@ -544,6 +533,10 @@ class BinanceFuturesApi(
             map
         }
 
+        val filtersIndexed: Map<KClass<out ExchangeFilter>, ExchangeFilter> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+            exchangeFilters.asSequence().map { it::class to it }.toMap()
+        }
+
         enum class FuturesType {
             U_MARGINED,
         }
@@ -635,6 +628,10 @@ class BinanceFuturesApi(
             val orderTypes: List<OrderType>,
             val timeInForce: List<TimeInForce>,
         ) {
+            val filtersIndexed: Map<KClass<out ExchangeFilter>, ExchangeFilter> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+                filters.asSequence().map { it::class to it }.toMap()
+            }
+
             enum class Status {
                 TRADING,
             }
@@ -694,6 +691,13 @@ class BinanceFuturesApi(
     @Serializable
     data class ListenKey(
         val listenKey: String,
+    )
+
+    @Serializable
+    data class CommissionRate(
+        val symbol: String,
+        @Serializable(BigDecimalAsStringSerializer::class) val makerCommissionRate: BigDecimal,
+        @Serializable(BigDecimalAsStringSerializer::class) val takerCommissionRate: BigDecimal,
     )
 
     @Serializable

@@ -45,25 +45,15 @@ class PoloniexFuturesApi(
     apiSecret: String,
     apiPassphrase: String,
 ) {
+    //region Init
     private val json = Json {
         ignoreUnknownKeys = true
     }
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineName("PoloniexFuturesApi"))
-    private val closed = AtomicBoolean(false)
 
     private val webSocketConnector = WebSocketConnector(this, scope, json)
     private val httpConnector = HttpConnector(apiKey, apiSecret, apiPassphrase, json)
-
-    init {
-        Runtime.getRuntime().addShutdownHook(Thread { runBlocking { close() } })
-    }
-
-    //region Maintenance
-    suspend fun close() {
-        if (closed.getAndSet(true)) return
-        scope.coroutineContext[Job]?.cancelAndJoin()
-    }
     //endregion
 
     //region User API
@@ -167,7 +157,7 @@ class PoloniexFuturesApi(
     //endregion
 
     //region Market Data API
-    suspend fun getOpenContracts(): JsonObject {
+    suspend fun getOpenContracts(): List<ContractInfo> {
         return httpConnector.callApi("/api/v1/contracts/active", HttpMethod.GET, emptyJsonObject, false, serializer())
     }
     //endregion
@@ -304,9 +294,8 @@ class PoloniexFuturesApi(
         return webSocketConnector.subscribeTo(
             "/contract/position:$symbol",
             mapOf(
-                "position.change" to JsonElement.serializer(),
-                "position.change" to JsonElement.serializer(), //TODO: Looks like 2 data sets in one subject
-                "position.settlement" to JsonElement.serializer(),
+                "position.change" to PositionEvent.PositionChange.serializer(),
+                "position.settlement" to PositionEvent.FundingSettlement.serializer(),
                 "openPositionSum.change" to PositionEvent.OpenPositionSumChangeEvent.serializer(),
             ),
         )
@@ -545,6 +534,54 @@ class PoloniexFuturesApi(
         @Serializable(InstantAsLongMillisSerializer::class) val startAt: Instant? = null,
         @Serializable(InstantAsLongMillisSerializer::class) val endAt: Instant? = null,
     )
+
+    @Serializable
+    data class ContractInfo(
+        val symbol: String,
+        val rootSymbol: String,
+        val indexSymbol: String,
+        val fundingBaseSymbol: String,
+        val fundingRateSymbol: String,
+        val fundingQuoteSymbol: String,
+        val baseCurrency: String,
+        val quoteCurrency: String,
+        val settleCurrency: String,
+        val type: String,
+        val status: String,
+        val markMethod: String,
+        val fairMethod: String,
+        val isQuanto: Boolean,
+        val isDeleverage: Boolean,
+        val isInverse: Boolean,
+        val nextFundingRateTime: Long,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val lowPriceOf24h: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val highPriceOf24h: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val volumeOf24h: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val turnoverOf24h: BigDecimal,
+        @Serializable(BigDecimalAsStringSerializer::class) val openInterest: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val takerFixFee: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val makerFixFee: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val takerFeeRate: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val makerFeeRate: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val fundingFeeRate: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val predictedFundingFeeRate: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val riskStep: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val minRiskLimit: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val maxRiskLimit: BigDecimal,
+        val lotSize: Long,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val indexPriceTickSize: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val markPrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val indexPrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val maxPrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val lastTradePrice: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("tickSize") val minPriceIncrement: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("multiplier") val minOrderQty: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val maxOrderQty: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val maxLeverage: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val initialMargin: BigDecimal,
+        @Serializable(BigDecimalAsDoubleSerializer::class) val maintainMargin: BigDecimal,
+        @Serializable(InstantAsLongMillisSerializer::class) val firstOpenDate: Instant,
+    )
     //endregion
 
     //region Public Events
@@ -726,13 +763,15 @@ class PoloniexFuturesApi(
             val orderType: OrderType? = null,
             val status: Status? = null,
             val type: Type,
+            val liquidity: Liquidity? = null,
             val size: Long,
-            val matchSize: Long? = null,
-            val remainSize: Long? = null,
-            val oldSize: Long? = null,
-            val canceledSize: Long? = null,
-            @Serializable(BigDecimalAsStringSerializer::class) val matchPrice: BigDecimal? = null,
-            @Serializable(BigDecimalAsStringSerializer::class) val price: BigDecimal,
+            @Serializable(NullableLongAsStringSerializer::class) val matchSize: Long? = null,
+            @Serializable(NullableLongAsStringSerializer::class) val remainSize: Long? = null,
+            @Serializable(NullableLongAsStringSerializer::class) val filledSize: Long? = null,
+            @Serializable(NullableLongAsStringSerializer::class) val canceledSize: Long? = null,
+            @Serializable(NullableLongAsStringSerializer::class) val oldSize: Long? = null,
+            @Serializable(NullableBigDecimalAsStringSerializer::class) val price: BigDecimal? = null,
+            @Serializable(NullableBigDecimalAsStringSerializer::class) val matchPrice: BigDecimal? = null,
             @Serializable(InstantAsLongNanoSerializer::class) val ts: Instant,
             @Serializable(InstantAsLongNanoSerializer::class) val orderTime: Instant,
         ) : PrivateMessageEvent() {
@@ -765,6 +804,15 @@ class PoloniexFuturesApi(
                 @SerialName("done")
                 Done,
             }
+
+            @Serializable
+            enum class Liquidity {
+                @SerialName("maker")
+                Maker,
+
+                @SerialName("taker")
+                Taker,
+            }
         }
     }
 
@@ -788,6 +836,55 @@ class PoloniexFuturesApi(
     @Serializable
     sealed class PositionEvent {
         @Serializable
+        data class PositionChange(
+            val symbol: String,
+            val settleCurrency: String,
+            val crossMode: Boolean? = null,
+            val autoDeposit: Boolean? = null,
+            val isOpen: Boolean? = null,
+            @Serializable(InstantAsLongMillisSerializer::class) val currentTimestamp: Instant,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedPnl: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val realisedPnl: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val markPrice: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val liquidationPrice: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val avgEntryPrice: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val bankruptPrice: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("maintMargin") val maintenanceMargin: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("maintMarginReq") val maintenanceMarginRate: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("realLeverage") val leverage: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedRoePcnt: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedPnlPcnt: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val unrealisedCost: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val realisedCost: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("realisedGrossCost") val accumulatedRealizedProfit: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val realisedGrossPnl: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("delevPercentage") val deleveragePercentage: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val markValue: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val riskLimit: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("posInit") val posInit: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("posLoss") val posLoss: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("posMargin") val posMargin: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("posMaint") val posMaintenance: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("posCost") val posCost: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("posComm") val posBankruptcyCost: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("posCross") val posManuallyAddedMargin: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val currentCost: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val currentQty: BigDecimal? = null,
+            @Serializable(BigDecimalAsDoubleSerializer::class) @SerialName("currentComm") val currentCommission: BigDecimal? = null,
+        )
+
+        @Serializable
+        data class FundingSettlement(
+            val settleCurrency: String,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val qty: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val markPrice: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val fundingRate: BigDecimal,
+            @Serializable(BigDecimalAsDoubleSerializer::class) val fundingFee: BigDecimal,
+            @Serializable(InstantAsLongNanoSerializer::class) val ts: Instant,
+            @Serializable(InstantAsLongMillisSerializer::class) val fundingTime: Instant,
+        )
+
+        @Serializable
         data class OpenPositionSumChangeEvent(
             val sum: Long,
         ) : PositionEvent()
@@ -802,6 +899,7 @@ class PoloniexFuturesApi(
     enum class Error(val code: Long, val msg: String)
     //endregion
 
+    //region Utils
     private class WebSocketConnector(
         val poloniexFuturesApi: PoloniexFuturesApi,
         val scope: CoroutineScope,
@@ -1449,4 +1547,5 @@ class PoloniexFuturesApi(
             //endregion
         }
     }
+    //endregion
 }
