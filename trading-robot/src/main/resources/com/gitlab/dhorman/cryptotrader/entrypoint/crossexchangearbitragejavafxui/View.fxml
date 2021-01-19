@@ -18,8 +18,8 @@
         <children>
             <Label alignment="CENTER" maxHeight="1.7976931348623157E308" maxWidth="1.7976931348623157E308" text="LongShort" />
             <Label alignment="CENTER" maxHeight="1.7976931348623157E308" maxWidth="1.7976931348623157E308" text="ShortLong" GridPane.columnIndex="1" />
-          <Label fx:id="longShortCoefLabel" alignment="CENTER" maxHeight="1.7976931348623157E308" maxWidth="1.7976931348623157E308" style="-fx-background-color: green;" text="0" textFill="WHITE" GridPane.rowIndex="1" />
-          <Label fx:id="shortLongCoefLabel" alignment="CENTER" maxHeight="1.7976931348623157E308" maxWidth="1.7976931348623157E308" style="-fx-background-color: green;" text="0" textFill="WHITE" GridPane.columnIndex="1" GridPane.rowIndex="1" />
+          <Label fx:id="longShortCoefLabel" alignment="CENTER" maxHeight="1.7976931348623157E308" maxWidth="1.7976931348623157E308" text="0" GridPane.rowIndex="1" />
+          <Label fx:id="shortLongCoefLabel" alignment="CENTER" maxHeight="1.7976931348623157E308" maxWidth="1.7976931348623157E308" text="0" GridPane.columnIndex="1" GridPane.rowIndex="1" />
         </children>
     </GridPane>
    <GridPane gridLinesVisible="true" layoutX="59.0" layoutY="248.0" prefHeight="126.0" prefWidth="268.0">

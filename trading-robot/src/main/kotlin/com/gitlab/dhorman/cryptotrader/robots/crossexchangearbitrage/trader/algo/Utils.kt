@@ -23,7 +23,7 @@ fun simulateMarketOrderPnl(
     quoteAmount: BigDecimal,
     takerFee: BigDecimal,
     orderBook: SortedMap<BigDecimal, BigDecimal>,
-): BigDecimal {
+): Pair<BigDecimal, BigDecimal> {
     var remainingQuoteAmount = quoteAmount
     var baseAmountSum = BigDecimal.ZERO
 
@@ -45,7 +45,7 @@ fun simulateMarketOrderPnl(
         }
     }
 
-    return baseAmountSum
+    return baseAmountSum to remainingQuoteAmount
 }
 
 fun calculateFillAllMarketOrder(
@@ -56,17 +56,27 @@ fun calculateFillAllMarketOrder(
     leftBaseAssetPrecision: Int,
     rightBaseAssetPrecision: Int,
     amount: BigDecimal,
-): Pair<BigDecimal, BigDecimal> {
+): Pair<BigDecimal?, BigDecimal?> {
     val k0 = run {
-        val a = simulateMarketOrderPnl(rightBaseAssetPrecision, amount, rightFee, rightOrderBook.bids)
-        val b = simulateMarketOrderPnl(leftBaseAssetPrecision, amount, leftFee, leftOrderBook.asks)
-        a - b
+        val (b0, q0) = simulateMarketOrderPnl(rightBaseAssetPrecision, amount, rightFee, rightOrderBook.bids)
+        val (b1, q1) = simulateMarketOrderPnl(leftBaseAssetPrecision, amount, leftFee, leftOrderBook.asks)
+
+        if (q0.compareTo(BigDecimal.ZERO) == 0 && q1.compareTo(BigDecimal.ZERO) == 0) {
+            b0 - b1
+        } else {
+            null
+        }
     }
 
     val k1 = run {
-        val a = simulateMarketOrderPnl(leftBaseAssetPrecision, amount, leftFee, leftOrderBook.bids)
-        val b = simulateMarketOrderPnl(rightBaseAssetPrecision, amount, rightFee, rightOrderBook.asks)
-        a - b
+        val (b0, q0) = simulateMarketOrderPnl(leftBaseAssetPrecision, amount, leftFee, leftOrderBook.bids)
+        val (b1, q1) = simulateMarketOrderPnl(rightBaseAssetPrecision, amount, rightFee, rightOrderBook.asks)
+
+        if (q0.compareTo(BigDecimal.ZERO) == 0 && q1.compareTo(BigDecimal.ZERO) == 0) {
+            b0 - b1
+        } else {
+            null
+        }
     }
 
     return k0 to k1

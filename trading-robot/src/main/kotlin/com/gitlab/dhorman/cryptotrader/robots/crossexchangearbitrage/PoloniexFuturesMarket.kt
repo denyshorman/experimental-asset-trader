@@ -21,8 +21,9 @@ class PoloniexFuturesMarket(
     }
 
     override val orderBook: Flow<EventData<OrderBook>> = run {
-        cacheablePoloniexFuturesApi.api.level2Depth50Stream(market).transform { event ->
-            emit(event.newPayload(event.payload?.toOrderBook()))
+        cacheablePoloniexFuturesApi.api.level2Depth50Stream(market).conflate().map { event ->
+            // TODO: generalInfo.first() should be moved out to improve performance
+            event.newPayload(event.payload?.toOrderBook(generalInfo.first().minQuoteAmount))
         }.shareIn(scope, SharingStarted.Lazily, 1)
     }
 
@@ -56,9 +57,9 @@ class PoloniexFuturesMarket(
     }
 
     companion object {
-        private fun PoloniexFuturesApi.Level2DepthEvent.toOrderBook(): OrderBook {
-            val asks = TreeMap.ofAll(asks.stream()) { tuple(it.price, it.qty) }
-            val bids = TreeMap.ofAll(compareByDescending { it }, bids.stream()) { tuple(it.price, it.qty) }
+        private fun PoloniexFuturesApi.Level2DepthEvent.toOrderBook(minQuoteAmount: BigDecimal): OrderBook {
+            val asks = TreeMap.ofAll(asks.stream()) { tuple(it.price, it.qty * minQuoteAmount) }
+            val bids = TreeMap.ofAll(compareByDescending { it }, bids.stream()) { tuple(it.price, it.qty * minQuoteAmount) }
             return OrderBook(asks, bids)
         }
     }

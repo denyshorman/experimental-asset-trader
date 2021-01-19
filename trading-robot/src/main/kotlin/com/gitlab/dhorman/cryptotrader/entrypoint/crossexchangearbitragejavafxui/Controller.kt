@@ -7,7 +7,6 @@ import javafx.scene.control.TextField
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.javafx.JavaFx
-import java.math.BigDecimal
 
 class Controller {
     private val crossExchangeTrader = createCrossExchangeTrader()
@@ -83,18 +82,6 @@ class Controller {
                     longShortCoefLabel.text = coeffs.k0.toString()
                     shortLongCoefLabel.text = coeffs.k1.toString()
                     openQuoteAmountLabel.text = coeffs.quoteAmount.toString()
-
-                    if (coeffs.k0 > BigDecimal.ZERO) {
-                        longShortCoefLabel.style = "-fx-background-color: green;"
-                    } else {
-                        longShortCoefLabel.style = "-fx-background-color: red;"
-                    }
-
-                    if (coeffs.k1 > BigDecimal.ZERO) {
-                        shortLongCoefLabel.style = "-fx-background-color: green;"
-                    } else {
-                        shortLongCoefLabel.style = "-fx-background-color: red;"
-                    }
                 }
             }
         }

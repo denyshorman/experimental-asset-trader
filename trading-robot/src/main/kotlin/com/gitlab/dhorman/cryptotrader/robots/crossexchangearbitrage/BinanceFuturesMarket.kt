@@ -23,11 +23,11 @@ class BinanceFuturesMarket(
     override val orderBook: Flow<EventData<OrderBook>> = run {
         cacheableBinanceFuturesApi.api.partialBookDepthStream(
             market,
-            BinanceFuturesApi.PartialBookDepthEvent.Level.LEVEL_10,
+            BinanceFuturesApi.PartialBookDepthEvent.Level.LEVEL_20,
             BinanceFuturesApi.BookUpdateSpeed.TIME_100_MS,
-        ).transform { event ->
-            emit(event.newPayload(event.payload?.toOrderBook()))
-        }.shareIn(scope, SharingStarted.Lazily, 1)
+        )
+            .map { it.newPayload(it.payload?.toOrderBook()) }
+            .shareIn(scope, SharingStarted.Lazily, 1)
     }
 
     override val generalInfo: Flow<FuturesMarketGeneralInfo> = run {

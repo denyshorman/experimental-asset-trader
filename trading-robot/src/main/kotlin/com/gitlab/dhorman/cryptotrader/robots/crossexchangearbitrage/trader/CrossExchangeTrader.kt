@@ -112,10 +112,12 @@ class CrossExchangeTrader(
                 State.AllocateAmount -> TODO()
                 State.OpenPosition -> {
                     val selectedStrategy = longShortCoeffs.transform { (quoteAmount, k0, k1) ->
-                        if (k0 > openPositionThreshold.value) {
-                            emit(SelectedStrategy(Strategy.LongShort, quoteAmount, k0, k1))
-                        } else if (k1 > openPositionThreshold.value) {
-                            emit(SelectedStrategy(Strategy.ShortLong, quoteAmount, k1, k0))
+                        if (k0 != null && k1 != null) {
+                            if (k0 > openPositionThreshold.value) {
+                                emit(SelectedStrategy(Strategy.LongShort, quoteAmount, k0, k1))
+                            } else if (k1 > openPositionThreshold.value) {
+                                emit(SelectedStrategy(Strategy.ShortLong, quoteAmount, k1, k0))
+                            }
                         }
                     }.first()
 
@@ -159,7 +161,9 @@ class CrossExchangeTrader(
                         Strategy.ShortLong -> leftPositionPnl - rightPositionPnl
                     }
 
-                    longShortCoeffs.transform { (k0, k1) ->
+                    longShortCoeffs.transform { (quoteAmount, k0, k1) ->
+                        if (k0 == null || k1 == null) return@transform
+
                         val simulatedClosePnl = when (selectedStrategy.value!!) {
                             Strategy.LongShort -> k1
                             Strategy.ShortLong -> k0
@@ -211,7 +215,7 @@ class CrossExchangeTrader(
 
     data class StrategyCoeffs(
         val quoteAmount: BigDecimal,
-        val k0: BigDecimal,
-        val k1: BigDecimal,
+        val k0: BigDecimal?,
+        val k1: BigDecimal?,
     )
 }
