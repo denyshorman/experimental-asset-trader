@@ -5,10 +5,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.consumeEach
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mu.KotlinLogging
@@ -210,6 +207,20 @@ fun <T> Flow<T>.returnLastIfNoValueWithinSpecifiedTime(duration: Duration) = cha
             send(lastValue.get())
         }
         send(value)
+    }
+}
+
+inline fun <T : R, R> Flow<T>.transformFirst(
+    @BuilderInference crossinline transform: suspend FlowCollector<R>.(value: T) -> Unit
+): Flow<R> = flow {
+    var firstElementProcessed = false
+    collect { value ->
+        if (firstElementProcessed) {
+            emit(value)
+        } else {
+            firstElementProcessed = true
+            transform(value)
+        }
     }
 }
 

@@ -1401,7 +1401,8 @@ class BinanceApi(
             @Suppress("UNCHECKED_CAST")
             return streamCache.getOrPut(channel) {
                 subscribeToImpl(channel, payloadType)
-                    .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 0)
+                    .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 1)
+                    .transformFirst { if (it.subscribed) emit(it.subscribed()) }
             } as Flow<EventData<T>>
         }
 

@@ -14,4 +14,7 @@ fun <T> EventData<T>.setPayload(payload: T?) = EventData(payload, subscribed, nu
 fun <T> EventData<T>.setSubscribed(subscribed: Boolean) = EventData(payload, subscribed, null)
 fun <T> EventData<T>.setError(error: Throwable?) = EventData<T>(null, false, error)
 
+fun <T> EventData<T>.unsubscribed() = EventData<T>(null, false, null)
+fun <T> EventData<T>.subscribed() = EventData<T>(null, true, null)
+
 fun <T> Flow<EventData<T>>.onlyPayload() = transform { event -> if (event.payload != null) emit(event.payload) }

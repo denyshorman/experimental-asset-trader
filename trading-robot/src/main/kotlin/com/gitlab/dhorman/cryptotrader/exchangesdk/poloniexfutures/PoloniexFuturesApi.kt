@@ -1047,8 +1047,9 @@ class PoloniexFuturesApi(
             @Suppress("UNCHECKED_CAST")
             return streamCache.getOrPut(channel) {
                 subscribeToImpl(channel, subjectDeserializers)
-                    .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 0)
-            } as Flow<EventData<T>>
+                    .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 1)
+                    .transformFirst { if (it.subscribed) emit(it.subscribed()) }
+            } as Flow<EventData<R>>
         }
 
         private fun <T : R, R> subscribeToImpl(

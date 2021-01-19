@@ -93,7 +93,8 @@ tasks {
                 "-Xuse-experimental=kotlinx.serialization.ExperimentalSerializationApi",
                 "-Xuse-experimental=kotlinx.serialization.InternalSerializationApi",
                 "-Xuse-experimental=kotlin.time.ExperimentalTime",
-                "-Xuse-experimental=kotlin.ExperimentalStdlibApi"
+                "-Xuse-experimental=kotlin.ExperimentalStdlibApi",
+                "-Xuse-experimental=kotlin.experimental.ExperimentalTypeInference"
             )
         }
     }
