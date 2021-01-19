@@ -2,6 +2,8 @@ package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.serv
 
 import com.gitlab.dhorman.cryptotrader.exchangesdk.poloniexfutures.PoloniexFuturesApi
 import com.gitlab.dhorman.cryptotrader.util.infiniteRetry
+import com.gitlab.dhorman.cryptotrader.util.subscribed
+import com.gitlab.dhorman.cryptotrader.util.transformFirst
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -29,5 +31,11 @@ class CacheablePoloniexFuturesApi(val api: PoloniexFuturesApi) : AutoCloseable {
                 delay(6.hours)
             }
         }.shareIn(scope, SharingStarted.Lazily, 1)
+    }
+
+    val privateMessagesStream = run {
+        api.privateMessagesStream
+            .shareIn(scope, SharingStarted.Eagerly, 1)
+            .transformFirst { if (it.subscribed) emit(it.subscribed()) }
     }
 }

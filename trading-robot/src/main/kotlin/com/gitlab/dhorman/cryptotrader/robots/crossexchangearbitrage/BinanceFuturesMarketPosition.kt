@@ -1,6 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage
 
 import com.gitlab.dhorman.cryptotrader.exchangesdk.binancefutures.BinanceFuturesApi
+import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.service.CacheableBinanceFuturesApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
@@ -10,12 +11,12 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.*
 
-//TODO: account stream must be already connected to the server in order to quickly execute open/close commands
 class BinanceFuturesMarketPosition(
-    private val binanceFuturesApi: BinanceFuturesApi,
+    private val binanceFuturesApi: CacheableBinanceFuturesApi,
     override val market: String,
     override val quoteAmount: BigDecimal,
     override val side: PositionSide,
+    private val baseAssetPrecision: Int,
 ) : FuturesMarketPosition {
     private val _profit = MutableStateFlow(BigDecimal.ZERO)
     private val _state = MutableStateFlow(FuturesMarketPositionState.Considered)
@@ -41,7 +42,7 @@ class BinanceFuturesMarketPosition(
 
             collectorReady.await()
 
-            binanceFuturesApi.placeNewOrder(
+            binanceFuturesApi.api.placeNewOrder(
                 symbol = market,
                 newClientOrderId = id,
                 side = orderSide,
@@ -74,7 +75,7 @@ class BinanceFuturesMarketPosition(
 
             collectorReady.await()
 
-            binanceFuturesApi.placeNewOrder(
+            binanceFuturesApi.api.placeNewOrder(
                 symbol = market,
                 newClientOrderId = id,
                 side = orderSide,
@@ -103,7 +104,6 @@ class BinanceFuturesMarketPosition(
                 while (true) {
                     when (state) {
                         CollectTradesState.Connecting -> {
-                            // TODO: Assuming that API must return first meta event quickly - subscribed = false
                             if (event.subscribed) {
                                 collectorReady.complete(Unit)
                                 state = CollectTradesState.Collecting
@@ -124,8 +124,7 @@ class BinanceFuturesMarketPosition(
                                         val qty = event.payload.order.orderLastFilledQuantity
                                         val fee = event.payload.order.commission ?: return@collect
 
-                                        // TODO: Apply correct scale
-                                        val baseAmount = (price * qty).setScale(8, RoundingMode.DOWN)
+                                        val baseAmount = (price * qty).setScale(baseAssetPrecision, RoundingMode.DOWN)
                                         val baseAmountWithFee = baseAmount - fee
 
                                         _profit.value += when (event.payload.order.side) {

@@ -101,11 +101,10 @@ class PoloniexFuturesMarketPosition(
         var state = CollectTradesState.Connecting
 
         try {
-            cacheablePoloniexFuturesApi.api.privateMessagesStream.collect { event ->
+            cacheablePoloniexFuturesApi.privateMessagesStream.collect { event ->
                 while (true) {
                     when (state) {
                         CollectTradesState.Connecting -> {
-                            // TODO: Assuming that API must return first meta event quickly - subscribed = false
                             if (event.subscribed) {
                                 collectorReady.complete(Unit)
                                 state = CollectTradesState.Collecting

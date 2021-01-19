@@ -2,6 +2,8 @@ package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.serv
 
 import com.gitlab.dhorman.cryptotrader.exchangesdk.binancefutures.BinanceFuturesApi
 import com.gitlab.dhorman.cryptotrader.util.infiniteRetry
+import com.gitlab.dhorman.cryptotrader.util.subscribed
+import com.gitlab.dhorman.cryptotrader.util.transformFirst
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -30,6 +32,12 @@ class CacheableBinanceFuturesApi(val api: BinanceFuturesApi) : AutoCloseable {
                 delay(6.hours)
             }
         }.shareIn(scope, SharingStarted.Lazily, 1)
+    }
+
+    val accountStream = run {
+        api.accountStream
+            .shareIn(scope, SharingStarted.Eagerly, 1)
+            .transformFirst { if (it.subscribed) emit(it.subscribed()) }
     }
 
     fun getCommissionRate(symbol: String): Flow<BinanceFuturesApi.CommissionRate> {

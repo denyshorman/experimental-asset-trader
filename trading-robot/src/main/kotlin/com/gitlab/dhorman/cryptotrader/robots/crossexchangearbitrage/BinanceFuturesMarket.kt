@@ -1,7 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage
 
-import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.service.CacheableBinanceFuturesApi
 import com.gitlab.dhorman.cryptotrader.exchangesdk.binancefutures.BinanceFuturesApi
+import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.service.CacheableBinanceFuturesApi
 import com.gitlab.dhorman.cryptotrader.util.EventData
 import com.gitlab.dhorman.cryptotrader.util.newPayload
 import io.vavr.collection.TreeMap
@@ -50,11 +50,14 @@ class BinanceFuturesMarket(
     }
 
     override suspend fun createMarketPosition(quoteAmount: BigDecimal, positionSide: PositionSide): FuturesMarketPosition {
+        val generalInfo = generalInfo.first()
+
         return BinanceFuturesMarketPosition(
-            cacheableBinanceFuturesApi.api,
+            cacheableBinanceFuturesApi,
             market,
             quoteAmount,
             positionSide,
+            generalInfo.baseAssetPrecision,
         )
     }
 
