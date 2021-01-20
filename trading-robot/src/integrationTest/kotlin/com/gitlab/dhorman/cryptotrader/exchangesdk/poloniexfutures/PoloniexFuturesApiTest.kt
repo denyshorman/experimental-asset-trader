@@ -1,6 +1,5 @@
 package com.gitlab.dhorman.cryptotrader.exchangesdk.poloniexfutures
 
-import com.gitlab.dhorman.cryptotrader.util.Secrets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -9,11 +8,7 @@ import org.junit.jupiter.api.Test
 import java.math.BigDecimal
 
 class PoloniexFuturesApiTest {
-    private val poloniexFuturesApi = PoloniexFuturesApi(
-        apiKey = Secrets.get("POLONIEX_FUTURES_API_KEY")!!,
-        apiSecret = Secrets.get("POLONIEX_FUTURES_API_SECRET")!!,
-        apiPassphrase = Secrets.get("POLONIEX_FUTURES_API_PASSPHRASE")!!,
-    )
+    private val poloniexFuturesApi = PoloniexFuturesApi.createApi()
 
     //region Market Data API
     @Test

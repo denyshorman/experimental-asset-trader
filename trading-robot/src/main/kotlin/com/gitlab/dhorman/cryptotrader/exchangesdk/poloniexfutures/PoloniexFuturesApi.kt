@@ -1549,4 +1549,23 @@ class PoloniexFuturesApi(
         }
     }
     //endregion
+
+    companion object {
+        fun createApi(): PoloniexFuturesApi {
+            val apiKey = Secrets.get("POLONIEX_FUTURES_API_KEY")
+                ?: throw RuntimeException("POLONIEX_FUTURES_API_KEY environment variable is not defined")
+
+            val apiSecret = Secrets.get("POLONIEX_FUTURES_API_SECRET")
+                ?: throw RuntimeException("POLONIEX_FUTURES_API_SECRET environment variable is not defined")
+
+            val apiPassphrase = Secrets.get("POLONIEX_FUTURES_API_PASSPHRASE")
+                ?: throw RuntimeException("POLONIEX_FUTURES_API_PASSPHRASE environment variable is not defined")
+
+            return PoloniexFuturesApi(
+                apiKey = apiKey,
+                apiSecret = apiSecret,
+                apiPassphrase = apiPassphrase,
+            )
+        }
+    }
 }

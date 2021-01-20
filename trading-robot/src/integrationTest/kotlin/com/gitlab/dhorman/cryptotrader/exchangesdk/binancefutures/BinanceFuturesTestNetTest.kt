@@ -1,17 +1,12 @@
 package com.gitlab.dhorman.cryptotrader.exchangesdk.binancefutures
 
-import com.gitlab.dhorman.cryptotrader.util.Secrets
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
 
 class BinanceFuturesTestNetTest {
-    private val binanceFuturesApi = BinanceFuturesApi(
-        apiKey = Secrets.get("BINANCE_FUTURES_TEST_NET_API_KEY")!!,
-        apiSecret = Secrets.get("BINANCE_FUTURES_TEST_NET_API_SECRET")!!,
-        apiNet = BinanceFuturesApi.ApiNet.Test,
-    )
+    private val binanceFuturesApi = BinanceFuturesApi.createTestNetApi()
 
     //region Market Data API
     @Test

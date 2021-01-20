@@ -1,6 +1,5 @@
 package com.gitlab.dhorman.cryptotrader.exchangesdk.binancespot
 
-import com.gitlab.dhorman.cryptotrader.util.Secrets
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.collect
@@ -13,11 +12,7 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 class BinanceApiTestNetTest {
-    private val binanceApi = BinanceApi(
-        apiKey = Secrets.get("BINANCE_TEST_NET_API_KEY")!!,
-        apiSecret = Secrets.get("BINANCE_TEST_NET_API_SECRET")!!,
-        apiNet = BinanceApi.ApiNet.Test,
-    )
+    private val binanceApi = BinanceApi.createTestNetApi()
 
     //region Wallet API
     @Test

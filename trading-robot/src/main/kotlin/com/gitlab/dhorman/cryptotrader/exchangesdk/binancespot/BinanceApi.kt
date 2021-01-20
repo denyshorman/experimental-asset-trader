@@ -1874,5 +1874,35 @@ class BinanceApi(
         private val LISTEN_KEY_PING_INTERVAL = 45.minutes
         private val FILE_OPTIONS = arrayOf(StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.CREATE)
         //endregion
+
+        //region Factories
+        fun createMainNetApi(): BinanceApi {
+            val apiKey = Secrets.get("BINANCE_API_KEY")
+                ?: throw RuntimeException("BINANCE_API_KEY environment variable is not defined")
+
+            val apiSecret = Secrets.get("BINANCE_API_SECRET")
+                ?: throw RuntimeException("BINANCE_API_SECRET environment variable is not defined")
+
+            return BinanceApi(
+                apiKey = apiKey,
+                apiSecret = apiSecret,
+                apiNet = ApiNet.Main,
+            )
+        }
+
+        fun createTestNetApi(): BinanceApi {
+            val apiKey = Secrets.get("BINANCE_TEST_NET_API_KEY")
+                ?: throw RuntimeException("BINANCE_TEST_NET_API_SECRET environment variable is not defined")
+
+            val apiSecret = Secrets.get("BINANCE_TEST_NET_API_SECRET")
+                ?: throw RuntimeException("BINANCE_TEST_NET_API_SECRET environment variable is not defined")
+
+            return BinanceApi(
+                apiKey = apiKey,
+                apiSecret = apiSecret,
+                apiNet = ApiNet.Test,
+            )
+        }
+        //endregion
     }
 }

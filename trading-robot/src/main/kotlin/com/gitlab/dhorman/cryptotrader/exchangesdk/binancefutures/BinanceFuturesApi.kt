@@ -1880,4 +1880,34 @@ class BinanceFuturesApi(
             private fun String.appendToUri() = if (isBlank()) "" else "?$this"
         }
     }
+
+    companion object {
+        fun createMainNetApi(): BinanceFuturesApi {
+            val apiKey = Secrets.get("BINANCE_FUTURES_API_KEY")
+                ?: throw RuntimeException("BINANCE_FUTURES_API_KEY environment variable is not defined")
+
+            val apiSecret = Secrets.get("BINANCE_FUTURES_API_SECRET")
+                ?: throw RuntimeException("BINANCE_FUTURES_API_SECRET environment variable is not defined")
+
+            return BinanceFuturesApi(
+                apiKey = apiKey,
+                apiSecret = apiSecret,
+                apiNet = ApiNet.Main,
+            )
+        }
+
+        fun createTestNetApi(): BinanceFuturesApi {
+            val apiKey = Secrets.get("BINANCE_FUTURES_TEST_NET_API_KEY")
+                ?: throw RuntimeException("BINANCE_FUTURES_TEST_NET_API_KEY environment variable is not defined")
+
+            val apiSecret = Secrets.get("BINANCE_FUTURES_TEST_NET_API_SECRET")
+                ?: throw RuntimeException("BINANCE_FUTURES_TEST_NET_API_SECRET environment variable is not defined")
+
+            return BinanceFuturesApi(
+                apiKey = apiKey,
+                apiSecret = apiSecret,
+                apiNet = ApiNet.Test,
+            )
+        }
+    }
 }

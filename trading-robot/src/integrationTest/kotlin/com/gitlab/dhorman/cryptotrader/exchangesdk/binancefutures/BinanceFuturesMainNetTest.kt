@@ -6,11 +6,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 
 class BinanceFuturesMainNetTest {
-    private val binanceFuturesApi = BinanceFuturesApi(
-        apiKey = Secrets.get("BINANCE_FUTURES_API_KEY")!!,
-        apiSecret = Secrets.get("BINANCE_FUTURES_API_SECRET")!!,
-        apiNet = BinanceFuturesApi.ApiNet.Main,
-    )
+    private val binanceFuturesApi = BinanceFuturesApi.createMainNetApi()
 
     //region Market Data API
     @Test
