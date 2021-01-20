@@ -20,6 +20,7 @@ class PoloniexFuturesMarket(
         scope.cancel()
     }
 
+    // TODO: Correctly implement order book cache
     override val orderBook: Flow<EventData<OrderBook>> = run {
         cacheablePoloniexFuturesApi.api.level2Depth50Stream(market).conflate().map { event ->
             // TODO: generalInfo.first() should be moved out to improve performance

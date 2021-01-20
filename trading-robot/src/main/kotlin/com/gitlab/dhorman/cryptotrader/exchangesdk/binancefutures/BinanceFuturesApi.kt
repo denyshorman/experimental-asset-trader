@@ -361,8 +361,15 @@ class BinanceFuturesApi(
         FUTURE,
     }
 
+    @Serializable
     enum class ContractType {
         PERPETUAL,
+        CURRENT_QUARTER,
+        NEXT_MONTH,
+
+        // Testnet returns empty value for some markets
+        @SerialName("")
+        EMPTY,
     }
 
     enum class OrderType {
@@ -634,6 +641,8 @@ class BinanceFuturesApi(
 
             enum class Status {
                 TRADING,
+                PENDING_TRADING,
+                SETTLING,
             }
 
             enum class UnderlyingType {

@@ -161,8 +161,6 @@ class PoloniexFuturesApiTest {
     //endregion
 
     //region User Stream API
-
-
     @Test
     fun privateMessagesStream() {
         runBlocking(Dispatchers.Default) {

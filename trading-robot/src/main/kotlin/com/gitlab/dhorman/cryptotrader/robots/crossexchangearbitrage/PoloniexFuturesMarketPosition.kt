@@ -4,6 +4,7 @@ import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.servi
 import com.gitlab.dhorman.cryptotrader.exchangesdk.poloniexfutures.PoloniexFuturesApi
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import mu.KotlinLogging
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.*
@@ -39,9 +40,13 @@ class PoloniexFuturesMarketPosition(
                 collectTrades(id, collectorReady, collectorCompleted)
             }
 
+            logger.debug("Preparing to open order")
+
             collectorReady.await()
 
-            cacheablePoloniexFuturesApi.api.placeOrder(
+            logger.debug("Sending request to open order")
+
+            val resp = cacheablePoloniexFuturesApi.api.placeOrder(
                 PoloniexFuturesApi.PlaceOrderReq(
                     symbol = market,
                     clientOid = id,
@@ -55,7 +60,11 @@ class PoloniexFuturesMarketPosition(
                 )
             )
 
+            logger.debug { "Order has been placed: $resp" }
+
             collectorCompleted.await()
+
+            logger.debug("Order trades have been collected")
 
             _state.value = FuturesMarketPositionState.Opened
         }
@@ -72,9 +81,13 @@ class PoloniexFuturesMarketPosition(
                 collectTrades(id, collectorReady, collectorCompleted)
             }
 
+            logger.debug("Preparing to close order")
+
             collectorReady.await()
 
-            cacheablePoloniexFuturesApi.api.placeOrder(
+            logger.debug("Sending request to close order")
+
+            val resp = cacheablePoloniexFuturesApi.api.placeOrder(
                 PoloniexFuturesApi.PlaceOrderReq(
                     symbol = market,
                     clientOid = id,
@@ -86,7 +99,11 @@ class PoloniexFuturesMarketPosition(
                 )
             )
 
+            logger.debug { "Order has been placed: $resp" }
+
             collectorCompleted.await()
+
+            logger.debug("Order trades have been collected")
 
             _state.value = FuturesMarketPositionState.Closed
         }
@@ -125,14 +142,15 @@ class PoloniexFuturesMarketPosition(
 
                                         val baseAmount = (price * qty).setScale(baseAssetPrecision, RoundingMode.DOWN)
                                         val fee = (baseAmount * takerFee).setScale(baseAssetPrecision, RoundingMode.UP)
-                                        val baseAmountWithFee = baseAmount - fee
 
                                         _profit.value += when (event.payload.side) {
-                                            PoloniexFuturesApi.OrderSide.Buy -> baseAmountWithFee.negate()
-                                            PoloniexFuturesApi.OrderSide.Sell -> baseAmountWithFee
+                                            PoloniexFuturesApi.OrderSide.Buy -> baseAmount.negate() - fee
+                                            PoloniexFuturesApi.OrderSide.Sell -> baseAmount - fee
                                         }
 
                                         collectedQty += qty
+
+                                        logger.debug { "Trade received: ${event.payload}" }
 
                                         if (collectedQty.compareTo(quoteAmount) == 0) {
                                             state = CollectTradesState.Finished
@@ -144,6 +162,7 @@ class PoloniexFuturesMarketPosition(
                             }
                         }
                         CollectTradesState.Finished -> {
+                            logger.debug("All trades have been collected")
                             collectorCompleted.complete(Unit)
                             throw CancellationException()
                         }
@@ -161,5 +180,9 @@ class PoloniexFuturesMarketPosition(
         Collecting,
         Finished,
         Disconnected,
+    }
+
+    companion object {
+        private val logger = KotlinLogging.logger {}
     }
 }

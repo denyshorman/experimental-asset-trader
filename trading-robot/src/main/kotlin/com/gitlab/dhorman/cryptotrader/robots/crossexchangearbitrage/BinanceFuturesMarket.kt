@@ -20,6 +20,7 @@ class BinanceFuturesMarket(
         scope.cancel()
     }
 
+    // TODO: Correctly implement order book cache
     override val orderBook: Flow<EventData<OrderBook>> = run {
         cacheableBinanceFuturesApi.api.partialBookDepthStream(
             market,

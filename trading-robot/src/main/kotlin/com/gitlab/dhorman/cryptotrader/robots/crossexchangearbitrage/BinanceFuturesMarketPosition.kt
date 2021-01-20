@@ -7,6 +7,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import mu.KotlinLogging
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.*
@@ -40,9 +41,13 @@ class BinanceFuturesMarketPosition(
                 collectTrades(id, collectorReady, collectorCompleted)
             }
 
+            logger.debug("Preparing to open order")
+
             collectorReady.await()
 
-            binanceFuturesApi.api.placeNewOrder(
+            logger.debug("Sending request to open order")
+
+            val resp = binanceFuturesApi.api.placeNewOrder(
                 symbol = market,
                 newClientOrderId = id,
                 side = orderSide,
@@ -51,7 +56,11 @@ class BinanceFuturesMarketPosition(
                 newOrderRespType = BinanceFuturesApi.ResponseType.RESULT,
             )
 
+            logger.debug { "Order has been placed: $resp" }
+
             collectorCompleted.await()
+
+            logger.debug("Order trades have been collected")
 
             _state.value = FuturesMarketPositionState.Opened
         }
@@ -73,9 +82,13 @@ class BinanceFuturesMarketPosition(
                 collectTrades(id, collectorReady, collectorCompleted)
             }
 
+            logger.debug("Preparing to close order")
+
             collectorReady.await()
 
-            binanceFuturesApi.api.placeNewOrder(
+            logger.debug("Sending request to close order")
+
+            val resp = binanceFuturesApi.api.placeNewOrder(
                 symbol = market,
                 newClientOrderId = id,
                 side = orderSide,
@@ -85,7 +98,11 @@ class BinanceFuturesMarketPosition(
                 newOrderRespType = BinanceFuturesApi.ResponseType.RESULT,
             )
 
+            logger.debug { "Order has been placed: $resp" }
+
             collectorCompleted.await()
+
+            logger.debug("Order trades have been collected")
 
             _state.value = FuturesMarketPositionState.Closed
         }
@@ -125,14 +142,15 @@ class BinanceFuturesMarketPosition(
                                         val fee = event.payload.order.commission ?: return@collect
 
                                         val baseAmount = (price * qty).setScale(baseAssetPrecision, RoundingMode.DOWN)
-                                        val baseAmountWithFee = baseAmount - fee
 
                                         _profit.value += when (event.payload.order.side) {
-                                            BinanceFuturesApi.OrderSide.BUY -> baseAmountWithFee.negate()
-                                            BinanceFuturesApi.OrderSide.SELL -> baseAmountWithFee
+                                            BinanceFuturesApi.OrderSide.BUY -> baseAmount.negate() - fee
+                                            BinanceFuturesApi.OrderSide.SELL -> baseAmount - fee
                                         }
 
                                         collectedQty += qty
+
+                                        logger.debug { "Trade received: ${event.payload}" }
 
                                         if (collectedQty.compareTo(quoteAmount) == 0) {
                                             state = CollectTradesState.Finished
@@ -147,6 +165,7 @@ class BinanceFuturesMarketPosition(
                             }
                         }
                         CollectTradesState.Finished -> {
+                            logger.debug("All trades have been collected")
                             collectorCompleted.complete(Unit)
                             throw CancellationException()
                         }
@@ -164,5 +183,9 @@ class BinanceFuturesMarketPosition(
         Collecting,
         Finished,
         Disconnected,
+    }
+
+    companion object {
+        private val logger = KotlinLogging.logger {}
     }
 }
