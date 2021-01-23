@@ -63,7 +63,7 @@ class CrossExchangeTrader(
             .shareIn(scope, SharingStarted.WhileSubscribed(0, 0), 1)
     }
 
-    val longShortCoeffs = run {
+    val openStrategy = run {
         val leftOrderBookFlow = leftMarket.orderBook.onlyPayload()
         val rightOrderBookFlow = rightMarket.orderBook.onlyPayload()
         val orderBookFlow = leftOrderBookFlow.combine(rightOrderBookFlow) { l, r -> l to r }
@@ -91,11 +91,34 @@ class CrossExchangeTrader(
         }.shareIn(scope, SharingStarted.WhileSubscribed(1.minutes, Duration.ZERO), 0)
     }
 
-    val profit = run {
-        val leftPosProfitFlow = leftMarketPosition.flatMapLatest { it?.profit ?: flowOf(BigDecimal.ZERO) }
-        val rightPosProfitFlow = rightMarketPosition.flatMapLatest { it?.profit ?: flowOf(BigDecimal.ZERO) }
+    val currentProfit = run {
+        val leftPosProfitFlow = leftMarketPosition.filter { it != null }.flatMapLatest { it!!.profit }
+        val rightPosProfitFlow = rightMarketPosition.filter { it != null }.flatMapLatest { it!!.profit }
 
-        leftPosProfitFlow.combine(rightPosProfitFlow) { lPosProfit, rPosProfit -> lPosProfit + rPosProfit }
+        leftPosProfitFlow
+            .combine(rightPosProfitFlow) { lPosProfit, rPosProfit -> lPosProfit + rPosProfit }
+            .stateIn(scope, SharingStarted.Eagerly, BigDecimal.ZERO)
+    }
+
+    val onCloseProfit = run {
+        state.flatMapLatest { state ->
+            if (state == State.ClosePosition) {
+                currentProfit.flatMapLatest { profit ->
+                    openStrategy.transform { (_, k0, k1) ->
+                        if (k0 == null || k1 == null) return@transform
+
+                        val simulatedClosePnl = when (selectedStrategy.value!!) {
+                            Strategy.LongShort -> k1
+                            Strategy.ShortLong -> k0
+                        }
+
+                        emit(profit + simulatedClosePnl)
+                    }
+                }
+            } else {
+                currentProfit
+            }
+        }.shareIn(scope, SharingStarted.Lazily, 1)
     }
 
     override fun close() {
@@ -111,11 +134,11 @@ class CrossExchangeTrader(
                 State.RebalanceWallet -> TODO()
                 State.AllocateAmount -> TODO()
                 State.OpenPosition -> {
-                    val selectedStrategy = longShortCoeffs.transform { (quoteAmount, k0, k1) ->
+                    val selectedStrategy = openPositionThreshold.combineTransform(openStrategy) { threshold, (quoteAmount, k0, k1) ->
                         if (k0 != null && k1 != null) {
-                            if (k0 > openPositionThreshold.value) {
+                            if (k0 > threshold) {
                                 emit(SelectedStrategy(Strategy.LongShort, quoteAmount, k0, k1))
-                            } else if (k1 > openPositionThreshold.value) {
+                            } else if (k1 > threshold) {
                                 emit(SelectedStrategy(Strategy.ShortLong, quoteAmount, k1, k0))
                             }
                         }
@@ -152,26 +175,8 @@ class CrossExchangeTrader(
                     _state.value = State.ClosePosition
                 }
                 State.ClosePosition -> {
-                    // TODO: Fix profit calc
-                    val leftPositionPnl = _leftMarketPosition.value!!.profit.value
-                    val rightPositionPnl = _rightMarketPosition.value!!.profit.value
-
-                    val crossExchangeUnrealizedPnl = when (selectedStrategy.value!!) {
-                        Strategy.LongShort -> rightPositionPnl - leftPositionPnl
-                        Strategy.ShortLong -> leftPositionPnl - rightPositionPnl
-                    }
-
-                    longShortCoeffs.transform { (quoteAmount, k0, k1) ->
-                        if (k0 == null || k1 == null) return@transform
-
-                        val simulatedClosePnl = when (selectedStrategy.value!!) {
-                            Strategy.LongShort -> k1
-                            Strategy.ShortLong -> k0
-                        }
-
-                        val simulatedCrossExchangeRealizedPnl = crossExchangeUnrealizedPnl + simulatedClosePnl
-
-                        if (simulatedCrossExchangeRealizedPnl > closePositionThreshold.value) {
+                    closePositionThreshold.combineTransform(onCloseProfit) { threshold, profit ->
+                        if (profit > threshold) {
                             emit(Unit)
                         }
                     }.first()
@@ -186,6 +191,9 @@ class CrossExchangeTrader(
                         }
                     }
 
+                    _state.value = State.Exit
+                }
+                State.Exit -> {
                     return
                 }
             }
@@ -199,6 +207,7 @@ class CrossExchangeTrader(
         AllocateAmount,
         OpenPosition,
         ClosePosition,
+        Exit,
     }
 
     enum class Strategy {

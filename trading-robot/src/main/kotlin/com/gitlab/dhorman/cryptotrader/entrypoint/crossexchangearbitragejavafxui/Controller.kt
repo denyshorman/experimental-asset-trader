@@ -60,6 +60,15 @@ class Controller {
     private lateinit var closePosThresholdTextField: TextField
 
     @FXML
+    private lateinit var traderStateLabel: Label
+
+    @FXML
+    private lateinit var traderCurrentProfitLabel: Label
+
+    @FXML
+    private lateinit var traderOnCloseProfitLabel: Label
+
+    @FXML
     private fun initialize() {
         openPosThresholdTextField.onMouseExited = EventHandler {
             val threshold = openPosThresholdTextField.text.toBigDecimalOrNull()
@@ -75,9 +84,9 @@ class Controller {
             }
         }
 
+        // Long-Short coefficients
         scope.launch {
-            // Long-Short coefficients
-            crossExchangeTrader.longShortCoeffs.collect { coeffs ->
+            crossExchangeTrader.openStrategy.collect { coeffs ->
                 withContext(Dispatchers.JavaFx) {
                     longShortCoefLabel.text = coeffs.k0.toString()
                     shortLongCoefLabel.text = coeffs.k1.toString()
@@ -95,18 +104,30 @@ class Controller {
                 stateJob?.cancelAndJoin()
                 profitJob?.cancelAndJoin()
 
-                stateJob = launch {
-                    position?.state?.collect {
+                stateJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                    if (position == null) {
                         withContext(Dispatchers.JavaFx) {
-                            leftPositionStateLabel.text = it.name
+                            leftPositionStateLabel.text = "-"
+                        }
+                    } else {
+                        position.state.collect {
+                            withContext(Dispatchers.JavaFx) {
+                                leftPositionStateLabel.text = it.name
+                            }
                         }
                     }
                 }
 
-                profitJob = launch {
-                    position?.profit?.collect {
+                profitJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                    if (position == null) {
                         withContext(Dispatchers.JavaFx) {
-                            leftPositionPnlLabel.text = it.toString()
+                            leftPositionPnlLabel.text = "-"
+                        }
+                    } else {
+                        position.profit.collect {
+                            withContext(Dispatchers.JavaFx) {
+                                leftPositionPnlLabel.text = it.toString()
+                            }
                         }
                     }
                 }
@@ -128,17 +149,29 @@ class Controller {
                 profitJob?.cancelAndJoin()
 
                 stateJob = launch {
-                    position?.state?.collect {
+                    if (position == null) {
                         withContext(Dispatchers.JavaFx) {
-                            rightPositionStateLabel.text = it.name
+                            rightPositionStateLabel.text = "-"
+                        }
+                    } else {
+                        position.state.collect {
+                            withContext(Dispatchers.JavaFx) {
+                                rightPositionStateLabel.text = it.name
+                            }
                         }
                     }
                 }
 
                 profitJob = launch {
-                    position?.profit?.collect {
+                    if (position == null) {
                         withContext(Dispatchers.JavaFx) {
-                            rightPositionPnlLabel.text = it.toString()
+                            rightPositionPnlLabel.text = "-"
+                        }
+                    } else {
+                        position.profit.collect {
+                            withContext(Dispatchers.JavaFx) {
+                                rightPositionPnlLabel.text = it.toString()
+                            }
                         }
                     }
                 }
@@ -150,6 +183,7 @@ class Controller {
             }
         }
 
+        // openPositionThreshold
         scope.launch {
             crossExchangeTrader.openPositionThreshold.collect { threshold ->
                 withContext(Dispatchers.JavaFx) {
@@ -158,12 +192,46 @@ class Controller {
             }
         }
 
+        // closePositionThreshold
         scope.launch {
             crossExchangeTrader.closePositionThreshold.collect { threshold ->
                 withContext(Dispatchers.JavaFx) {
                     closePosThresholdTextField.text = threshold.toString()
                 }
             }
+        }
+
+        // trader's state
+        scope.launch {
+            crossExchangeTrader.state.collect { state ->
+                withContext(Dispatchers.JavaFx) {
+                    traderStateLabel.text = state.toString()
+                }
+            }
+        }
+
+        // trader's current profit
+        scope.launch {
+            crossExchangeTrader.currentProfit.collect { profit ->
+                withContext(Dispatchers.JavaFx) {
+                    traderCurrentProfitLabel.text = profit.toString()
+                }
+            }
+        }
+
+        // trader's on close profit
+        scope.launch {
+            crossExchangeTrader.onCloseProfit.collect { profit ->
+                withContext(Dispatchers.JavaFx) {
+                    traderOnCloseProfitLabel.text = profit.toString()
+                }
+            }
+        }
+
+
+        // Start trading
+        scope.launch {
+            crossExchangeTrader.trade()
         }
     }
 }

@@ -1,7 +1,7 @@
 package com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage
 
-import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.service.CacheablePoloniexFuturesApi
 import com.gitlab.dhorman.cryptotrader.exchangesdk.poloniexfutures.PoloniexFuturesApi
+import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.cache.service.CacheablePoloniexFuturesApi
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import mu.KotlinLogging
@@ -11,7 +11,7 @@ import java.util.*
 
 class PoloniexFuturesMarketPosition(
     private val cacheablePoloniexFuturesApi: CacheablePoloniexFuturesApi,
-    override val market: String,
+    private val market: String,
     override val quoteAmount: BigDecimal,
     override val side: PositionSide,
     private val contractSizeQty: BigDecimal,
@@ -173,6 +173,40 @@ class PoloniexFuturesMarketPosition(
         } catch (_: CancellationException) {
             // ignore
         }
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as PoloniexFuturesMarketPosition
+
+        if (market != other.market) return false
+        if (quoteAmount != other.quoteAmount) return false
+        if (side != other.side) return false
+        if (contractSizeQty != other.contractSizeQty) return false
+        if (takerFee != other.takerFee) return false
+        if (baseAssetPrecision != other.baseAssetPrecision) return false
+        if (profit.value != other.profit.value) return false
+        if (state.value != other.state.value) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = market.hashCode()
+        result = 31 * result + quoteAmount.hashCode()
+        result = 31 * result + side.hashCode()
+        result = 31 * result + contractSizeQty.hashCode()
+        result = 31 * result + takerFee.hashCode()
+        result = 31 * result + baseAssetPrecision
+        result = 31 * result + profit.value.hashCode()
+        result = 31 * result + state.value.hashCode()
+        return result
+    }
+
+    override fun toString(): String {
+        return "PoloniexFuturesMarketPosition(market='$market', quoteAmount=$quoteAmount, side=$side, contractSizeQty=$contractSizeQty, takerFee=$takerFee, baseAssetPrecision=$baseAssetPrecision, profit=${profit.value}, state=${state.value})"
     }
 
     private enum class CollectTradesState {
