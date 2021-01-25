@@ -1,5 +1,6 @@
 package com.gitlab.dhorman.cryptotrader.entrypoint.crossexchangearbitragejavafxui
 
+import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.trader.algo.StrategyStat
 import javafx.event.EventHandler
 import javafx.fxml.FXML
 import javafx.scene.control.Label
@@ -10,12 +11,14 @@ import kotlinx.coroutines.javafx.JavaFx
 
 class Controller {
     private val crossExchangeTrader = createCrossExchangeTrader()
+    private val strategyStat = StrategyStat(crossExchangeTrader)
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineName("TraderWindow"))
 
     init {
         Runtime.getRuntime().addShutdownHook(Thread {
             runBlocking {
                 scope.coroutineContext[Job]?.cancelAndJoin()
+                strategyStat.close()
             }
         })
     }
@@ -67,6 +70,18 @@ class Controller {
 
     @FXML
     private lateinit var traderOnCloseProfitLabel: Label
+
+    @FXML
+    private lateinit var longShortMinLabel: Label
+
+    @FXML
+    private lateinit var longShortMaxLabel: Label
+
+    @FXML
+    private lateinit var shortLongMinLabel: Label
+
+    @FXML
+    private lateinit var shortLongMaxLabel: Label
 
     @FXML
     private fun initialize() {
@@ -224,6 +239,18 @@ class Controller {
             crossExchangeTrader.onCloseProfit.collect { profit ->
                 withContext(Dispatchers.JavaFx) {
                     traderOnCloseProfitLabel.text = profit.toString()
+                }
+            }
+        }
+
+        // strategy stat
+        scope.launch {
+            strategyStat.openStrategyStat.collect { stat ->
+                withContext(Dispatchers.JavaFx) {
+                    longShortMinLabel.text = stat.k0Min.toString()
+                    longShortMaxLabel.text = stat.k0Max.toString()
+                    shortLongMinLabel.text = stat.k1Min.toString()
+                    shortLongMaxLabel.text = stat.k1Max.toString()
                 }
             }
         }

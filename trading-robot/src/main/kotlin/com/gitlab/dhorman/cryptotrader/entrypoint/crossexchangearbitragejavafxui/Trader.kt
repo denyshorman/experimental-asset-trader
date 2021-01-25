@@ -10,8 +10,10 @@ import com.gitlab.dhorman.cryptotrader.robots.crossexchangearbitrage.trader.Cros
 import java.math.BigDecimal
 
 fun createCrossExchangeTrader(): CrossExchangeTrader {
-    val poloniexMarket = "BTCUSDTPERP"
-    val binanceMarket = "btcusdt"
+    val (poloniexMarket, binanceMarket) = "BTCUSDTPERP" to "btcusdt"
+    // val (poloniexMarket, binanceMarket) = "ETHUSDTPERP" to "ethusdt"
+    // val (poloniexMarket, binanceMarket) = "XRPUSDTPERP" to "xrpusdt"
+    // val (poloniexMarket, binanceMarket) = "TRXUSDTPERP" to "trxusdt"
 
     val poloniexFuturesApi = PoloniexFuturesApi.createApi()
     val binanceFuturesApi = BinanceFuturesApi.createMainNetApi()
