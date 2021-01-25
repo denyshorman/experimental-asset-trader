@@ -507,6 +507,7 @@ class BinanceFuturesApi(
         MAX_NUM_ORDERS,
         MAX_NUM_ALGO_ORDERS,
         PERCENT_PRICE,
+        MIN_NOTIONAL,
     }
 
     @Serializable
@@ -588,6 +589,11 @@ class BinanceFuturesApi(
                 val multiplierDecimal: Int,
             ) : ExchangeFilter()
 
+            @Serializable
+            data class MinNotionalFilter(
+                @Serializable(BigDecimalAsStringSerializer::class) val notional: BigDecimal,
+            ) : ExchangeFilter()
+
             object Serializer : JsonContentPolymorphicSerializer<ExchangeFilter>(ExchangeFilter::class) {
                 override fun selectDeserializer(element: JsonElement): DeserializationStrategy<out ExchangeFilter> {
                     return when (ExchangeFilterType.valueOf(element.jsonObject["filterType"]!!.jsonPrimitive.content)) {
@@ -597,6 +603,7 @@ class BinanceFuturesApi(
                         ExchangeFilterType.MAX_NUM_ORDERS -> MaxNumOrdersFilter.serializer()
                         ExchangeFilterType.MAX_NUM_ALGO_ORDERS -> MaxNumAlgoOrdersFilter.serializer()
                         ExchangeFilterType.PERCENT_PRICE -> PercentPriceFilter.serializer()
+                        ExchangeFilterType.MIN_NOTIONAL -> MinNotionalFilter.serializer()
                     }
                 }
             }
