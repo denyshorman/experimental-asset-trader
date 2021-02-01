@@ -6,6 +6,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.math.BigDecimal
+import java.util.*
 
 class PoloniexFuturesApiTest {
     private val poloniexFuturesApi = PoloniexFuturesApi.createApi()
@@ -33,18 +34,25 @@ class PoloniexFuturesApiTest {
             val resp = poloniexFuturesApi.placeOrder(
                 PoloniexFuturesApi.PlaceOrderReq(
                     symbol = "XRPUSDTPERP",
-                    clientOid = "x000",
+                    clientOid = UUID.randomUUID().toString(),
                     remark = "test_order",
+                    forceHold = false,
                     type = PoloniexFuturesApi.PlaceOrderReq.Type.Limit(
-                        price = BigDecimal("0.29"),
+                        price = BigDecimal("0.25"),
                         amount = PoloniexFuturesApi.PlaceOrderReq.Type.Amount.Contract(size = 1),
                         timeInForce = PoloniexFuturesApi.TimeInForce.GoodTillCancel,
                         postOnly = true,
                         hidden = false,
                     ),
-                    openClose = PoloniexFuturesApi.PlaceOrderReq.OpenClose.Open(
+                    /*openClose = PoloniexFuturesApi.PlaceOrderReq.OpenClose.Open(
                         side = PoloniexFuturesApi.OrderSide.Buy,
                         leverage = BigDecimal.ONE,
+                    ),*/
+                    openClose = PoloniexFuturesApi.PlaceOrderReq.OpenClose.Close,
+                    stop = PoloniexFuturesApi.PlaceOrderReq.Stop(
+                        type = PoloniexFuturesApi.PlaceOrderReq.Stop.Type.Up,
+                        price = BigDecimal("0.25"),
+                        priceType = PoloniexFuturesApi.PlaceOrderReq.Stop.PriceType.TradePrice
                     ),
                 )
             )
